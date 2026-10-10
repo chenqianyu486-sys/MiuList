@@ -163,17 +163,12 @@ fun CourseTimetableCell(
     val room = slot.classroom.ifBlank { course.classroom }
     val span = (slot.endPeriod - slot.startPeriod + 1).coerceAtLeast(1)
 
-    // 现代极简美观克制：纯净轻透洗底，清爽护眼
+    // 现代极简美观克制：抹茶嫩绿作底色，前景色为黑色
+    // 柔和粉彩满铺底色，去掉冗余边框与左侧指示条
     val containerBg = when {
-        isAllCompleted -> courseBaseColor.copy(alpha = 0.11f)
-        hasPending -> courseBaseColor.copy(alpha = 0.18f)
-        else -> courseBaseColor.copy(alpha = 0.15f)
-    }
-
-    val borderStrokeColor = when {
-        isAllCompleted -> courseBaseColor.copy(alpha = 0.25f)
-        hasPending -> courseBaseColor.copy(alpha = 0.38f)
-        else -> courseBaseColor.copy(alpha = 0.30f)
+        isAllCompleted -> courseBaseColor.copy(alpha = 0.4f)
+        hasPending -> courseBaseColor.copy(alpha = 0.9f)
+        else -> courseBaseColor.copy(alpha = 0.65f)
     }
 
     Card(
@@ -186,96 +181,84 @@ fun CourseTimetableCell(
         colors = CardDefaults.cardColors(
             containerColor = containerBg
         ),
-        border = androidx.compose.foundation.BorderStroke(0.5.dp, borderStrokeColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Row(modifier = Modifier.fillMaxSize()) {
-            // Left modern sleek accent indicator bar (精致纤细微圆角，与边框和谐共生)
-            Box(
-                modifier = Modifier
-                    .padding(start = 2.dp, top = 4.dp, bottom = 4.dp)
-                    .width(2.5.dp)
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(1.5.dp))
-                    .background(courseBaseColor)
-            )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            // Top: Course Name & Room
+            Column {
+                Text(
+                    text = course.name,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        lineHeight = 12.5.sp
+                    ),
+                    // 墨曜深炭黑，无论在何种粉彩底色上均清晰极高对比度
+                    color = Color(0xFF18181B),
+                    maxLines = if (span >= 3) 3 else 2,
+                    overflow = TextOverflow.Ellipsis,
+                    fontSize = 10.5.sp
+                )
 
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 3.5.dp, vertical = 3.dp),
-                verticalArrangement = Arrangement.SpaceBetween
-            ) {
-                // Top: Course Name & Room
-                Column {
+                if (room.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(1.5.dp))
                     Text(
-                        text = course.name,
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.SemiBold,
-                            lineHeight = 12.5.sp
-                        ),
-                        // 墨曜深炭黑，无论在何种粉彩底色上均清晰极高对比度
-                        color = Color(0xFF18181B),
-                        maxLines = if (span >= 3) 3 else 2,
-                        overflow = TextOverflow.Ellipsis,
-                        fontSize = 10.5.sp
+                        text = if (room.startsWith("@")) room else "@$room",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF3F3F46), // 稍深的灰色以保证在粉彩底色上的对比度
+                        fontSize = 8.5.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
+                }
+            }
 
-                    if (room.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(1.5.dp))
+            // Bottom: 现代极简克制作业状态徽标
+            val isGreen = isGreenishColor(courseBaseColor)
+            if (hasPending) {
+                // 绿作前景时白底就看不清了，让 ui 元素出现绿作前景时该元素背景色用茶色
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (isGreen) TeaColor else Color.White.copy(alpha = 0.85f))
+                        .padding(horizontal = 3.5.dp, vertical = 1.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.5.dp)
+                    ) {
+                        val badgeFg = if (isGreen) MaterialTheme.colorScheme.primary else courseBaseColor
+                        Box(
+                            modifier = Modifier
+                                .size(3.5.dp)
+                                .clip(CircleShape)
+                                .background(badgeFg)
+                        )
                         Text(
-                            text = if (room.startsWith("@")) room else "@$room",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFF52525B),
-                            fontSize = 8.5.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            text = "$pendingTasksCount 待办",
+                            color = badgeFg,
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            fontSize = 7.5.sp
                         )
                     }
                 }
-
-                // Bottom: 现代极简克制作业状态徽标
-                // 绿作前景时底色用茶色：茶色胶囊底 (#2E261F) + 抹茶嫩绿指示点与文字 (#BCE472)
-                if (hasPending) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(TeaColor)
-                            .padding(horizontal = 3.5.dp, vertical = 1.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(2.5.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(3.5.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primary)
-                            )
-                            Text(
-                                text = "$pendingTasksCount 待办",
-                                color = MaterialTheme.colorScheme.primary,
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                fontSize = 7.5.sp
-                            )
-                        }
-                    }
-                } else if (isAllCompleted) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(Color.White.copy(alpha = 0.7f))
-                            .border(0.5.dp, Color(0xFFD4D4D8), RoundedCornerShape(3.dp))
-                            .padding(horizontal = 3.dp, vertical = 0.5.dp)
-                    ) {
-                        Text(
-                            text = "✓ 已结清",
-                            color = Color(0xFF71717A),
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
-                            fontSize = 7.sp
-                        )
-                    }
+            } else if (isAllCompleted) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(Color.White.copy(alpha = 0.6f))
+                        .padding(horizontal = 3.dp, vertical = 0.5.dp)
+                ) {
+                    Text(
+                        text = "✓ 已结清",
+                        color = Color(0xFF52525B),
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                        fontSize = 7.sp
+                    )
                 }
             }
         }
