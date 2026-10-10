@@ -1,0 +1,6 @@
+{
+  "name": "MiuList",
+  "description": "基于学生课程表的自动化轻量简洁作业待办软件，根据每日课程智能联动生成预习与课后作业待办，提供分类清单与日程表双重视图。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
