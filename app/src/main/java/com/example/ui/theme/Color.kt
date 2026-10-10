@@ -13,7 +13,7 @@ import androidx.compose.ui.graphics.Color
 // 1. 主题色：绿 (#BCE472 - Fresh Bamboo Lime / Matcha Green)
 val LimeGreenPrimary = Color(0xFFBCE472)             // 用户指定主题色绿 (#BCE472)
 val LimeGreenDark = Color(0xFFA6CD56)                // 稍深绿色调 (#A6CD56)
-val LimeGreenContainer = Color(0xFFE1DA17)           // 茶色背景容器底色 (#2E261F)，绿作前景时使用
+val LimeGreenContainer = Color(0xFF726D51)           // 茶色背景容器底色 (#2E261F)，绿作前景时使用
 val LimeGreenOnContainer = Color(0xFFBCE472)         // 绿作前景高对比色 (#BCE472)
 val LimeGreenOnPrimary = Color(0xFF1E2D0E)           // 浅绿底上的高对比墨炭深色文字 (#1E2D0E)
 
@@ -41,7 +41,7 @@ val TextMuted = Color(0xFF78827B)                    // 柔和次级辅助文字
 
 // 5. 茶色体系 (Tea Color - 沉稳温润深茶色，用于绿作前景时的护眼高对比底色)
 // 当抹茶嫩绿 (#BCE472) 作为前景（文字/图标/标号）时，以茶色作底色，对比度 > 11:1，典雅纯粹美观
-val TeaColor = Color(0xFFE1DA17)                     // 茶色 (#E1DA17)
+val TeaColor = Color(0xFF726D51)                     // 柔和低饱和茶色 (#726D51)
 val TeaColorDark = Color(0xFF241D17)                 // 深焙茶色 (#241D17)
 val TeaColorLight = Color(0xFF3E332B)                // 柔和微浅茶色 (#3E332B)
 val TeaColorBorder = Color(0xFF4A3E34)               // 茶色温润细边框 (#4A3E34)
