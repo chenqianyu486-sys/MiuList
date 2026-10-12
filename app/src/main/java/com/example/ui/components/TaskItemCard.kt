@@ -1,12 +1,9 @@
 package com.example.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,23 +17,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.outlined.AccessTime
-import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.Event
-import androidx.compose.material.icons.outlined.Notes
-import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,57 +36,94 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.TaskEntity
-import com.example.ui.theme.TeaColor
-import com.example.ui.theme.isGreenishColor
+import com.example.data.model.CustomTaskType
+import com.example.data.model.TaskPriority
+import com.example.data.model.TaskTypeOption
+import com.example.data.model.TaskTypes
+import com.example.ui.theme.CourseTintAlpha
+import com.example.ui.theme.CourseTintVivid
+import com.example.ui.theme.NestedFaceAlpha
+import com.example.ui.theme.TaskCheckIdleFill
+import com.example.ui.theme.accentOnCourse
+import com.example.ui.theme.glassSurface
+import com.example.ui.theme.readableOn
 import java.util.Calendar
 
 @Composable
 fun TaskItemCard(
     task: TaskEntity,
+    /** 用户新建的待办类型。类型徽标要靠它解析，必传——漏传就编译不过。 */
+    customTypes: List<CustomTaskType>,
     onToggleComplete: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    modifier: Modifier = Modifier
+    /** 点整张卡打开待办详情弹层，编辑/删除都在弹层里做。 */
+    onOpenDetail: () -> Unit,
+    modifier: Modifier = Modifier,
+    /**
+     * 是否被放在另一张「已染成同一门课粉彩」的卡片里面（目前只有课表今日页的课程卡）。
+     *
+     * 这种位置不能自己再染一遍同一个颜色：同一个色相叠两次只会更深，
+     * 实测外层 #D6E9FE 会叠成 #C2DFFD，层次正好反了——内层比外层重。
+     * 改成近白「挖入」，靠「浅在深上」撑出层次，和课程详情弹层里的处理一致。
+     */
+    nestedInCourseCard: Boolean = false
 ) {
-    var expanded by remember { mutableStateOf(false) }
     val courseColor = parseColor(task.courseColorHex)
 
-    val isOverdue = !task.isCompleted && task.dueDateTimestamp < System.currentTimeMillis()
+    // 没设截止的待办不参与逾期判断：哨兵是 Long.MIN_VALUE，
+    // 直接拿去和 now 比会得到 true，一条「不设截止」的待办会被染成逾期红。
+    val hasDue = TaskEntity.hasDue(task)
+    val isOverdue = !task.isCompleted && hasDue && task.dueDateTimestamp < System.currentTimeMillis()
     val dueRelativeText = remember(task.dueDateTimestamp) {
-        getRelativeDueDescription(task.dueDateTimestamp)
+        if (hasDue) getRelativeDueDescription(task.dueDateTimestamp) else NO_DUE_TEXT
     }
-
-    val cardBg = if (task.isCompleted) {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-    } else {
-        MaterialTheme.colorScheme.surface
+    val typeOption = remember(task.taskType, customTypes) {
+        TaskTypes.resolve(task.taskType, customTypes)
     }
+    // 类别和优先级的墨色不用在这里再取一遍：两者都走 TaskTypeBadge / TaskPriorityBadge，
+    // 色值由那两个徽标解析（淡彩底 + 墨色字，验算见 EnumsAndModels）。
 
     Card(
         modifier = modifier
             .fillMaxWidth()
             .testTag("task_card_${task.id}")
-            .clickable { expanded = !expanded },
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = cardBg),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (task.isCompleted) MaterialTheme.colorScheme.outlineVariant else MaterialTheme.colorScheme.outline
-        ),
+            .clickable { onOpenDetail() },
+        shape = RoundedCornerShape(18.dp),
+        // 卡片本体画在里面的 Column 上（云母面），Card 这层只做点击和裁剪
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .glassSurface(
+                    shape = RoundedCornerShape(18.dp),
+                    // 整张卡染这门课的粉彩：颜色本身就是「这是哪门课」的标识，
+                    // 不必再靠一条色条去认。被嵌在课程卡里时反过来挖近白，理由见 nestedInCourseCard
+                    tint = if (nestedInCourseCard) Color.White else courseColor,
+                    tintAlpha = if (nestedInCourseCard) NestedFaceAlpha else CourseTintAlpha,
+                    // 内层是近白挖入，本来就没颜色可提；「不关联课程」的中性灰同样不能提饱和——
+                    // vivid() 会把 gray 里那点微弱的蓝偏（#C9D0D8 的 b > r）放大成饱和蓝，
+                    // 实测未关联卡面被推成 #D8EAFF（hue 212°），和高数卡几乎一模一样
+                    vividness = if (nestedInCourseCard || TaskEntity.isUnlinked(task)) {
+                        0f
+                    } else {
+                        CourseTintVivid
+                    },
+                    // 已完成的待办压扁一点（面从 38% 降到 30%），别跟没做完的抢注意力
+                    faceAlphaScale = if (task.isCompleted) 0.78f else 1f
+                )
                 .padding(14.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 // Interactive Checkbox with animated fill
+                //
+                // 未勾选 = 纯白圆，不描边。走过的弯路别再走回去：
+                // ① Transparent + outline(#DDE6E2)：压在染色卡面上约 1.05:1，等于没有圈；
+                // ② 白填充 + 中灰边(#98A29E)：轮廓够清楚了，但用户明确表示「灰色圆边框丑」，已删。
+                // 现在圈只有填充，白色 alpha 也提到 1.0（半透白会透出卡面的染色色相就不再是白的）。
+                // 详见 Color.kt 的 TaskCheckIdleFill。
                 val checkboxBg by animateColorAsState(
-                    targetValue = if (task.isCompleted) MaterialTheme.colorScheme.primary else Color.Transparent,
+                    targetValue = if (task.isCompleted) MaterialTheme.colorScheme.primary else TaskCheckIdleFill,
                     animationSpec = tween(durationMillis = 200),
                     label = "checkboxBg"
                 )
@@ -107,11 +132,6 @@ fun TaskItemCard(
                         .size(24.dp)
                         .clip(CircleShape)
                         .background(checkboxBg)
-                        .border(
-                            width = if (task.isCompleted) 0.dp else 1.8.dp,
-                            color = if (task.isCompleted) Color.Transparent else MaterialTheme.colorScheme.outline,
-                            shape = CircleShape
-                        )
                         .clickable { onToggleComplete() }
                         .testTag("task_checkbox_${task.id}"),
                     contentAlignment = Alignment.Center
@@ -128,37 +148,7 @@ fun TaskItemCard(
 
                 Spacer(modifier = Modifier.width(12.dp))
 
-                // Task content
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        // Course Badge (绿作前景时底色用茶色，保证清晰高对比度)
-                        val isGreen = isGreenishColor(courseColor)
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (isGreen) TeaColor else MaterialTheme.colorScheme.surfaceVariant)
-                                .border(0.5.dp, if (isGreen) TeaColor else courseColor.copy(alpha = 0.45f), RoundedCornerShape(6.dp))
-                                .padding(horizontal = 7.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = task.courseName,
-                                color = if (isGreen) MaterialTheme.colorScheme.primary else courseColor,
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-
-                        TaskTypeBadge(taskTypeStr = task.taskType)
-                        TaskPriorityBadge(priorityStr = task.priority)
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
                     Text(
                         text = task.title,
                         style = MaterialTheme.typography.bodyMedium.copy(
@@ -172,145 +162,106 @@ fun TaskItemCard(
                         } else {
                             MaterialTheme.colorScheme.onSurface
                         },
-                        maxLines = if (expanded) 4 else 2,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
-                }
-            }
 
-            Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(5.dp))
 
-            // Footer metadata: Due date & estimated time
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 38.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    // Course / Task Start Time (上课时间/作业开始时间)
-                    if (task.startTimeString.isNotBlank()) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Outlined.Schedule,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = "起始: ${task.startTimeString}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Medium
+                    // 名称以外的信息全部压在这一行：ddl · 关联课程 · 待办类别 · 优先级。
+                    // 课程名吃掉弹性宽度先被截断，其余三段都是短的，宁可牺牲课程名也要保住它们。
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MetaText(
+                            text = dueRelativeText,
+                            // ddl 是这一行最该被扫到的字段，不能用 onSurfaceVariant：
+                            // 实测 #78827B 压在橙课卡面 #FFF0E1 上只有 3.56:1、紫课面 3.20:1。
+                            // 逾期红同理——#EF4444 直接当前景也只有 3.4:1，压暗后仍有 8:1 且认得出是警示色。
+                            // 没设截止的走中性色：它不是一条需要被扫出来的紧急信息，
+                            // 染成和「逾期」一样重的字反而会把它抬到不该在的位置。
+                            color = if (isOverdue) {
+                                readableOn(MaterialTheme.colorScheme.error)
+                            } else if (hasDue) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            fontWeight = if (isOverdue) FontWeight.Bold else FontWeight.Medium
+                        )
+                        // 不关联课程时整段拿掉，别在 meta 行里留一个
+                        // 只写着「未关联」的占位——那种信息对扫描没有任何帮助
+                        if (!TaskEntity.isUnlinked(task)) {
+                            MetaSeparator()
+                            MetaText(
+                                text = task.courseName,
+                                color = accentOnCourse(courseColor),
+                                modifier = Modifier.weight(1f, fill = false)
                             )
                         }
-                    }
-
-                    // Due Date
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Outlined.Event,
-                            contentDescription = null,
-                            tint = if (isOverdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = dueRelativeText,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (isOverdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = if (isOverdue) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-
-                    // Estimated Minutes
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Outlined.AccessTime,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "${task.estimatedMinutes}分钟",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                // Quick actions
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = onEdit,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Edit,
-                            contentDescription = "编辑待办",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                    IconButton(
-                        onClick = onDelete,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.DeleteOutline,
-                            contentDescription = "删除待办",
-                            tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
-                            modifier = Modifier.size(16.dp)
-                        )
+                        // 类别和优先级在这里也是 chip，不是裸文字：
+                        // 和弹层里的徽标同一套「淡彩底 + 墨色字」，扫列表时
+                        // 两个属性各自成块，不用逐字去读「· 课前预习 · 高」这一串。
+                        //
+                        // 分隔点是**跟着段走**的，不是写死一串：类型可以留空、
+                        // 课程可以没关联，两种情况都会让「· 」孤零零地留在行尾或行首。
+                        if (typeOption != null) {
+                            MetaSeparator()
+                            TaskTypeBadge(
+                                taskTypeStr = task.taskType,
+                                customTypes = customTypes
+                            )
+                            // 两个圆角块之间不插「·」——块中间再夹一个分隔点反而显脏
+                            Spacer(modifier = Modifier.width(5.dp))
+                        }
+                        TaskPriorityBadge(priorityStr = task.priority)
                     }
                 }
             }
-
-            // Expanded extra details if present
-            AnimatedVisibility(visible = expanded && task.description.isNotBlank()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 38.dp, top = 8.dp)
-                        .background(
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            RoundedCornerShape(8.dp)
-                        )
-                        .padding(10.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Outlined.Notes,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "作业要求与备注",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = task.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
+            // 备注整块搬走了，只留在详情弹层里（TaskDetailSheet）。
+            // 备注是待办里最长最不受约束的一段文字，放在卡片上必然把它撑成两行三行，
+            // 而列表要的是一眼扫过去的密度——所以卡片只管「是什么、什么时候、属于哪门课」，
+            // 要读正文就点开。
         }
     }
 }
 
+/** 附加信息行里的一段文字。固定单行，靠 [MetaSeparator] 分隔。 */
+@Composable
+private fun MetaText(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+    fontWeight: FontWeight = FontWeight.Normal
+) {
+    Text(
+        text = text,
+        color = color,
+        style = MaterialTheme.typography.labelSmall.copy(fontWeight = fontWeight),
+        fontSize = 11.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun MetaSeparator() {
+    Text(
+        text = " · ",
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+        style = MaterialTheme.typography.labelSmall,
+        fontSize = 11.sp,
+        maxLines = 1
+    )
+}
+
+/** 没设截止的待办，ddl 段显示的字样。清单页按截止分组时也用它当组内标签。 */
+const val NO_DUE_TEXT = "不设截止"
+
 fun getRelativeDueDescription(dueTimestamp: Long): String {
+    // 哨兵也挡一道：这个函数被弹层、生成预览等多处直接调用，
+    // 漏判一次就是「不设截止」显示成逾期了 56 年。
+    if (dueTimestamp == TaskEntity.NO_DUE_TIMESTAMP) return NO_DUE_TEXT
+
     val now = System.currentTimeMillis()
     val diff = dueTimestamp - now
 
@@ -330,7 +281,7 @@ fun getRelativeDueDescription(dueTimestamp: Long): String {
         diff < 0 -> "已超时"
         isSameDay -> "今天 $hourStr"
         isTomorrow -> "明天 $hourStr"
-        diff < 7 * 86400000L -> "剩 ${(diff / 86400000L) + 1} 天"
+        diff < 7 * 86400000L -> "${(diff / 86400000L) + 1}天后"
         else -> "${dueCal.get(Calendar.MONTH) + 1}月${dueCal.get(Calendar.DAY_OF_MONTH)}日"
     }
 }

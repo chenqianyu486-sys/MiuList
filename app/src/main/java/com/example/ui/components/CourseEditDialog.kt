@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -58,41 +60,50 @@ import androidx.compose.ui.unit.sp
 import com.example.data.local.CourseEntity
 import com.example.data.local.CourseSlotEntity
 import com.example.data.local.CourseWithSlots
-
-val COURSE_PALETTE = listOf(
-    "#FCA5A5", // 粉彩红 (Pastel Red)
-    "#F9A8D4", // 粉彩粉 (Pastel Pink)
-    "#86EFAC", // 粉彩绿 (Pastel Green)
-    "#208E9E", // 粉彩青 (Pastel Cyan)
-    "#93C5FD", // 粉彩蓝 (Pastel Blue)
-    "#D8B4FE", // 粉彩紫 (Pastel Purple)
-    "#FDBA74", // 粉彩橙 (Pastel Orange)
-    "#FDE047"  // 粉彩黄 (Pastel Yellow)
-)
-
-val COURSE_CATEGORIES = listOf(
-    "专业必修",
-    "公共基础",
-    "实验实践",
-    "通识公共",
-    "专业选修"
-)
+import com.example.data.model.COURSE_CATEGORIES
+import com.example.data.model.COURSE_PALETTE
+import com.example.data.model.SlotWithWeeks
+import com.example.data.timetable.PeriodTable
+import com.example.data.timetable.WeekSet
+import com.example.ui.theme.LimeGreenOnLight
 
 val DAYS_OF_WEEK = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+/**
+ * 开课周次的预设。全部归结成同一个集合形状 —— 没有「单双周枚举列」这种东西，
+ * 「每周 / 单周 / 双周 / 第 a–b 周」只是集合的四种常见取值。
+ */
+enum class WeekPreset(val label: String) {
+    EVERY("每周"),
+    ODD("单周"),
+    EVEN("双周");
+
+    fun resolve(totalWeeks: Int): Set<Int> = when (this) {
+        EVERY -> WeekSet.all(totalWeeks)
+        ODD -> WeekSet.odd(totalWeeks)
+        EVEN -> WeekSet.even(totalWeeks)
+    }
+}
 
 data class SlotDraft(
     var dayOfWeek: Int = 1,
     var startPeriod: Int = 1,
     var endPeriod: Int = 2,
-    var classroom: String = ""
+    var classroom: String = "",
+    /** 开课周次。空集合 = 每周（与库里的「未指定」同义）。 */
+    var weeks: Set<Int> = emptySet()
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun CourseEditDialog(
     initialCourseWithSlots: CourseWithSlots?,
+    periodTable: PeriodTable = PeriodTable.DEFAULT,
+    /** 已有时段 id → 开课周次，用于回填编辑态 */
+    initialSlotWeeks: Map<Long, Set<Int>> = emptyMap(),
+    totalWeeks: Int = 25,
     onDismiss: () -> Unit,
-    onSave: (CourseEntity, List<CourseSlotEntity>) -> Unit
+    onSave: (CourseEntity, List<SlotWithWeeks>) -> Unit
 ) {
     val initialCourse = initialCourseWithSlots?.course
     val initialSlots = initialCourseWithSlots?.slots ?: emptyList()
@@ -108,7 +119,15 @@ fun CourseEditDialog(
         mutableStateListOf<SlotDraft>().apply {
             if (initialSlots.isNotEmpty()) {
                 initialSlots.forEach { s ->
-                    add(SlotDraft(s.dayOfWeek, s.startPeriod, s.endPeriod, s.classroom))
+                    add(
+                        SlotDraft(
+                            dayOfWeek = s.dayOfWeek,
+                            startPeriod = s.startPeriod,
+                            endPeriod = s.endPeriod,
+                            classroom = s.classroom,
+                            weeks = initialSlotWeeks[s.id] ?: emptySet()
+                        )
+                    )
                 }
             } else {
                 // Default slot: 周一 第1-2节
@@ -128,7 +147,7 @@ fun CourseEditDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(20.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         title = {
             Text(
                 text = if (initialCourse == null) "添加课程" else "编辑课程",
@@ -148,7 +167,7 @@ fun CourseEditDialog(
                     value = name,
                     onValueChange = { name = it },
                     label = { Text("课程名称") },
-                    placeholder = { Text("例如：高等数学、数据结构与算法") },
+                    placeholder = { Text("如：高等数学") },
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("course_name_input"),
@@ -160,9 +179,12 @@ fun CourseEditDialog(
                     text = "课程类别",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
                 )
-                Row(
+                // 5 个类别一行放不下。必须用 FlowRow：普通 Row 既不换行也不滚动，
+                // 「通识公共 / 专业选修」会被挤出弹窗边界外，渲染成空白残片且点不到
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     COURSE_CATEGORIES.forEach { cat ->
                         FilterChip(
@@ -171,7 +193,10 @@ fun CourseEditDialog(
                                 category = cat
                                 if (cat == "实验实践") autoLabReport = true
                             },
-                            label = { Text(cat, fontSize = 11.sp) }
+                            label = { Text(cat, fontSize = 11.sp) },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = micaChipColors(),
+                            border = micaChipBorder(category == cat)
                         )
                     }
                 }
@@ -201,7 +226,7 @@ fun CourseEditDialog(
 
                 // Color Theme Picker (8 Pastel Colors)
                 Text(
-                    text = "课程粉彩主题色 (8色)",
+                    text = "主题色",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -247,15 +272,15 @@ fun CourseEditDialog(
                         Icon(
                             imageVector = Icons.Outlined.Schedule,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
+                            tint = LimeGreenOnLight,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "上课时段 (${slotDrafts.size}个，支持一周多次/1-13节)",
+                            text = "上课时段 · ${slotDrafts.size} 个",
                             style = MaterialTheme.typography.labelMedium.copy(
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
+                                color = LimeGreenOnLight
                             )
                         )
                     }
@@ -270,7 +295,7 @@ fun CourseEditDialog(
                     ) {
                         Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(2.dp))
-                        Text("添时段", fontSize = 11.sp)
+                        Text("添加", fontSize = 11.sp)
                     }
                 }
 
@@ -290,7 +315,7 @@ fun CourseEditDialog(
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Text(
-                                        text = "时段 ${index + 1}: ${getDayName(draft.dayOfWeek)} ${formatPeriodRange(draft.startPeriod, draft.endPeriod)}",
+                                        text = "${index + 1}. ${getDayName(draft.dayOfWeek)} ${formatPeriodRange(draft.startPeriod, draft.endPeriod)}",
                                         style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                                         color = MaterialTheme.colorScheme.primary
                                     )
@@ -325,6 +350,9 @@ fun CourseEditDialog(
                                                 slotDrafts[index] = draft.copy(dayOfWeek = dayNum)
                                             },
                                             label = { Text(dName, fontSize = 10.sp) },
+                                            shape = RoundedCornerShape(10.dp),
+                                            colors = micaChipColors(),
+                                            border = micaChipBorder(draft.dayOfWeek == dayNum),
                                             modifier = Modifier.weight(1f)
                                         )
                                     }
@@ -349,7 +377,7 @@ fun CourseEditDialog(
                                             value = "第${draft.startPeriod}节",
                                             onValueChange = {},
                                             readOnly = true,
-                                            label = { Text("起始节(1-13)", fontSize = 10.sp) },
+                                            label = { Text("起始节", fontSize = 10.sp) },
                                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = startExpanded) },
                                             modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable)
                                         )
@@ -357,9 +385,9 @@ fun CourseEditDialog(
                                             expanded = startExpanded,
                                             onDismissRequest = { startExpanded = false }
                                         ) {
-                                            (1..13).forEach { p ->
+                                            (1..periodTable.periodsPerDay).forEach { p ->
                                                 DropdownMenuItem(
-                                                    text = { Text("第${p}节 (${ALL_PERIODS[p - 1].startTime})") },
+                                                    text = { Text("第${p}节 (${periodTable.slotOf(p)?.startTime ?: "--"})") },
                                                     onClick = {
                                                         val newEnd = draft.endPeriod.coerceAtLeast(p)
                                                         slotDrafts[index] = draft.copy(startPeriod = p, endPeriod = newEnd)
@@ -381,7 +409,7 @@ fun CourseEditDialog(
                                             value = "第${draft.endPeriod}节",
                                             onValueChange = {},
                                             readOnly = true,
-                                            label = { Text("结束节(1-13)", fontSize = 10.sp) },
+                                            label = { Text("结束节", fontSize = 10.sp) },
                                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = endExpanded) },
                                             modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable)
                                         )
@@ -389,9 +417,9 @@ fun CourseEditDialog(
                                             expanded = endExpanded,
                                             onDismissRequest = { endExpanded = false }
                                         ) {
-                                            (draft.startPeriod..13).forEach { p ->
+                                            (draft.startPeriod..periodTable.periodsPerDay).forEach { p ->
                                                 DropdownMenuItem(
-                                                    text = { Text("第${p}节 (${ALL_PERIODS[p - 1].endTime})") },
+                                                    text = { Text("第${p}节 (${periodTable.slotOf(p)?.endTime ?: "--"})") },
                                                     onClick = {
                                                         slotDrafts[index] = draft.copy(endPeriod = p)
                                                         endExpanded = false
@@ -404,19 +432,74 @@ fun CourseEditDialog(
 
                                 Spacer(modifier = Modifier.height(4.dp))
 
-                                val (timeS, timeE) = getPeriodTimeRange(draft.startPeriod, draft.endPeriod)
+                                val timeText = periodTable.timeRangeText(draft.startPeriod, draft.endPeriod)
                                 Text(
-                                    text = "具体时段时间: $timeS ~ $timeE (共计 ${draft.endPeriod - draft.startPeriod + 1} 节课)",
+                                    text = "$timeText · 共 ${draft.endPeriod - draft.startPeriod + 1} 节",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
 
                                 Spacer(modifier = Modifier.height(6.dp))
 
+                                // 开课周次：每周 / 单周 / 双周 / 第 a–b 周 / 自定义
+                                Text(
+                                    text = "开课周次",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                )
+                                FlowRow(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    WeekPreset.entries.forEach { preset ->
+                                        FilterChip(
+                                            selected = draft.weeks == preset.resolve(totalWeeks),
+                                            onClick = {
+                                                slotDrafts[index] = draft.copy(weeks = preset.resolve(totalWeeks))
+                                            },
+                                            label = { Text(preset.label, fontSize = 10.sp) },
+                                            shape = RoundedCornerShape(10.dp),
+                                            colors = micaChipColors(),
+                                            border = micaChipBorder(draft.weeks == preset.resolve(totalWeeks))
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = if (draft.weeks.isEmpty()) "未指定（按每周处理）"
+                                    else WeekSet.describe(draft.weeks, totalWeeks),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                var customWeeks by remember(draft.weeks, totalWeeks) {
+                                    mutableStateOf(
+                                        if (draft.weeks.isEmpty()) "" else draft.weeks.sorted().joinToString(",")
+                                    )
+                                }
+                                OutlinedTextField(
+                                    value = customWeeks,
+                                    onValueChange = {
+                                        customWeeks = it
+                                        val parsed = WeekSet.parse(it.ifBlank { null }, totalWeeks)
+                                        if (parsed.issue == null) {
+                                            slotDrafts[index] = draft.copy(weeks = parsed.weeks)
+                                        }
+                                    },
+                                    label = { Text("自定义周次（留空=每周）") },
+                                    placeholder = { Text("如 1,3,5 或 1-8") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+
                                 OutlinedTextField(
                                     value = draft.classroom,
                                     onValueChange = { slotDrafts[index] = draft.copy(classroom = it) },
-                                    label = { Text("本时段特设教室 (留空则使用默认教室)") },
+                                    label = { Text("本时段教室（留空用默认）") },
                                     placeholder = { Text(classroom.ifBlank { "如：信息楼304" }) },
                                     modifier = Modifier.fillMaxWidth(),
                                     singleLine = true
@@ -428,7 +511,7 @@ fun CourseEditDialog(
 
                 // Automation Rules Section
                 Text(
-                    text = "联动待办规则",
+                    text = "待办联动",
                     style = MaterialTheme.typography.labelMedium.copy(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -452,8 +535,8 @@ fun CourseEditDialog(
                         Checkbox(checked = autoPreStudy, onCheckedChange = { autoPreStudy = it })
                         Spacer(modifier = Modifier.width(6.dp))
                         Column {
-                            Text("自动生成课前预习待办", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium))
-                            Text("上课前自动生成核心知识点预备与课件查阅任务", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("课前预习", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium))
+                            Text("上课前自动生成", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
 
@@ -466,8 +549,8 @@ fun CourseEditDialog(
                         Checkbox(checked = autoPostHomework, onCheckedChange = { autoPostHomework = it })
                         Spacer(modifier = Modifier.width(6.dp))
                         Column {
-                            Text("自动生成课后作业待办", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium))
-                            Text("课后自动排期生成作业习题与复习任务", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("课后作业", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium))
+                            Text("课后自动生成", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
 
@@ -480,8 +563,8 @@ fun CourseEditDialog(
                         Checkbox(checked = autoLabReport, onCheckedChange = { autoLabReport = it })
                         Spacer(modifier = Modifier.width(6.dp))
                         Column {
-                            Text("自动生成实验/实践报告待办", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium))
-                            Text("适用于实验课、工程实训等报告撰写", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("实验报告", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium))
+                            Text("实验课自动生成", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -514,12 +597,16 @@ fun CourseEditDialog(
                     )
 
                     val slotsToSave = slotDrafts.map { draft ->
-                        CourseSlotEntity(
-                            courseId = courseToSave.id,
-                            dayOfWeek = draft.dayOfWeek,
-                            startPeriod = draft.startPeriod,
-                            endPeriod = draft.endPeriod,
-                            classroom = draft.classroom.trim().ifBlank { courseToSave.classroom }
+                        val resolved = if (draft.weeks.isEmpty()) WeekSet.all(totalWeeks) else draft.weeks
+                        SlotWithWeeks(
+                            slot = CourseSlotEntity(
+                                courseId = courseToSave.id,
+                                dayOfWeek = draft.dayOfWeek,
+                                startPeriod = draft.startPeriod,
+                                endPeriod = draft.endPeriod,
+                                classroom = draft.classroom.trim().ifBlank { courseToSave.classroom }
+                            ),
+                            weeks = resolved.filter { it in 1..totalWeeks }.toSet()
                         )
                     }
 

@@ -12,29 +12,20 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.Checklist
-import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.CalendarMonth
-import androidx.compose.material.icons.outlined.Checklist
-import androidx.compose.material.icons.outlined.Dashboard
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -42,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -49,38 +41,47 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.data.local.AppDatabase
-import com.example.data.repository.CourseTodoRepository
+import com.example.data.di.AppContainer
+import com.example.ui.theme.LocalGlassHazeState
+import com.example.ui.components.AcademicCalendarDialog
 import com.example.ui.components.CategoryRulesDialog
 import com.example.ui.components.CourseEditDialog
 import com.example.ui.components.CourseLinkageSheet
+import com.example.ui.components.FloatingIslandNav
+import com.example.ui.components.IslandBottomInset
+import com.example.ui.components.DeleteTaskTypeConfirmDialog
+import com.example.ui.components.NewTaskTypeDialog
 import com.example.ui.components.QuickGenerateDialog
+import com.example.ui.components.ScheduleTransferDialog
+import com.example.ui.components.TaskDetailSheet
 import com.example.ui.components.TaskEditDialog
+import com.example.ui.components.TaskRulesDialog
 import com.example.ui.components.WeekPickerDialog
 import com.example.ui.screens.ChecklistScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.ScheduleScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.theme.AppBackgroundLayer
 import com.example.ui.theme.MyApplicationTheme
+import com.example.ui.viewmodel.ImportSource
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.MainViewModelFactory
 import com.example.ui.viewmodel.NavigationTab
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.hazeSource
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels {
-        val database = AppDatabase.getDatabase(applicationContext)
-        val repository = CourseTodoRepository(
-            database.courseDao(),
-            database.courseSlotDao(),
-            database.taskDao()
-        )
-        MainViewModelFactory(repository)
+        // 依赖统一从 Application 持有的容器取，界面不再自己拼装数据库与 Repository
+        val container = (application as MiuListApplication).container
+        MainViewModelFactory(container)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -107,8 +108,17 @@ fun MainApp(viewModel: MainViewModel) {
         }
     }
 
-    Scaffold(
+    // haze：整页内容当模糊源。浮岛导航是压在内容之上的，
+    // 得把从它下面滚过去的卡片真糊掉，而不只是糊页面底那张渐变。
+    // haze 1.3.1 没有 rememberHazeState() 了，直接 remember 一个 HazeState。
+    val hazeState = remember { HazeState() }
+
+    AppBackgroundLayer {
+        CompositionLocalProvider(LocalGlassHazeState provides hazeState) {
+        Scaffold(
         modifier = Modifier.fillMaxSize(),
+        // 不铺不透明底，让 Mesh Gradient 露出来
+        containerColor = Color.Transparent,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
@@ -129,7 +139,7 @@ fun MainApp(viewModel: MainViewModel) {
                                 .background(MaterialTheme.colorScheme.primaryContainer)
                                 .border(
                                     1.dp,
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+                                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.35f),
                                     RoundedCornerShape(8.dp)
                                 )
                                 .clickable { viewModel.openWeekPicker() }
@@ -139,7 +149,7 @@ fun MainApp(viewModel: MainViewModel) {
                             Text(
                                 text = "第 ${state.currentWeek} 周 ▾",
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.primary,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
                                 fontSize = 11.5.sp
                             )
                         }
@@ -148,7 +158,7 @@ fun MainApp(viewModel: MainViewModel) {
                 actions = {
                     // Quick Generate Action with lake blue accent badge button
                     IconButton(
-                        onClick = { viewModel.openQuickGenerateDialog() },
+                        onClick = { viewModel.openQuickGenerateWeekDialog() },
                         modifier = Modifier
                             .testTag("topbar_auto_generate_button")
                             .clip(RoundedCornerShape(10.dp))
@@ -162,7 +172,7 @@ fun MainApp(viewModel: MainViewModel) {
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.AutoAwesome,
-                                contentDescription = "依据今日课表智能生成待办",
+                                contentDescription = "生成今日待办",
                                 tint = MaterialTheme.colorScheme.secondary,
                                 modifier = Modifier.size(19.dp)
                             )
@@ -185,7 +195,7 @@ fun MainApp(viewModel: MainViewModel) {
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.Add,
-                                contentDescription = "添加作业待办",
+                                contentDescription = "添加待办",
                                 tint = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.size(20.dp)
                             )
@@ -193,107 +203,30 @@ fun MainApp(viewModel: MainViewModel) {
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    // 顶栏不再铺一层不透明面，页面渐变直接透上来
+                    containerColor = Color.Transparent,
+                    scrolledContainerColor = Color.Transparent
                 )
             )
-        },
-        bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 0.dp,
-                modifier = Modifier.border(
-                    width = 0.8.dp,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            ) {
-                val navItemColors = androidx.compose.material3.NavigationBarItemDefaults.colors(
-                    selectedIconColor = MaterialTheme.colorScheme.primary,
-                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                NavigationBarItem(
-                    selected = state.currentTab == NavigationTab.DASHBOARD,
-                    onClick = { viewModel.setNavigationTab(NavigationTab.DASHBOARD) },
-                    icon = {
-                        Icon(
-                            imageVector = if (state.currentTab == NavigationTab.DASHBOARD) Icons.Filled.Dashboard else Icons.Outlined.Dashboard,
-                            contentDescription = "总览看板"
-                        )
-                    },
-                    label = { Text("总览", fontWeight = if (state.currentTab == NavigationTab.DASHBOARD) FontWeight.Bold else FontWeight.Medium) },
-                    colors = navItemColors,
-                    modifier = Modifier.testTag("nav_tab_dashboard")
-                )
-
-                NavigationBarItem(
-                    selected = state.currentTab == NavigationTab.SCHEDULE,
-                    onClick = { viewModel.setNavigationTab(NavigationTab.SCHEDULE) },
-                    icon = {
-                        Icon(
-                            imageVector = if (state.currentTab == NavigationTab.SCHEDULE) Icons.Filled.CalendarMonth else Icons.Outlined.CalendarMonth,
-                            contentDescription = "日程课表"
-                        )
-                    },
-                    label = { Text("日程课表", fontWeight = if (state.currentTab == NavigationTab.SCHEDULE) FontWeight.Bold else FontWeight.Medium) },
-                    colors = navItemColors,
-                    modifier = Modifier.testTag("nav_tab_schedule")
-                )
-
-                NavigationBarItem(
-                    selected = state.currentTab == NavigationTab.CHECKLIST,
-                    onClick = { viewModel.setNavigationTab(NavigationTab.CHECKLIST) },
-                    icon = {
-                        Icon(
-                            imageVector = if (state.currentTab == NavigationTab.CHECKLIST) Icons.Filled.Checklist else Icons.Outlined.Checklist,
-                            contentDescription = "分类清单"
-                        )
-                    },
-                    label = { Text("分类清单", fontWeight = if (state.currentTab == NavigationTab.CHECKLIST) FontWeight.Bold else FontWeight.Medium) },
-                    colors = navItemColors,
-                    modifier = Modifier.testTag("nav_tab_checklist")
-                )
-
-                NavigationBarItem(
-                    selected = state.currentTab == NavigationTab.SETTINGS,
-                    onClick = { viewModel.setNavigationTab(NavigationTab.SETTINGS) },
-                    icon = {
-                        Icon(
-                            imageVector = if (state.currentTab == NavigationTab.SETTINGS) Icons.Filled.Settings else Icons.Outlined.Settings,
-                            contentDescription = "课程与规则"
-                        )
-                    },
-                    label = { Text("课程与规则", fontWeight = if (state.currentTab == NavigationTab.SETTINGS) FontWeight.Bold else FontWeight.Medium) },
-                    colors = navItemColors,
-                    modifier = Modifier.testTag("nav_tab_settings")
-                )
-            }
-        },
-        floatingActionButton = {
-            if (state.currentTab == NavigationTab.CHECKLIST || state.currentTab == NavigationTab.SCHEDULE) {
-                FloatingActionButton(
-                    onClick = { viewModel.openAddTaskDialog() },
-                    shape = RoundedCornerShape(16.dp),
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(
-                        defaultElevation = 2.dp,
-                        pressedElevation = 4.dp
-                    ),
-                    modifier = Modifier.testTag("fab_add_task")
-                ) {
-                    Icon(imageVector = Icons.Outlined.Add, contentDescription = "新增作业待办")
-                }
-            }
         }
     ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            // hazeSource 和 hazeEffect 必须是兄弟节点，不能互相嵌套：
+            // 源层要先被合成进父节点，模糊节点才拿得到那份已完成的纹理。
+            // 把 hazeEffect 塞进 hazeSource 内部会变成自绘反馈，
+            // 结果是「一点都糊不掉」，只剩一层白纱盖在身后的卡片上。
+            //
+            // 这里刻意不给底部留 92dp：内容要能滚到浮岛导航底下去，
+            // 浮岛才真的是毛玻璃，而不是浮在一片空背景上。
+            // 收尾靠各页滚动容器自己的 contentPadding（IslandBottomInset）。
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    // 页面底由外层 MeshBackgroundLayer 提供：它同时把那张网格渐变
+                    // 下发给所有玻璃面板做屏幕对齐重绘
+                    .hazeSource(hazeState)
+            ) {
             if (state.isLoading) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
@@ -307,11 +240,10 @@ fun MainApp(viewModel: MainViewModel) {
                         DashboardScreen(
                             state = state,
                             onNavigateTab = { viewModel.setNavigationTab(it) },
-                            onGenerateTodayTasks = { viewModel.generateTasksDirectlyForToday() },
-                            onPreviewGenerateTasks = { viewModel.openQuickGenerateDialog() },
+                            onGenerateTodayTasks = { viewModel.generateTasksDirectlyForWeek() },
+                            onPreviewGenerateTasks = { viewModel.openQuickGenerateWeekDialog() },
                             onToggleTaskComplete = { viewModel.toggleTaskComplete(it) },
-                            onEditTask = { viewModel.openEditTaskDialog(it) },
-                            onDeleteTask = { viewModel.deleteTask(it) },
+                            onInspectTask = { viewModel.inspectTask(it) },
                             onInspectCourse = { viewModel.inspectCourse(it) },
                             onOpenWeekPicker = { viewModel.openWeekPicker() }
                         )
@@ -320,14 +252,9 @@ fun MainApp(viewModel: MainViewModel) {
                     NavigationTab.SCHEDULE -> {
                         ScheduleScreen(
                             state = state,
-                            onSelectDay = { viewModel.setSelectedScheduleDay(it) },
                             onSelectViewMode = { viewModel.setScheduleViewMode(it) },
                             onInspectCourse = { viewModel.inspectCourse(it) },
-                            onToggleTaskComplete = { viewModel.toggleTaskComplete(it) },
-                            onEditTask = { viewModel.openEditTaskDialog(it) },
-                            onDeleteTask = { viewModel.deleteTask(it) },
-                            onAddNewTask = { courseId -> viewModel.openAddTaskDialog(courseId) },
-                            onGenerateTodayTasks = { viewModel.generateTasksDirectlyForToday() }
+                            onGenerateTodayTasks = { viewModel.generateTasksDirectlyForWeek() }
                         )
                     }
 
@@ -335,12 +262,13 @@ fun MainApp(viewModel: MainViewModel) {
                         ChecklistScreen(
                             state = state,
                             onSearchChange = { viewModel.setSearchQuery(it) },
-                            onSelectTaskType = { viewModel.setSelectedTaskType(it) },
+                            onSelectTaskTypeKey = { viewModel.setSelectedTaskType(it) },
+                            onOpenNewTypeDialog = { viewModel.openNewTaskTypeDialog() },
+                            onConfirmDeleteType = { viewModel.confirmDeleteTaskType(it) },
                             onSelectGroupingMode = { viewModel.setGroupingMode(it) },
                             onSelectStatusFilter = { viewModel.setStatusFilter(it) },
                             onToggleTaskComplete = { viewModel.toggleTaskComplete(it) },
-                            onEditTask = { viewModel.openEditTaskDialog(it) },
-                            onDeleteTask = { viewModel.deleteTask(it) }
+                            onInspectTask = { viewModel.inspectTask(it) }
                         )
                     }
 
@@ -348,15 +276,69 @@ fun MainApp(viewModel: MainViewModel) {
                         SettingsScreen(
                             state = state,
                             onOpenCategoryRulesDialog = { viewModel.openCategoryRulesDialog() },
+                            onOpenTaskRulesDialog = { viewModel.openTaskRulesDialog() },
                             onOpenAddCourseDialog = { viewModel.openAddCourseDialog() },
                             onEditCourse = { viewModel.openEditCourseDialog(it) },
                             onDeleteCourse = { id, name -> viewModel.deleteCourse(id, name) },
+                            onOpenTransferDialog = { viewModel.openTransferDialog() },
+                            onOpenAcademicCalendarDialog = { viewModel.openAcademicCalendarDialog() },
                             onResetDemoData = { viewModel.resetDemoData() }
                         )
                     }
                 }
             }
+            }
+
+            // 底部浮岛导航：悬浮在内容之上，不占布局高度
+            FloatingIslandNav(
+                current = state.currentTab,
+                onSelect = viewModel::setNavigationTab,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+
+            // FAB 抬到浮岛之上，别和岛叠在一起
+            if (state.currentTab == NavigationTab.CHECKLIST || state.currentTab == NavigationTab.SCHEDULE) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .navigationBarsPadding()
+                        // 底部跟着 IslandBottomInset 走，别写死数字：
+                        // 岛一改高度，这里写死的值就会悄悄和岛错开。
+                        .padding(end = 24.dp, bottom = IslandBottomInset)
+                ) {
+                    FloatingActionButton(
+                        onClick = { viewModel.openAddTaskDialog() },
+                        shape = RoundedCornerShape(20.dp),
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(
+                            defaultElevation = 6.dp,
+                            pressedElevation = 10.dp
+                        ),
+                        modifier = Modifier.testTag("fab_add_task")
+                    ) {
+                        Icon(imageVector = Icons.Outlined.Add, contentDescription = "添加待办")
+                    }
+                }
+            }
         }
+    }
+        }
+    }
+
+    // 单条待办详情弹层：卡片上点一下进来，编辑/删除都在这里
+    state.inspectingTask?.let { task ->
+        TaskDetailSheet(
+            task = task,
+            customTypes = state.customTaskTypes,
+            onDismiss = { viewModel.closeTaskSheet() },
+            onEdit = { viewModel.editTaskFromSheet(task) },
+            // 删完就把弹层收掉，否则它会停在一个已经不存在的待办上
+            onDelete = {
+                viewModel.closeTaskSheet()
+                viewModel.deleteTask(task)
+            }
+        )
     }
 
     // Task Edit/Add Dialog
@@ -364,18 +346,84 @@ fun MainApp(viewModel: MainViewModel) {
         TaskEditDialog(
             initialTask = state.editingTask,
             courses = state.courses,
+            customTypes = state.customTaskTypes,
             preselectedCourseId = state.preselectedCourseIdForNewTask,
             onDismiss = { viewModel.closeTaskDialog() },
+            onCreateTaskType = { viewModel.openNewTaskTypeDialog() },
             onSave = { viewModel.saveTask(it) }
         )
     }
 
-    // Course Edit/Add Dialog (supports multi-slot and 1-13 periods)
+    // 新建待办类型。放在编辑弹层**之上**：类型是在「给一条待办选类型」的
+    // 过程中被意识到缺的，所以建完必须能直接回到那一步，不该把编辑弹层一起关掉。
+    if (state.isNewTaskTypeDialogOpen) {
+        NewTaskTypeDialog(
+            onDismiss = { viewModel.closeNewTaskTypeDialog() },
+            onCreate = { label, paletteIndex -> viewModel.createTaskType(label, paletteIndex) }
+        )
+    }
+
+    state.deletingTaskType?.let { type ->
+        DeleteTaskTypeConfirmDialog(
+            typeLabel = type.label,
+            onDismiss = { viewModel.cancelDeleteTaskType() },
+            onConfirm = { viewModel.deleteTaskType(type) }
+        )
+    }
+
+    // Course Edit/Add Dialog (supports multi-slot, data-driven periods and week sets)
     if (state.isAddCourseDialogOpen) {
         CourseEditDialog(
             initialCourseWithSlots = state.editingCourseWithSlots,
+            periodTable = state.periodTable,
+            initialSlotWeeks = state.editingCourseWithSlots?.slots
+                ?.associate { it.id to (state.slotWeeks[it.id] ?: emptySet()) }
+                ?: emptyMap(),
+            totalWeeks = state.totalWeeks,
             onDismiss = { viewModel.closeCourseDialog() },
             onSave = { course, slots -> viewModel.saveCourseWithSlots(course, slots) }
+        )
+    }
+
+    // 课表导入 / 导出
+    if (state.isTransferDialogOpen) {
+        val contentResolver = LocalContext.current.contentResolver
+        ScheduleTransferDialog(
+            strategy = state.importStrategy,
+            importSource = state.importSource,
+            zjuTermOptions = state.zjuTermOptions,
+            zjuError = state.zjuError,
+            isZjuRunning = state.isZjuImportRunning,
+            onSourceChange = { source ->
+                viewModel.setImportSource(source)
+                if (source == ImportSource.ZJU) viewModel.loadZjuTerms()
+            },
+            onZjuImport = { id, pwd, option -> viewModel.importFromZju(id, pwd, option) },
+            preview = state.importPreview,
+            issues = state.importIssues,
+            errorMessage = state.importError,
+            isBusy = state.isImporting,
+            report = state.importReport,
+            onStrategyChange = { viewModel.setImportStrategy(it) },
+            onExport = { uri -> viewModel.exportSchedule(uri, contentResolver) },
+            onImportUri = { uri -> viewModel.importFromUri(uri, contentResolver) },
+            onCommit = { viewModel.commitImport() },
+            onDismissReport = { viewModel.dismissImportReport() },
+            onDismiss = { viewModel.closeTransferDialog() }
+        )
+    }
+
+    // 本学期校历
+    if (state.isAcademicCalendarDialogOpen) {
+        AcademicCalendarDialog(
+            semester = state.semester,
+            periodTable = state.periodTable,
+            existingNoClass = state.noClassDays,
+            existingMakeup = state.makeupDays,
+            onSave = { sem, periods, noClass, makeup ->
+                viewModel.saveAcademicCalendar(sem, periods, noClass, makeup)
+            },
+            onDismiss = { viewModel.closeAcademicCalendarDialog() }
         )
     }
 
@@ -383,6 +431,8 @@ fun MainApp(viewModel: MainViewModel) {
     if (state.isQuickGenerateDialogOpen) {
         QuickGenerateDialog(
             candidateTasks = state.candidateTasksForPreview,
+            week = state.selectedWeek,
+            customTypes = state.customTaskTypes,
             onDismiss = { viewModel.closeQuickGenerateDialog() },
             onConfirm = { viewModel.confirmGenerateTasks(it) }
         )
@@ -394,6 +444,10 @@ fun MainApp(viewModel: MainViewModel) {
         CourseLinkageSheet(
             courseWithSlots = courseWithSlots,
             linkedTasks = linkedTasks,
+            customTypes = state.customTaskTypes,
+            periodTable = state.periodTable,
+            slotWeeks = state.slotWeeks,
+            totalWeeks = state.totalWeeks,
             onDismiss = { viewModel.inspectCourse(null) },
             onToggleTaskComplete = { viewModel.toggleTaskComplete(it) },
             onAddNewTaskForCourse = {
@@ -420,12 +474,27 @@ fun MainApp(viewModel: MainViewModel) {
         )
     }
 
+    // 课程 × 类型的生成规则
+    if (state.isTaskRulesDialogOpen) {
+        TaskRulesDialog(
+            courses = state.courses,
+            taskRules = state.taskRules,
+            onDismiss = { viewModel.closeTaskRulesDialog() },
+            onSaveRule = { courseId, type, spec ->
+                viewModel.saveTaskRule(courseId, type, spec)
+            },
+            onToggleEnabled = { courseId, type, enabled ->
+                viewModel.setCourseTaskEnabled(courseId, type, enabled)
+            }
+        )
+    }
+
     // Week Picker Dialog
     if (state.isWeekPickerDialogOpen) {
         WeekPickerDialog(
             currentWeek = state.currentWeek,
             onDismiss = { viewModel.closeWeekPicker() },
-            onSelectWeek = { viewModel.setCurrentWeek(it) }
+            onSelectWeek = { viewModel.selectWeek(it) }
         )
     }
 }

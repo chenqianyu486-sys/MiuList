@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  明文 HTTP 只对浙大课表接口这一个域名放行。
+
+  为什么需要：appservice.zju.edu.cn 是 zju-ical 一直用的取课表地址，
+  它**只有 HTTP**（实测 https://appservice.zju.edu.cn 的 TLS 校验直接失败），
+  而 targetSdk 28 以上的默认策略是全面禁明文。
+
+  为什么只放行这一个域名：CAS 登录走的是 https://zjuam.zju.edu.cn，公共校历配置
+  走 https://raw.githubusercontent.com，都不需要明文。全局
+  cleartextTrafficPermitted="true" 会让所有请求都失去传输保护，
+  不值得为省事开这个口子。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">appservice.zju.edu.cn</domain>
+    </domain-config>
+</network-security-config>

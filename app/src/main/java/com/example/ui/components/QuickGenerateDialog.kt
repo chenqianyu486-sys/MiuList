@@ -37,10 +37,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.TaskEntity
+import com.example.data.model.CustomTaskType
+import com.example.ui.theme.TeaColor
+import com.example.ui.theme.TeaColorBase
+import com.example.ui.theme.TeaColorBorder
+import com.example.ui.theme.TeaOnColor
+import com.example.ui.theme.isGreenishColor
+import com.example.ui.theme.readableOn
 
 @Composable
 fun QuickGenerateDialog(
     candidateTasks: List<TaskEntity>,
+    week: Int,
+    /** 类型徽标解析用。生成出来的待办只会带内置类型，但仍传真实的自定义类型表，
+     *  免得这个弹层哪天开始显示手工待办时静默少一个标签。 */
+    customTypes: List<CustomTaskType>,
     onDismiss: () -> Unit,
     onConfirm: (List<TaskEntity>) -> Unit
 ) {
@@ -56,7 +67,7 @@ fun QuickGenerateDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(20.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -75,7 +86,7 @@ fun QuickGenerateDialog(
                 }
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "今日课表 · 智能联动生成",
+                    text = "生成本周待办",
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -85,9 +96,9 @@ fun QuickGenerateDialog(
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = if (candidateTasks.isNotEmpty()) {
-                        "系统依据您今日的课程安排及设置的课程类别规则，已自动规划出以下预习与课后作业待办，可按需勾选："
+                        "按第 $week 周课表与规则生成，可勾选："
                     } else {
-                        "今日课表中的所有预习与课后作业待办均已生成完毕，暂无待规划的新任务。"
+                        "第 $week 周待办已全部生成。"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -105,15 +116,16 @@ fun QuickGenerateDialog(
                         items(candidateTasks) { task ->
                             val isChecked = checkedMap[task] ?: true
                             val courseColor = parseColor(task.courseColorHex)
+                            val isGreen = isGreenishColor(courseColor)
 
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(12.dp))
-                                    .background(if (isChecked) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surface)
+                                    .background(if (isChecked) TeaColorBase.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surface)
                                     .border(
                                         1.dp,
-                                        if (isChecked) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outline,
+                                        if (isChecked) TeaOnColor.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outline,
                                         RoundedCornerShape(12.dp)
                                     )
                                     .clickable { checkedMap[task] = !isChecked }
@@ -124,7 +136,7 @@ fun QuickGenerateDialog(
                                     checked = isChecked,
                                     onCheckedChange = { checkedMap[task] = it },
                                     colors = androidx.compose.material3.CheckboxDefaults.colors(
-                                        checkedColor = MaterialTheme.colorScheme.primary
+                                        checkedColor = TeaOnColor
                                     )
                                 )
 
@@ -137,19 +149,20 @@ fun QuickGenerateDialog(
                                     ) {
                                         Box(
                                             modifier = Modifier
-                                                .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(6.dp))
-                                                .border(0.5.dp, courseColor.copy(alpha = 0.45f), RoundedCornerShape(6.dp))
+                                                .background(if (isGreen) TeaColor else MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(6.dp))
+                                                .border(0.5.dp, if (isGreen) TeaColorBorder else courseColor.copy(alpha = 0.45f), RoundedCornerShape(6.dp))
                                                 .padding(horizontal = 7.dp, vertical = 2.dp)
                                         ) {
                                             Text(
                                                 text = task.courseName,
-                                                color = courseColor,
+                                                // 同 TaskItemCard：课程名徽标字压暗，否则粉彩紫/黄在近白底上基本看不见
+                                                color = if (isGreen) TeaOnColor else readableOn(courseColor),
                                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                                 fontSize = 11.sp
                                             )
                                         }
 
-                                        TaskTypeBadge(taskTypeStr = task.taskType)
+                                        TaskTypeBadge(taskTypeStr = task.taskType, customTypes = customTypes)
                                     }
 
                                     Spacer(modifier = Modifier.height(4.dp))
@@ -161,11 +174,24 @@ fun QuickGenerateDialog(
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
 
-                                    Text(
-                                        text = "截止: ${task.dueDateString} · 预计${task.estimatedMinutes}分钟",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        // 周次 / 周几已经是一条待办的正式属性了（也是去重键），
+                                        // 预览时顺手报出来，免得生成完再去别处确认它落在哪天。
+                                        Text(
+                                            text = "第 ${task.week} 周 · ${
+                                                com.example.data.model.getDayName(task.dayOfWeek)
+                                            }",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 10.5.sp
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "截止 ${task.dueDateString}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -184,7 +210,7 @@ fun QuickGenerateDialog(
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                 modifier = Modifier.testTag("confirm_auto_generate_button")
             ) {
-                Text("一键添加待办 (${candidateTasks.count { checkedMap[it] == true }})", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
+                Text("添加 (${candidateTasks.count { checkedMap[it] == true }})", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
             }
         },
         dismissButton = {

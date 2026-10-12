@@ -16,3 +16,22 @@
 local.properties
 .env
 debug.keystore
+
+# --- 密钥与凭据：绝不允许进版本库 ---
+# release 上传密钥。app/build.gradle.kts 的 release signingConfig 指向
+# ${rootDir}/my-upload-key.jks，一旦生成，没这几行就会被 `git add .` 直接收进去。
+my-upload-key.jks
+*.jks
+*.keystore
+*.p12
+*.pem
+*.ppk
+*.bks
+keystore.properties
+secrets.properties
+# Firebase / Google Services 配置文件（内含 API key 与 project 信息）。
+google-services.json
+# 环境变量派生文件。上面已忽略精确名 `.env`，这里补上 .env.local / .env.production 等；
+# 用 ! 把占位模板 .env.example 放回来，它需要被跟踪。
+.env.*
+!.env.example

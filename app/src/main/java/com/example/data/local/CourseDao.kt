@@ -25,6 +25,19 @@ interface CourseDao {
     @Query("SELECT * FROM courses WHERE id = :id LIMIT 1")
     suspend fun getCourseById(id: Long): CourseEntity?
 
+    /**
+     * 按自然键查重。**可能返回多条**：dedupeKey 用的是非唯一索引，
+     * 历史数据里本就可能存在同名同师同代码的课程。调用方取首条并记 issue。
+     */
+    @Query("SELECT * FROM courses WHERE dedupeKey = :dedupeKey ORDER BY id ASC")
+    suspend fun getByDedupeKey(dedupeKey: String): List<CourseEntity>
+
+    @Query("SELECT COUNT(*) FROM courses")
+    suspend fun getAllCoursesCount(): Int
+
+    @Query("SELECT * FROM courses ORDER BY id ASC")
+    suspend fun getAllCoursesOnce(): List<CourseEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCourse(course: CourseEntity): Long
 

@@ -49,7 +49,7 @@ fun WeekPickerDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(20.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -68,7 +68,7 @@ fun WeekPickerDialog(
                 }
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "切换教学周次",
+                    text = "切换周次",
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -82,7 +82,7 @@ fun WeekPickerDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "选择当前教学周，日程表与作业规划将同步联动更新：",
+                    text = "课表与待办会同步更新：",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -101,7 +101,7 @@ fun WeekPickerDialog(
                                     .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface)
                                     .border(
                                         1.dp,
-                                        if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                        if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.outline,
                                         RoundedCornerShape(8.dp)
                                     )
                                     .clickable {
@@ -115,7 +115,7 @@ fun WeekPickerDialog(
                                     text = "第${w}周",
                                     fontSize = 12.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
                                 )
                             }
                         }
@@ -146,7 +146,7 @@ fun CategoryRulesDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(20.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -165,7 +165,7 @@ fun CategoryRulesDialog(
                 }
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "课程类别待办联动规则",
+                    text = "课程联动规则",
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -179,7 +179,7 @@ fun CategoryRulesDialog(
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
-                    text = "系统根据课程所属类别自动套用预习、课后作业及实验报告的默认规划规则：",
+                    text = "按课程类别决定生成哪些待办：",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -225,7 +225,7 @@ fun CategoryRulesDialog(
                                 )
                             )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text(text = "默认生成课前预习待办", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                            Text(text = "课前预习", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
                         }
 
                         Row(
@@ -248,7 +248,7 @@ fun CategoryRulesDialog(
                                 )
                             )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text(text = "默认生成课后作业待办", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                            Text(text = "课后作业", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
                         }
 
                         Row(
@@ -271,7 +271,7 @@ fun CategoryRulesDialog(
                                 )
                             )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text(text = "默认生成实验报告待办", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                            Text(text = "实验报告", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
                         }
                     }
                 }

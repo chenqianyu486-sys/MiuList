@@ -5,12 +5,18 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-// MiuList Theme: 抹茶嫩绿 #BCE472（主题色）+ 米白（背景色）+ 浓茶色 #2E261F（绿作前景时的底色）+ 湖蓝（点缀色）
+// MiuList Theme：纯白页面底 + 抹茶绿强调 + 粉彩染色卡片
+//
+// 页面底不再由 colorScheme 决定，而是 AppBackgroundLayer 铺的那张纯白（见 Mica.kt）。
+// 卡片面的颜色也不走这里——glassSurface 自己带 tint，课程卡传课程粉彩，其余用中性色。
+//
+// 所以这一组 surface 全部改成**不透明**的冷灰阶：它们真正服务的是对话框和底部弹层，
+// 那些东西跑在独立窗口里压在纯白上，半透明的浅色会直接和底融掉、看不出是弹层。
 private val LightColorScheme = lightColorScheme(
     primary = LimeGreenPrimary,                          // 主题色：#BCE472
     onPrimary = LimeGreenOnPrimary,                      // 深色文字 (#1E2D0E)，确保浅绿底色上拥有极高清晰度与对比度
-    primaryContainer = LimeGreenContainer,               // 茶色底色 (#2E261F)，绿作前景时的背景容器
-    onPrimaryContainer = LimeGreenOnContainer,           // 绿作前景 (#BCE472)，在茶色底上拥有 >11:1 的极高清晰对比度！
+    primaryContainer = Color(0xFFEAF6D8),                // 绿作容器底：极淡的抹茶绿
+    onPrimaryContainer = LimeGreenOnContainer,           // 深抹茶绿前景 (#4A6B2A)
 
     secondary = LakeBlueAccent,                           // 点缀色：湖蓝 (#387B9B)
     onSecondary = Color.White,                            // 白色 (#FFFFFF)
@@ -22,14 +28,21 @@ private val LightColorScheme = lightColorScheme(
     tertiaryContainer = LakeBlueContainer,
     onTertiaryContainer = LakeBlueOnContainer,
 
-    background = WarmRiceWhite,                           // 背景色：米白 (#FAF8F5)
+    background = Color(0xFFFFFFFF),                       // 背景：纯白
     onBackground = TextPrimary,                           // 墨炭深色标题正文 (#1E2320)
-    surface = WarmCreamSurface,                           // 纯白浮层卡片 (#FFFFFF)
+    surface = Color(0xFFFAFBFC),
     onSurface = TextPrimary,                              // 墨炭文字 (#1E2320)
-    surfaceVariant = WarmCreamSurfaceVariant,             // 温润浅米底色 (#F3EFE8)
+    surfaceVariant = Color(0xFFF1F5F9),                   // 次级底：浅冷灰
     onSurfaceVariant = TextMuted,                         // 柔和次级辅助字 (#78827B)
-    outline = WarmCreamBorder,                            // 细腻温润米灰边框 (#E6E1D6)
-    outlineVariant = WarmCreamBorderLight,                // 超细浅边框线 (#EDE9E1)
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFFAFBFC),              // 底部弹层默认容器
+    surfaceContainer = Color(0xFFF8FAFB),
+    surfaceContainerHigh = Color(0xFFF6F8FA),             // AlertDialog 容器（见 CourseEditDialog 等）
+    surfaceContainerHighest = Color(0xFFF2F5F8),
+    surfaceBright = Color(0xFFFFFFFF),
+    surfaceDim = Color(0xFFEDF1F5),
+    outline = Color(0xFFDDE6E2),                         // 冷调分隔线（暖米灰边框会显旧）
+    outlineVariant = Color(0xFFE7EEEB),                   // 更淡的冷调发丝线
 
     error = AlertRed,                                     // 告警/紧急红色 (#EF4444)
     onError = Color.White,
