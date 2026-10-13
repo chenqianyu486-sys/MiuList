@@ -183,6 +183,21 @@ val GlassEdgeBottom = Color(0xFFE3E9EF)
 val ChipSurfaceNeutral = Color(0xFFF1F5F9)
 
 /**
+ * 页面左右留白，四个主页面（总览 / 课表 / 清单 / 设置）共用一个值。
+ *
+ * 之前是各写各的：课表 12.dp，其余三页 16.dp。同一套设计里两种页面边距
+ * 会让横滑到下一页时内容宽度明显一跳，所以收成一个共享常量。
+ *
+ * 值取 10.dp（用户要求减小边距）：页面底是纯白，卡片自己是染色面，
+ * 边距只是「卡片不要贴到屏幕边缘」的那点缓冲，10.dp 足够看清分界，
+ * 又不会让一条待办的标题平白少掉两个字的宽度。
+ *
+ * 弹窗（TaskEditDialog / NewTaskTypeDialog）里那个 16.dp 不跟着改：
+ * 那是弹窗自己离屏幕多远，不是页面边距。
+ */
+val PageHInset = 10.dp
+
+/**
  * 页面底层：纯白 + 内容。
  *
  * 放在 Scaffold 之外、内容之下，且 Scaffold 的 containerColor 必须是透明。

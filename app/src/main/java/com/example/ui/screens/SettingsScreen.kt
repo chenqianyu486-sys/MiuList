@@ -52,6 +52,7 @@ import com.example.data.calendar.EpochDays
 import com.example.data.local.CourseWithSlots
 import com.example.ui.components.IslandBottomInset
 import com.example.ui.components.parseColor
+import com.example.ui.theme.PageHInset
 import com.example.ui.theme.CourseTintAlpha
 import com.example.ui.theme.CourseTintVivid
 import com.example.ui.theme.LimeGreenOnLight
@@ -80,7 +81,7 @@ fun SettingsScreen(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = PageHInset),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         // 底部给浮岛导航留出收尾空间，内容本身仍会滚到岛底下被毛玻璃糊住
         contentPadding = PaddingValues(bottom = IslandBottomInset)

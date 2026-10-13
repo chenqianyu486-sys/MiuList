@@ -59,6 +59,7 @@ import com.example.ui.components.formatPeriodRange
 import com.example.data.calendar.ScheduleResolver
 import com.example.data.timetable.PeriodTable
 import com.example.ui.components.parseColor
+import com.example.ui.theme.PageHInset
 import com.example.ui.theme.ChipSurfaceNeutral
 import com.example.ui.theme.CourseTintAlpha
 import com.example.ui.theme.CourseTintVivid
@@ -93,7 +94,7 @@ fun ScheduleScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 12.dp)
+            .padding(horizontal = PageHInset)
     ) {
         Spacer(modifier = Modifier.height(6.dp))
 

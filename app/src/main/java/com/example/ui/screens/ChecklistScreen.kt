@@ -51,7 +51,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.local.TaskEntity
 import com.example.data.model.CustomTaskType
 import com.example.data.model.TASK_TYPE_NONE
-import com.example.data.model.TaskPriority
+import com.example.data.model.TaskStar
 import com.example.data.model.TaskTypes
 import com.example.ui.components.IslandBottomInset
 import com.example.ui.components.NO_DUE_TEXT
@@ -59,6 +59,8 @@ import com.example.ui.components.TaskItemCard
 import com.example.ui.components.parseColor
 import com.example.ui.theme.ChipSurfaceNeutral
 import com.example.ui.theme.GlassEdgeBottom
+import com.example.ui.theme.PageHInset
+import com.example.ui.theme.StarGroupPill
 import com.example.ui.viewmodel.MainUiState
 import com.example.ui.viewmodel.TaskGroupingMode
 import com.example.ui.viewmodel.TaskStatusFilter
@@ -82,11 +84,23 @@ private val GROUP_PILL_HEIGHT = 20.dp
 /** 色标到组名的距离。 */
 private val GROUP_PILL_GAP = 9.dp
 
-/** 组内卡片相对页面左边线的缩进：让卡片读起来是「属于上面那个标题」。 */
-private val GROUP_CONTENT_INSET = 12.dp
+/**
+ * 组内卡片相对页面左边线的缩进。
+ *
+ * 曾经是 12.dp（卡片比组头缩进一档，「读起来像属于上面那个组」），已删。
+ * 用户要求卡片与页面左边距对齐：缩进让同一页里出现两条不同的左边线
+ * （组头一条、卡片一条），而卡片本身的染色面 + 组头色标已经足够分出层级。
+ */
+private val GROUP_CONTENT_INSET = 0.dp
 
-/** 列表 item 之间的间距。 */
-private val LIST_ITEM_GAP = 14.dp
+/**
+ * 列表 item 之间的间距。
+ *
+ * 曾经是 14.dp，用户按「卡片上下挤一点」的要求压到 40%（5.6dp）：
+ * 每张卡自身是 14dp 内边距的染色面，卡片之间只需要够看见分界，
+ * 原来的 14dp 在一页里能少放两条。
+ */
+private val LIST_ITEM_GAP = 5.6.dp
 
 /**
  * 一个分组。**四种分组模式共用这一个结构**。
@@ -146,6 +160,10 @@ private val URGENCY_ORDER = listOf(
 private val URGENCY_URGENT = setOf("已逾期", "今天截止")
 
 private const val NO_TYPE_GROUP_TITLE = "未分类"
+
+/** 「按星标」分组的两个组头名。标星的那桶在前。 */
+private const val STAR_GROUP_TITLE = "已标星"
+private const val UNSTARRED_GROUP_TITLE = "未标星"
 
 /**
  * 筛选 chip：选中 = 主题绿平涂 + 深墨字，未选中 = 中性冷灰片 + 一道几乎看不见的发丝边。
@@ -314,19 +332,24 @@ private fun buildChecklistRows(
             }
         }
 
-        TaskGroupingMode.BY_PRIORITY -> {
-            // 顺序是「高 → 中 → 低」，不是按字母或按枚举声明顺序反着来：
-            // 优先级这个维度存在的全部意义就是回答「先做哪个」。
-            TaskPriority.entries.forEach { priority ->
-                val groupTasks = tasks.filter { it.priority == priority.name }
-                if (groupTasks.isEmpty()) return@forEach
+        TaskGroupingMode.BY_STAR -> {
+            // 顺序是「标星的在前」，和旧的「高 → 中 → 低」是同一个意图：
+            // 这个维度存在的意义就是把「我挑出来的」先摆出来。
+            // 现在只有两桶，所以直接按布尔分，别再引入第三档。
+            val buckets = tasks.groupBy { TaskStar.isMarked(it.priority) }
+            listOf(true, false).forEach { marked ->
+                val groupTasks = buckets[marked] ?: return@forEach
                 emit(
                     TaskGroup(
-                        id = "${mode.name}:${priority.name}",
-                        title = "${priority.label}优先级",
+                        id = "${mode.name}:$marked",
+                        title = if (marked) STAR_GROUP_TITLE else UNSTARRED_GROUP_TITLE,
                         count = groupTasks.size,
-                        pillColor = parseColor(priority.inkHex),
-                        inkColor = parseColor(priority.inkHex)
+                        // 色标是色块，不是文字：黄色要在这里可见就得比星标本身深一档
+                        // （StarInk 压白底只有 1.79:1，做 4×12dp 的竖条等于没画）。
+                        // 但组头**文字**不能用任何一档黄：1.79:1 的标题在页面上直接消失，
+                        // 所以它是普通墨色，黄色只承担「这一组是星标」这一个信号。
+                        pillColor = if (marked) StarGroupPill else null,
+                        inkColor = defaultInk
                     ),
                     groupTasks
                 )
@@ -482,7 +505,7 @@ fun ChecklistScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = PageHInset)
     ) {
         Spacer(modifier = Modifier.height(8.dp))
 
@@ -714,7 +737,7 @@ fun ChecklistScreen(
                             onOpenDetail = { onInspectTask(row.task) },
                             modifier = Modifier
                                 .animateItem(fadeInSpec = null, fadeOutSpec = null)
-                                // 组内卡片比组头缩进一点，读起来才像「属于上面那一组」
+                                // 卡片与页面左边距对齐，不再比组头缩进
                                 .padding(start = GROUP_CONTENT_INSET)
                         )
                     }
