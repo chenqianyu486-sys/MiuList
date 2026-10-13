@@ -29,17 +29,56 @@ enum class TaskType(val label: String, val colorHex: String, val inkHex: String)
     }
 }
 
-/** 优先级配色：红→黄→蓝的冷暖梯度，同样是淡彩面 + 同色相墨色，见 [TaskType]。 */
-enum class TaskPriority(val label: String, val colorHex: String, val inkHex: String) {
-    HIGH("高", "#F6B0AC", "#8E3F3B"),      // 珊瑚
-    MEDIUM("中", "#F3DFAE", "#6B5C38"),    // 暖麦
-    LOW("低", "#C2D2E4", "#4C5D6F");       // 雾霭蓝
+// =========================================================================
+// 星标
+// =========================================================================
 
-    companion object {
-        fun fromString(value: String): TaskPriority {
-            return entries.find { it.name.equals(value, ignoreCase = true) } ?: MEDIUM
-        }
+/** `tasks.priority`（沿用旧列名）表示「已标星」的取值。 */
+const val STAR_MARKED = "STAR"
+
+/** `tasks.priority` 表示「没标星」的取值。空串，不是 null（列是 NOT NULL）。 */
+const val STAR_UNMARKED = ""
+
+/**
+ * 待办的「星标」：**只有两种状态**——空 / 星标。
+ *
+ * 它原来是三级优先级（高/中/低）。三级的问题不是配色，是**没人真的填它**：
+ * 「先做哪个」这件事已经被截止时间承担了，优先级再给一遍三档排序，
+ * 等于让用户为同一件事多按一次手，还常常随手停在默认的「中」上，
+ * 于是这一列在绝大多数待办上都不携带信息。
+ *
+ * 保留下来的是它唯一真正好用的那一档用法：**手动挑出几条重要的**。
+ * 那是列表排序给不了的（排序每天都在变），也只有两态才不会逼人做伪决策。
+ *
+ * 存储仍复用旧的 `priority` 列，不改 schema：
+ * - `STAR` = 已标星，`""` = 没标星；
+ * - 升级前的 `HIGH` / `MEDIUM` / `LOW` 按 [isMarked] 的兼容表读，
+ *   用户下一次编辑保存时自然归一成新值，不需要写迁移、也不会丢数据。
+ */
+object TaskStar {
+
+    /** 旧三级值 → 星标状态。`HIGH` 是旧体系里唯一「被认真挑出来」的一档。 */
+    private val LEGACY: Map<String, Boolean> = mapOf(
+        "HIGH" to true,
+        "MEDIUM" to false,
+        "LOW" to false
+    )
+
+    /**
+     * 这一条待办是不是标了星。
+     *
+     * 未知的非空值一律按**没标星**处理：旧值已经归到 [LEGACY]，
+     * 剩下能落进来的非空串只可能是脏数据，而「脏数据让整屏多出一堆星标」
+     * 比「脏数据少了一颗星」糟糕得多。
+     */
+    fun isMarked(raw: String): Boolean = when {
+        raw.isBlank() -> false
+        raw.equals(STAR_MARKED, ignoreCase = true) -> true
+        else -> LEGACY[raw.uppercase()] ?: false
     }
+
+    /** 界面状态 → 落库值。只有这两个出口，别处不要拼字符串。 */
+    fun encode(marked: Boolean): String = if (marked) STAR_MARKED else STAR_UNMARKED
 }
 
 data class StudentProfile(

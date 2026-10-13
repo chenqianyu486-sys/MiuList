@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.TaskEntity
 import com.example.data.model.CustomTaskType
+import com.example.data.model.TaskStar
 import com.example.data.model.TaskTypes
 import com.example.ui.theme.accentOnCourse
 
@@ -154,15 +155,18 @@ fun TaskDetailSheet(
                 }
             }
 
-            // 待办类别 / 优先级沿用既有徽标，列表和弹层的识别方式一致。
-            // 类别留空时整行拿掉——一个只有「类别 :」却没有值的行是在问用户一个问题，
-            // 而答案（没归类）没有他需要知道的新信息。
+            // 待办类别 / 星标沿用既有徽标，列表和弹层的识别方式一致。
+            // 两者都是「有才显示」：类别留空、没标星时整行拿掉——
+            // 一个只有「类别 :」却没有值的行是在问用户一个问题，
+            // 而答案（没归类 / 没标星）没有他需要知道的新信息。
             if (typeOption != null) {
                 DetailRow(label = "类别") {
                     TaskTypeBadge(taskTypeStr = task.taskType, customTypes = customTypes)
                 }
             }
-            DetailRow(label = "优先级") { TaskPriorityBadge(priorityStr = task.priority) }
+            if (TaskStar.isMarked(task.priority)) {
+                DetailRow(label = "星标") { TaskStarMark(size = 15.dp) }
+            }
 
             if (task.description.isNotBlank()) {
                 Spacer(modifier = Modifier.height(16.dp))

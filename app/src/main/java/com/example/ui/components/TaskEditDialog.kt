@@ -23,6 +23,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -30,6 +32,7 @@ import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -59,7 +62,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.data.local.CourseEntity
 import com.example.data.local.TaskEntity
 import com.example.data.model.CustomTaskType
-import com.example.data.model.TaskPriority
+import com.example.data.model.TaskStar
 import com.example.data.model.TaskType
 import com.example.data.model.TaskTypes
 import com.example.ui.theme.ChipSurfaceNeutral
@@ -142,8 +145,10 @@ fun TaskEditDialog(
     var selectedTypeKey by remember {
         mutableStateOf(initialTask?.taskType.orEmpty())
     }
-    var selectedPriority by remember {
-        mutableStateOf(initialTask?.let { TaskPriority.fromString(it.priority) } ?: TaskPriority.MEDIUM)
+    var isStarred by remember {
+        // 默认不标星：新建待办不该顺手替用户做一次重要性判断。
+        // 旧的三级值（高/中/低）在这里就已经归一成两态了。
+        mutableStateOf(initialTask?.let { TaskStar.isMarked(it.priority) } ?: false)
     }
 
     // 截止存真实时间戳，不存「几天后」的偏移——偏移只在保存那一刻才有意义。
@@ -264,23 +269,39 @@ fun TaskEditDialog(
                     )
                 }
 
-                FieldLabel("优先级")
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    TaskPriority.entries.forEach { priority ->
-                        val isSelected = selectedPriority == priority
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { selectedPriority = priority },
-                            label = { Text(priority.label) },
-                            shape = RoundedCornerShape(10.dp),
-                            colors = micaChipColors(),
-                            border = micaChipBorder(isSelected)
-                        )
-                    }
-                }
+                FieldLabel("星标")
+                // 星标只有两态，所以是**一个可点的开关**而不是一排选项：
+                // 一排「高/中/低」会让人以为这是个必答的选择题，
+                // 而实际上绝大多数待办都不该被标星——默认空着，什么都不做就是对的。
+                // 单个 chip 还少占一整行的宽度，下面的截止时间不用被挤下去。
+                FilterChip(
+                    selected = isStarred,
+                    onClick = { isStarred = !isStarred },
+                    label = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Rounded.Star,
+                                contentDescription = null,
+                                // 选中态跟 chip 自己说话：主题绿平涂 + 墨色图标，
+                                // 不在这里硬塞琥珀（琥珀压在 #BCE472 上只有 3.96:1，
+                                // 而墨色是和选中文字同一支，能到 15:1 以上）。
+                                // 琥珀只属于卡片和详情弹层——那才是它要被发现的地方。
+                                tint = if (isStarred) {
+                                    MaterialTheme.colorScheme.onPrimary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text("标星")
+                        }
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    colors = micaChipColors(),
+                    border = micaChipBorder(isStarred),
+                    modifier = Modifier.testTag("task_edit_star_chip")
+                )
 
                 FieldLabel("截止时间")
                 // 「不设截止」是开关而不是又一个日期选项：
@@ -356,7 +377,7 @@ fun TaskEditDialog(
                         startTimeString = initialTask?.startTimeString
                             ?: course?.let { "本周排期 · ${it.name}" }
                             ?: "",
-                        priority = selectedPriority.name,
+                        priority = TaskStar.encode(isStarred),
                         // 不设截止时两列一起清：只把时间戳换成哨兵、dueDateString
                         // 还留着旧日期的话，弹层里就会显示一个和「不设截止」矛盾的时间。
                         dueDateTimestamp = if (hasDue) dueMillis else TaskEntity.NO_DUE_TIMESTAMP,
@@ -370,7 +391,7 @@ fun TaskEditDialog(
                         description = description,
                         taskType = selectedTypeKey,
                         startTimeString = course?.let { "本周排期 · ${it.name}" } ?: "",
-                        priority = selectedPriority.name,
+                        priority = TaskStar.encode(isStarred),
                         dueDateTimestamp = if (hasDue) dueMillis else TaskEntity.NO_DUE_TIMESTAMP,
                         dueDateString = if (hasDue) sdf.format(cal.time) else "",
                         isAutoGenerated = false

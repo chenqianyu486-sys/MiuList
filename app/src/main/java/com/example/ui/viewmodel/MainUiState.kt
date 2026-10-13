@@ -32,7 +32,10 @@ enum class TaskGroupingMode(val label: String) {
     BY_URGENCY("按截止"),
     BY_COURSE("按课程"),
     BY_TYPE("按类型"),
-    BY_PRIORITY("按优先级")
+    // 从「按优先级」改名而来：优先级从三档收成了星标两态之后，
+    // 「高/中/低优先级」这个组头名已经指代不了任何东西。
+    // 这只是内存态的 UI 选择，没有落库，所以改名不需要迁移。
+    BY_STAR("按星标")
 }
 
 enum class ScheduleViewMode(val label: String) {

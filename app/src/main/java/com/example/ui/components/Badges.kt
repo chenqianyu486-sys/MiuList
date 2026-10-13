@@ -3,7 +3,11 @@ package com.example.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -11,11 +15,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.CustomTaskType
-import com.example.data.model.TaskPriority
 import com.example.data.model.TaskTypes
+import com.example.ui.theme.StarInk
 
 fun parseColor(hex: String, fallback: Color = Color(0xFFBCE472)): Color {
     return try {
@@ -79,29 +84,26 @@ fun TaskTypeBadge(
     }
 }
 
+/**
+ * 星标。**没标星时整个组件不画**，调用点自己决定要不要留位。
+ *
+ * 它是这三个组件里唯一一个不需要配色的：星标的形状本身就是全部信息，
+ * 颜色只用来让它在淡彩卡面上被扫到——暖琥珀的 [StarInk]（实测在八支课程卡面
+ * 和中性卡面上都有 4.6:1 以上，远高于图形元素的 3:1 门槛）。
+ * 不用「灰色空星」表示未标星：空星和图标占位在列表里分辨不出来，
+ * 等于给每一行都加了一个没有含义的噪点。
+ */
 @Composable
-fun TaskPriorityBadge(
-    priorityStr: String,
-    modifier: Modifier = Modifier
+fun TaskStarMark(
+    modifier: Modifier = Modifier,
+    size: Dp = 14.dp
 ) {
-    val priority = TaskPriority.fromString(priorityStr)
-    Box(
-        modifier = modifier
-            .background(
-                parseColor(priority.colorHex).copy(alpha = TaskChipFillAlpha),
-                RoundedCornerShape(6.dp)
-            )
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            // label 本身是「高 / 中 / 低」，别再拼「优」——低优先级会拼出「低优」
-            text = priority.label,
-            color = parseColor(priority.inkHex),
-            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-            fontSize = 10.sp
-        )
-    }
+    Icon(
+        imageVector = Icons.Rounded.Star,
+        contentDescription = "已标星",
+        tint = StarInk,
+        modifier = modifier.size(size)
+    )
 }
 
 @Composable

@@ -37,7 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.TaskEntity
 import com.example.data.model.CustomTaskType
-import com.example.data.model.TaskPriority
+import com.example.data.model.TaskStar
 import com.example.data.model.TaskTypeOption
 import com.example.data.model.TaskTypes
 import com.example.ui.theme.CourseTintAlpha
@@ -79,8 +79,9 @@ fun TaskItemCard(
     val typeOption = remember(task.taskType, customTypes) {
         TaskTypes.resolve(task.taskType, customTypes)
     }
-    // 类别和优先级的墨色不用在这里再取一遍：两者都走 TaskTypeBadge / TaskPriorityBadge，
-    // 色值由那两个徽标解析（淡彩底 + 墨色字，验算见 EnumsAndModels）。
+    val isStarred = remember(task.priority) { TaskStar.isMarked(task.priority) }
+    // 类别的墨色不用在这里再取一遍：它走 TaskTypeBadge（淡彩底 + 墨色字，
+    // 验算见 EnumsAndModels）；星标是纯图标，色值固定在 StarInk。
 
     Card(
         modifier = modifier
@@ -168,8 +169,8 @@ fun TaskItemCard(
 
                     Spacer(modifier = Modifier.height(5.dp))
 
-                    // 名称以外的信息全部压在这一行：ddl · 关联课程 · 待办类别 · 优先级。
-                    // 课程名吃掉弹性宽度先被截断，其余三段都是短的，宁可牺牲课程名也要保住它们。
+                    // 名称以外的信息全部压在这一行：ddl · 关联课程 · 待办类别。
+                    // 课程名吃掉弹性宽度先被截断，另外两段都是短的，宁可牺牲课程名也要保住它们。
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         MetaText(
                             text = dueRelativeText,
@@ -197,9 +198,9 @@ fun TaskItemCard(
                                 modifier = Modifier.weight(1f, fill = false)
                             )
                         }
-                        // 类别和优先级在这里也是 chip，不是裸文字：
-                        // 和弹层里的徽标同一套「淡彩底 + 墨色字」，扫列表时
-                        // 两个属性各自成块，不用逐字去读「· 课前预习 · 高」这一串。
+                        // 类别在这里是 chip，不是裸文字：和弹层里的徽标同一套
+                        // 「淡彩底 + 墨色字」，扫列表时它自成一块，
+                        // 不用逐字去读「· 课前预习」这一串。
                         //
                         // 分隔点是**跟着段走**的，不是写死一串：类型可以留空、
                         // 课程可以没关联，两种情况都会让「· 」孤零零地留在行尾或行首。
@@ -209,11 +210,26 @@ fun TaskItemCard(
                                 taskTypeStr = task.taskType,
                                 customTypes = customTypes
                             )
-                            // 两个圆角块之间不插「·」——块中间再夹一个分隔点反而显脏
-                            Spacer(modifier = Modifier.width(5.dp))
                         }
-                        TaskPriorityBadge(priorityStr = task.priority)
                     }
+                }
+
+                // 星标单独占卡片右侧、垂直居中，不挤在 meta 行里。
+                //
+                // 两个原因：① meta 行是文字和 chip 的地方，星星塞进去要和
+                // 「· 」分隔点抢位置，而它比旁边任何一段都重要；
+                // ② 位置固定在右下角，整屏扫下来眼睛走的是一条直线，
+                // 「哪些是我挑出来的」不用逐行读就能看出来。
+                //
+                // 没标星就不画，连间距一起省掉——满屏的空星占位
+                // 只会把真正标星的那几条淹没在噪点里。
+                //
+                // 尺寸跟左侧的勾选圈（24.dp）**对齐**：两个都是「这条待办的状态」，
+                // 一样大小才像一对。并排两个不等大的图标（24 的圈 + 19 的星）
+                // 看着就像星是个附属品，而它其实和完成状态一样重要。
+                if (isStarred) {
+                    Spacer(modifier = Modifier.width(10.dp))
+                    TaskStarMark(size = 24.dp)
                 }
             }
             // 备注整块搬走了，只留在详情弹层里（TaskDetailSheet）。
