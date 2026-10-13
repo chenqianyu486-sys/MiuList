@@ -72,9 +72,10 @@ class ZjuNetworkSmokeTest {
     /** CAS 登录页 + 公钥接口：爬课表的第一步，页面结构一变这里先炸。 */
     @Test
     fun casLoginPageAndPubKey() {
+        // service 指向 **zdbk**，不是已退役的 appservice。
         val page = client.newCall(
             Request.Builder()
-                .url("https://zjuam.zju.edu.cn/cas/login?service=http%3A%2F%2Fappservice.zju.edu.cn%2F")
+                .url("https://zjuam.zju.edu.cn/cas/login?service=https%3A%2F%2Fzdbk.zju.edu.cn%2Fjwglxt%2Fxtgl%2Flogin_ssologin.html")
                 .get()
                 .build()
         ).execute().use { it.body?.string().orEmpty() }
@@ -88,12 +89,12 @@ class ZjuNetworkSmokeTest {
         assertTrue("公钥里没有 exponent", pubKey.contains("exponent"))
     }
 
-    /** 课表接口本身：HTTP 明文，只验证「连得上」，不携带登录态。 */
+    /** 课表接口本身：**HTTPS** 且不需要明文代理，只验证「连得上」，不携带登录态。 */
     @Test
     fun scheduleEndpointReachable() {
         val response = client.newCall(
             Request.Builder()
-                .url("http://appservice.zju.edu.cn/zju-smartcampus/zdydjw/api/kbdy_cxXsZKbxx")
+                .url("https://zdbk.zju.edu.cn/jwglxt/kbcx/xskbcx_cxXsKb.html")
                 .get()
                 .build()
         ).execute()

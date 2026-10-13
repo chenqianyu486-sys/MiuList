@@ -68,8 +68,8 @@ class ZjuImportService(
         // 2. 登录
         cas.login(studentId, password)
 
-        // 3. 取课表
-        val raw = cas.fetchSchedule(option.year, ZjuTerms.queryOf(option.term), studentId)
+        // 3. 取课表。zdbk 这条接口靠 CAS 会话识别学生，不再需要传学号。
+        val raw = cas.fetchSchedule(option.year, ZjuTerms.queryOf(option.term))
         val rows = parseRows(raw)
         if (rows.isEmpty()) {
             throw ZjuException("教务网没返回课表，试试在浙大钉的个人课表里确认")
@@ -94,12 +94,21 @@ class ZjuImportService(
         JsonScheduleCodec().encode(bundle)
     }
 
-    /** 解教务网的响应包裹 `{ data: { kblist: [...] } }`。抽出来是为了能单测。 */
+    /**
+     * 解 zdbk 课表接口的响应。
+     *
+     * **响应是平铺的**：`kbList` 直接挂在顶层，和它一起返回的还有
+     * `xzb`（行政班）、`xy`（学院）、`xnm`/`xqm`（回显的学年学期）等。
+     * 老的 appservice 接口是 `{ data: { kblist: [...] } }` 套了两层，别照抄那个。
+     *
+     * 抽成 public 是为了能单测——真实的响应结构只有联网才拿得到，
+     * 用一份按实测结构手写的样本就能把解析规则钉死，不必每次都出网。
+     */
     fun parseRows(rawJson: String): List<ZjuClassRow> {
         val wrapper = runCatching {
             moshi.adapter(ZjuScheduleResponse::class.java).fromJson(rawJson)
         }.getOrNull()
-        return wrapper?.data?.kblist.orEmpty()
+        return wrapper?.kbList.orEmpty()
     }
 
     private val moshi = Moshi.Builder().build()
@@ -107,12 +116,7 @@ class ZjuImportService(
 
 @JsonClass(generateAdapter = true)
 internal data class ZjuScheduleResponse(
-    val data: ZjuScheduleData? = null,
-    val error_code: String? = null,
-    val message: String? = null
-)
-
-@JsonClass(generateAdapter = true)
-internal data class ZjuScheduleData(
-    val kblist: List<ZjuClassRow>? = null
+    val kbList: List<ZjuClassRow>? = null,
+    val xnm: String? = null,
+    val xqm: String? = null
 )

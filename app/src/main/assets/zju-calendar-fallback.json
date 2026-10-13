@@ -1,0 +1,16 @@
+{
+  "lastUpdated": 20261013,
+  "_note": [
+    "内置兜底校历。仅当所有联网源都拉不到 zju-ical 的 config.json 时才使用（见 ZjuCalendarSource）。",
+    "联网成功时永远以联网的为准，本文件只保证「网络不通时课表导入仍能走完」。",
+    "日期由用户按浙大官方校历提供：2026-2027 学年 秋冬学期 2026-09-14 ~ 2027-01-04。",
+    "格式必须与 zju-ical configs/config.json 一致：顶层 camelCase，数组元素 PascalCase。",
+    "改动这里的日期前，先确认 zju-ical 上游的对应值，别让两份数据各说各话。"
+  ],
+  "termConfigs": [
+    { "Year": "2026-2027", "Term": 0, "Begin": 20260914, "End": 20270104, "FirstWeekNo": 1 }
+  ],
+  "classTerms": ["2026-2027:0"],
+  "examTerms": [],
+  "tweaks": []
+}

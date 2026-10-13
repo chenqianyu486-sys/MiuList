@@ -13,25 +13,25 @@ import com.example.data.model.DEFAULT_CATEGORY
 import com.squareup.moshi.JsonClass
 
 /**
- * 教务网返回的 `kblist` 一条课。
+ * zdbk 课表接口 `kbList` 里的一条课。
  *
- * 字段名是教务网的原始拼音缩写，**不能改**：改了就与接口脱节，
- * 而这些名字在上游 zju-ical 里也是这么用的。
+ * 字段名是浙大教务的原始拼音缩写，**不能改**：改了就与接口脱节。
  *
- * `xqj`（星期几）声明成 `Any?` 是有意的：本科数据是字符串 `"1"`，
- * 研究生数据是数字 `1`，两种形态都要能吃。
+ * `xqj`（星期几）、`djj`（第几节）、`skcd`（上几节）声明成 `Any?` 是有意的：
+ * 浙大这几个字段在不同接口下会以字符串 `"6"` 或数字 `6` 两种形态出现，
+ * 写成 `Int?` 遇到字符串会直接让整个 JSON 解析失败——**失败时一条课都拿不到**，
+ * 而且报错信息还指向 Moshi，看不出是哪个字段。
  */
 @JsonClass(generateAdapter = true)
 data class ZjuClassRow(
-    val mc: String?,          // 课程名
-    val kcdm: String?,        // 课程代码
-    val jsxm: String?,        // 教师
-    val skdd: String?,        // 上课地点
-    val jc: List<String>?,    // 节次，如 ["1","2"]
-    val xqj: Any?,            // 星期几：本科是字符串 "1"，研究生是数字
-    val dsz: String?,         // 单双周："0" 单周 / "1" 双周 / 其他 每周
-    val xq: String?,          // 学期串，含「秋」「冬」「春」「夏」
-    val sfqd: Int?            // 是否确认（选课中 = 0）
+    val xkkh: String?,      // 选课课号，如 (2026-2027-1)-MATH2432F-0083261-1
+    val kcb: String?,       // 课程名<br>学期{第1-8周|3节/周}<br>教师<br>教室
+    val xqj: Any?,          // 星期几：1=周一 … 7=周日
+    val djj: Any?,          // 起始节次
+    val skcd: Any?,         // 连上几节
+    val dsz: String?,       // 单双周："0" 单周 / "1" 双周 / 其他（实测 "2"）每周
+    val xxq: String?,       // 学期，"秋" / "秋冬" / "春"…
+    val sfqd: Any?          // 是否确认
 )
 
 /** 映射的结果。课程已经按自然键合并、时段已经归一化。 */
@@ -43,22 +43,24 @@ data class ZjuScheduleRows(
 )
 
 /**
- * 教务网 `kblist` → MiuList 的 `timetable` 块。
+ * zdbk `kbList` → MiuList 的 `timetable` 块。
  *
- * 映射规则严格照抄上游 `pkg/zjuservice/ugrsical/class.go` 的 `ToZJUClass`，
- * 有三处反直觉但必须照抄：
+ * ## `kcb` 是这个接口里最难啃的一处
  *
- * 1. `dsz == "0"` 是**单周**、`"1"` 是**双周**（不是直觉上的 0=每周）。
- *    写反了会让所有单双周课在另一半学期也出现，而且看不出错在哪。
- * 2. 未确认（`sfqd` 为 0 **或字段缺失**）且 `xqj` 不是带引号的字符串时整条丢掉 ——
- *    那是研究生数据。上游靠 Go 的 int 零值把「缺失」和「0」当成同一件事，
- *    我们用可空 Int 就得自己补 `(sfqd ?: 0)`，否则研究生那一整片会被放进来。
- * 3. `xq` 里秋/冬/春/夏一个都没有的整条丢掉。
+ * 课程名、教师、教室、上课周次**全挤在一个字段**里，用 `<br>` 分隔，
+ * 末尾还缀着一段教学周说明（上游用 `.split("zwf")[0]` 切掉）：
  *
- * 这三条都不会崩，只会让课表多出不该有的行或整份消失，所以每一条都有单测钉住。
+ * ```
+ * 概率论与数理统计<br>秋冬{第1-8周|3节/周}<br>吴建军<br>紫金港西2-101zwf2027年01月12日(10:30-12:30)zwf
+ * ```
  *
- * 单双周要展开成具体周号，**必须先知道总周数**，所以入参里有 [totalWeeks]。
- * 纯函数，无 Android 依赖，可直接单测。
+ * 切出四段分别是：课程名 / 学期+周次 / 教师 / 教室。
+ * **必须先按 `zwf` 切再按 `<br>` 切**：反过来会把「zwf2027年01月12日」后面的
+ * 换课说明粘在教室名尾巴上，界面上表现为教室名后面跟一串日期。
+ *
+ * ## 单双周要展开成具体周号，必须先知道总周数
+ *
+ * 所以入参里有 [toCourses] 的 `totalWeeks`；纯函数，无 Android 依赖，可直接单测。
  */
 object ZjuScheduleMapper {
 
@@ -75,7 +77,7 @@ object ZjuScheduleMapper {
 
         val parsed = rows.mapNotNull { row ->
             row.toParsed(totalWeeks) ?: run {
-                skipped += "${row.mc.orEmpty()}（${row.skipReason()}）"
+                skipped += "${row.courseName().orEmpty()}（${row.skipReason()}）"
                 null
             }
         }
@@ -173,57 +175,136 @@ object ZjuScheduleMapper {
     )
 
     private fun ZjuClassRow.toParsed(totalWeeks: Int): ParsedClass? {
-        // 上游第一道门：
-        //   if IsConfirmed == 0 { if DayNumber 为空 return nil; if DayNumber[0] != '"' return nil }
-        // 即「未确认 且 星期不是带引号的字符串」整条丢掉 —— 那是研究生数据，
-        // 它们没有 sfqd 字段、星期是裸数字。
-        //
-        // **`(sfqd ?: 0)` 这个回退不能省**：Go 的 int 零值把「字段缺失」和「字段为 0」
-        // 当成同一件事，我们用可空 Int 就必须自己补上，否则研究生那一整片数据会被放进来。
-        if ((sfqd ?: 0) == 0 && xqj !is String) return null
-
-        // 上游第二道门：`xq` 里秋/冬/春/夏一个都没有就 return nil。
-        // 命中不了任何学期的东西不是我们要的课表行，放进来只会污染统计与周次计算。
+        // `xxq` 里秋/冬/春/夏一个都没有 → 不是我们要的课表行，放进来只会污染统计与周次计算。
         if (!hasRecognisedTerm()) return null
 
-        val day = when (val raw = xqj) {
-            is String -> raw.trim().toIntOrNull()
-            is Number -> raw.toInt()
-            else -> null
-        } ?: return null
+        val day = xqj.asIntOrNull() ?: return null
+        if (day !in 1..7) return null
 
-        val periods = (jc.orEmpty()).mapNotNull { it.trim().toIntOrNull() }.sorted()
-        if (periods.isEmpty()) return null
+        // djj = 起始节次，skcd = 连上几节。末节 = djj + skcd - 1（上游的 end 是开区间）。
+        val start = djj.asIntOrNull() ?: return null
+        val length = skcd.asIntOrNull() ?: return null
+        if (start < 1 || length < 1) return null
 
-        val weeks = when (dsz?.trim()) {
-            "0" -> (1..totalWeeks).filter { it % 2 == 1 }.takeIf { it.isNotEmpty() }
-            "1" -> (1..totalWeeks).filter { it % 2 == 0 }.takeIf { it.isNotEmpty() }
+        val parts = kcbSegments()
+        val name = parts.getOrNull(0)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+
+        // 周次有两层来源，**取交集**：kcb 里写明的「第1-8周」，以及 dsz 代表的单双周。
+        // 只看其中一层都会错：只看 dsz 会让「第1-8周」的单周课在整个学期都出现。
+        val declared = parts.getOrNull(1)?.let { parseWeekSpec(it) }
+        // `when` 的分支里直接写 lambda 会推断不出类型（Kotlin 的 New inference error），
+        // 所以先把「周号是否属于这一档」声明成显式的 (Int) -> Boolean。
+        val parity: ((Int) -> Boolean)? = when (dsz?.trim()) {
+            "0" -> { p: Int -> p % 2 == 1 }   // 单周
+            "1" -> { p: Int -> p % 2 == 0 }   // 双周
+            else -> null                       // 每周（实测 "2"）
+        }
+
+        val weeks: List<Int>? = when {
+            declared != null && parity != null ->
+                declared.filter(parity).takeIf { it.isNotEmpty() }
+            declared != null -> declared
+            parity != null ->
+                (1..totalWeeks).filter(parity).takeIf { it.isNotEmpty() }
             else -> null
         }
 
         return ParsedClass(
-            name = mc?.trim(),
-            code = kcdm?.trim(),
-            teacher = jsxm?.trim(),
-            classroom = skdd?.trim(),
+            name = name,
+            code = courseCodeOf(),
+            teacher = parts.getOrNull(2)?.trim(),
+            classroom = parts.getOrNull(3)?.trim(),
             dayOfWeek = day,
-            startPeriod = periods.first(),
-            endPeriod = periods.last(),
+            startPeriod = start,
+            endPeriod = start + length - 1,
             weeks = weeks
         )
     }
 
-    /** `xq` 里是否含「秋/冬/春/夏」任一字，与上游 `TermArrangements` 的判定完全一致。 */
+    /**
+     * 从 `xkkh` 里取出「哪门课」，把教师号与班号段丢掉。
+     *
+     * `xkkh` 的形状是 `(学年-学年-学期)-课程代码-教师工号-班号`，实测三种：
+     * ```
+     * (2026-2027-1)-ISEE2020M-0088111-1     智能物联网 周1 第6节
+     * (2026-2027-1)-ISEE2020M-0088111-1A    智能物联网 周1 第9-10节   ← 同一门课！
+     * ```
+     *
+     * 同一个「课程代码 + 教师」的课会被教务系统按班拆成多条 `xkkh`，
+     * 尾号多一个字母就直接分家 —— 于是界面上同一门课出现两次，
+     * 各带一半时段（实测：AIoT 系统设计被拆成 2 个时段 + 1 个时段两门）。
+     *
+     * **不要用上游那个 `xkkh[:22]`**：那个下标是按 `(2026-2027-1)` 正好 13 个字符
+     * 算的，学年或学期的书写方式一变（比如将来写成 `(2026-2027-01)`）就会切错位置，
+     * 而且切出来的东西不认得。这里按分隔符解析，形状变了会退回整串而不是错位。
+     */
+    private fun ZjuClassRow.courseCodeOf(): String? {
+        val raw = xkkh?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        // `^(学年学期)-(课程代码)-` —— 课程代码本身不含连字符。
+        val m = COURSE_CODE_REGEX.find(raw) ?: return raw
+        return "${m.groupValues[1]}-${m.groupValues[2]}"
+    }
+
+    private val COURSE_CODE_REGEX = Regex("""^(\([^)]*\))-([^-]+)-.+""")
+
+    /**
+     * 把 `kcb` 切成四段。
+     *
+     * **顺序不能反**：先按 `zwf` 切掉末尾的教学周/调课说明，再按 `<br>` 分段。
+     * 反过来做的话教室那一段会粘上 `zwf2027年01月12日(10:30-12:30)` 这样的尾巴。
+     *
+     * 上游对第 3 段判空是有理由的：教师可能整段为空，此时下标要靠 `orEmpty` 兜住，
+     * 不能直接 `[3]` 取——那会越界。
+     */
+    private fun ZjuClassRow.kcbSegments(): List<String> =
+        kcb.orEmpty().substringBefore("zwf").split("<br>")
+
+    /** 从 `秋冬{第1-8周|3节/周}` 里取出周号集合。解析不出来返回 null（= 不限周次）。 */
+    private fun parseWeekSpec(timeString: String): List<Int>? {
+        val inner = timeString.substringAfter('{', "").substringBefore('}', "")
+        if (inner.isBlank()) return null
+        val spec = inner.substringBefore('|')
+        if (!spec.startsWith("第")) return null
+        val body = spec.removePrefix("第").removeSuffix("周")
+        if (body.isBlank()) return null
+
+        // 「1-8」是区间；「1,3,5」是枚举。两种都要认。
+        val range = body.split('-')
+        if (range.size == 2) {
+            val from = range[0].trim().toIntOrNull() ?: return null
+            val to = range[1].trim().toIntOrNull() ?: return null
+            if (from > to) return null
+            return (from..to).toList()
+        }
+        val listed = body.split(',').mapNotNull { it.trim().toIntOrNull() }
+        return listed.takeIf { it.isNotEmpty() }
+    }
+
+    /** Moshi 把数字字段解成 `Any?`，字符串/数字两种形态都要收。 */
+    private fun Any?.asIntOrNull(): Int? = when (this) {
+        is String -> trim().toIntOrNull()
+        is Number -> toInt()
+        else -> null
+    }
+
+    /** `xxq` 里是否含「秋/冬/春/夏」任一字。 */
     private fun ZjuClassRow.hasRecognisedTerm(): Boolean {
-        val raw = xq.orEmpty()
+        val raw = xxq.orEmpty()
         return TERM_KEYWORDS.any { it in raw }
     }
 
+    /** 供跳过清单显示课程名，不做完整解析。 */
+    private fun ZjuClassRow.courseName(): String? =
+        kcbSegments().getOrNull(0)?.trim()?.takeIf { it.isNotEmpty() }
+
     /** 跳过的原因要写进导入预览，让用户知道哪几行没进来、为什么。 */
     private fun ZjuClassRow.skipReason(): String = when {
-        (sfqd ?: 0) == 0 && xqj !is String -> "未确认"
         !hasRecognisedTerm() -> "学期无法识别"
-        else -> "星期或节次无法解析"
+        xqj.asIntOrNull() !in 1..7 -> "星期无法解析"
+        djj.asIntOrNull() == null || skcd.asIntOrNull() == null -> "节次无法解析"
+        courseName().isNullOrEmpty() -> "课程名无法解析"
+        else -> "课程信息不完整"
     }
 
     private val TERM_KEYWORDS = listOf("秋", "冬", "春", "夏")
