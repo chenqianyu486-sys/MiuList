@@ -1,19 +1,10 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
--->
+<?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <!-- 凭据安全：绝不将硬件加密密钥派生的凭据配置上传到云端备份 -->
+        <exclude domain="sharedpref" path="miulist_secure_credentials.xml"/>
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="sharedpref" path="miulist_secure_credentials.xml"/>
     </device-transfer>
-    -->
 </data-extraction-rules>

@@ -21,7 +21,7 @@ import com.squareup.moshi.JsonClass
  * 产出的 JSON **就是 v2 文档**，随后交给与文件导入完全相同的
  * 「解码 → 校验 → 预览 → 提交」管线，不另开一条写库的路。
  */
-class ZjuImportService(
+open class ZjuImportService(
     private val cas: ZjuCasClient = ZjuCasClient(),
     private val calendarSource: ZjuCalendarSource = ZjuCalendarSource()
 ) {
@@ -48,7 +48,7 @@ class ZjuImportService(
      * @param studentId 学号；**不会被写进 provenance 之外的任何持久化位置**，
      *   密码则完全不离开内存（只用于加密提交，见 `ZjuRsa`）。
      */
-    suspend fun fetchScheduleJson(
+    open suspend fun fetchScheduleJson(
         studentId: String,
         password: String,
         option: TermOption
@@ -57,12 +57,12 @@ class ZjuImportService(
         val fullCalendar = calendarSource.fetch()
         val calendar = calendarSource.selectTerm(fullCalendar, option.year, option.term)
         val termConfig = calendar.termConfigs.firstOrNull()
-            ?: throw ZjuException("这份配置里没有 ${option.label}，换一期试试")
+            ?: throw ZjuException("这份配置里没有 ${option.label}，换一期试试", ZjuFailureKind.TERM)
 
         val begin = ZjuCalendarAdapter.yyyymmddToEpochDay(termConfig.begin)
-            ?: throw ZjuException("校历起止日期无法解析，换一期试试")
+            ?: throw ZjuException("校历起止日期无法解析，换一期试试", ZjuFailureKind.TERM)
         val end = ZjuCalendarAdapter.yyyymmddToEpochDay(termConfig.end)
-            ?: throw ZjuException("校历起止日期无法解析，换一期试试")
+            ?: throw ZjuException("校历起止日期无法解析，换一期试试", ZjuFailureKind.TERM)
         val totalWeeks = ZjuCalendarAdapter.totalWeeks(begin, end, termConfig.firstWeekNo ?: 1)
 
         // 2. 登录
@@ -72,7 +72,7 @@ class ZjuImportService(
         val raw = cas.fetchSchedule(option.year, ZjuTerms.queryOf(option.term))
         val rows = parseRows(raw)
         if (rows.isEmpty()) {
-            throw ZjuException("教务网没返回课表，试试在浙大钉的个人课表里确认")
+            throw ZjuException("教务网没返回课表，试试在浙大钉的个人课表里确认", ZjuFailureKind.EMPTY)
         }
 
         // 4. 映射成 v2 文档

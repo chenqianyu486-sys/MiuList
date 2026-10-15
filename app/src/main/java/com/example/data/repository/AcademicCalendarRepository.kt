@@ -62,9 +62,10 @@ class AcademicCalendarRepository(
      * `PeriodTable.from(emptyList())` 得到 `periodsPerDay = 0`，
      * 课表栅格一节都画不出来 —— 新用户第一次打开看到的是空课表。
      *
-     * 默认值给的是**浙大作息**（15 节）而不是通用 13 节表：新装用户装的就是浙大课表，
-     * 给错表等于让他们先看到一屏时间全错的课再自己改。
-     * v3→v4 迁移仍然写 [PeriodTable.DEFAULT_PERIODS]（13 节），那是历史值不能动。
+     * 默认值给的是**浙大作息**而不是通用表：新装用户装的就是浙大课表，
+     * 给错表等于让他们先看到一屏时间全错的课再自己改。两张表节数同为 13，
+     * 但时刻不同 —— 分清它们要看第 5 节的起始，不是看节数。
+     * v3→v4 迁移仍然写 [PeriodTable.DEFAULT_PERIODS]，那是历史值不能动。
      *
      * 与 [ScheduleSettingsRepository.ensureDefaultRules] 同形：只在表为空时写，
      * 已经配置过作息的用户不受影响。

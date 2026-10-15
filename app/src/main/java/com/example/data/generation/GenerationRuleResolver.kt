@@ -128,4 +128,33 @@ object GenerationRuleResolver {
         TaskType.POST_CLASS -> course.autoPostHomework
         TaskType.LAB_REPORT -> course.autoLabReport
     }
+
+    // ------------------------------------------------------------ 类别联动到课程
+
+    /**
+     * 把类别规则的三个开关**整体**套到一门课上。规则为 null（这个类别没有规则行）时原样返回。
+     *
+     * 这不是「补差量」而是**批量设置**：类别规则对它下面的所有课程始终具有权威，
+     * 保存一次就等于「把这个类别下的课统一设成这三个开关」。
+     *
+     * 早期版本只推「相对上一版变了的那几格」，理由是弹层点一下就存、
+     * 全量刷会抹掉用户在单门课上单独调过的开关。那个理由在有了
+     * 「先暂存 → 应用 / 取消」的弹层之后就不成立了：改动不再即时落库，
+     * 用户看得到改了什么、也退得回去，于是可以选择让类别规则真正说了算。
+     *
+     * **代价是明确的**：应用之后，该类别下课程上单独设过的开关会被覆盖。
+     * 想改回来，在弹层里重新应用，或在课程里单独再设一次。
+     *
+     * 没真变就返回**同一实例**：调用方靠这个跳过写库，否则每点一次应用都要
+     * UPDATE 一次全部课程，Room 白写、Flow 多发、整屏卡片跟着重建。
+     */
+    fun applySwitches(course: CourseEntity, rule: CategoryRule?): CourseEntity {
+        if (rule == null) return course
+        val next = course.copy(
+            autoPreStudy = rule.autoPreStudy,
+            autoPostHomework = rule.autoPostHomework,
+            autoLabReport = rule.autoLabReport
+        )
+        return if (next == course) course else next
+    }
 }

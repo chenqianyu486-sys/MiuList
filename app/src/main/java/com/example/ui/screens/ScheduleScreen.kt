@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,11 +29,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.ViewDay
 import androidx.compose.material.icons.outlined.ViewWeek
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -38,15 +40,20 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import com.example.ui.theme.cardRevealAt
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.CourseEntity
@@ -59,6 +66,8 @@ import com.example.ui.components.formatPeriodRange
 import com.example.data.calendar.ScheduleResolver
 import com.example.data.timetable.PeriodTable
 import com.example.ui.components.parseColor
+import com.example.ui.theme.CardBlockGap
+import com.example.ui.theme.CardListGap
 import com.example.ui.theme.PageHInset
 import com.example.ui.theme.ChipSurfaceNeutral
 import com.example.ui.theme.CourseTintAlpha
@@ -72,40 +81,48 @@ import com.example.ui.theme.LimeGreenOnPrimary
 import com.example.ui.theme.LimeGreenPrimary
 import com.example.ui.theme.TeaColor
 import com.example.ui.theme.TeaColorBorder
+import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.isGreenishColor
 import com.example.ui.theme.glassSurface
+import com.example.ui.theme.LocalCardRevealProgress
 import com.example.ui.theme.deepEnoughForWhite
+import com.example.ui.theme.pageChangeSpec
+import com.example.ui.theme.rememberCardRevealProgress
 import com.example.ui.viewmodel.MainUiState
 import com.example.ui.viewmodel.ScheduleViewMode
 import java.time.ZoneId
 import java.util.Calendar
+import java.util.TimeZone
 
 @Composable
 fun ScheduleScreen(
     state: MainUiState,
     onSelectViewMode: (ScheduleViewMode) -> Unit,
     onInspectCourse: (CourseWithSlots) -> Unit,
-    onGenerateTodayTasks: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     // 排课判定的唯一入口：开课周次、停课、补课都在它里面，
     // 周课表与列表页共用，不会各算各的。
     val resolver = remember(state.calendar) { ScheduleResolver(state.calendar) }
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(horizontal = PageHInset)
+        modifier = modifier.fillMaxSize()
     ) {
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(4.dp))
 
-        // Top Switcher + Action
+        // 视图切换（周课表 / 列表）。「生成本周待办」原来和它并排放在这一行，
+        // 现在已经上顶栏成了常驻图标（AutoAwesome）：它是跨页面的全局操作，
+        // 不属于课表页这一屏，挂在页内等于只有翻到课表页才找得到。
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = PageHInset),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.Center
         ) {
-            // Flat Segmented Control (扁平化：外层平涂浅底，选中块直接平涂主题绿，不描边)
-            FlatSegmentedRow {
+            // Flat Segmented Control (扁平化：外层平涂浅底，选中块滑进去，不描边)
+            FlatSegmentedRow(
+                selectedIndex = if (state.scheduleViewMode == ScheduleViewMode.WEEK_GRID) 0 else 1
+            ) {
                 FlatSegment(
                     label = "周课表",
                     icon = Icons.Outlined.ViewWeek,
@@ -121,76 +138,158 @@ fun ScheduleScreen(
                     testTag = "schedule_tab_day_timeline"
                 )
             }
-
-            Button(
-                onClick = onGenerateTodayTasks,
-                shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
-                modifier = Modifier.testTag("schedule_generate_tasks_button")
-            ) {
-                Icon(Icons.Outlined.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onPrimary)
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("生成本周待办", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
-            }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        if (state.scheduleViewMode == ScheduleViewMode.WEEK_GRID) {
-            // 原来这里还有一条「有待办 / 无待办」图例条，已按要求撤掉（省一行竖向空间）。
-            // 状态本身不需要图例：深浅两档本来就靠底色本身表达，
-            // 角标上的「N 待办」/「✓」也只报数目不报颜色语义。
-            val visibleByDay = remember(state.courseSlots, state.slotWeeks, state.selectedWeek, state.calendar) {
-                resolver.slotsInWeek(state.selectedWeek, state.courseSlots, state.slotWeeks)
+        // 两种视图之间的切换走的是**和底部浮岛切页同一套**转场：
+        // 旧视图缩小淡出 85ms → 新视图骨架淡入放大 110ms（晚 10ms 起跑，防拖影）
+        // → 课程块再由虚及实、从上往下依次亮起 600ms。规格与时间轴都在 Mica.kt。
+        //
+        // 「换一个数据视图」和「换一页」在体感上是同一件事，不该一个滑动一个硬切。
+        // 规格收在共享函数里而不是这里再抄一遍，是因为那几个数字每一个都牵着理由，
+        // 抄一份就等于让其中一份变成没有依据的手感参数。
+        //
+        // weight(1f) 挂在 AnimatedContent **自己**身上而不是里面的内容：
+        // ColumnScope 只对直接子节点有效，挪进内容 lambda 里编译不过。
+        AnimatedContent(
+            targetState = state.scheduleViewMode,
+            transitionSpec = { pageChangeSpec() },
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            label = "schedule_view_transition"
+        ) { viewMode ->
+            // 第三段：课程块由虚及实、从上往下依次亮起。规格与时间轴和底部浮岛
+            // 切页是同一份（见 Mica.kt），所以这里不传首帧豁免——每次重建都真的
+            // 存在一次「旧视图」，该放就放。
+            val cardRevealState = rememberCardRevealProgress()
+
+            CompositionLocalProvider(LocalCardRevealProgress provides cardRevealState) {
+                if (viewMode == ScheduleViewMode.WEEK_GRID) {
+                    // 原来这里还有一条「有待办 / 无待办」图例条，已按要求撤掉（省一行竖向空间）。
+                    // 状态本身不需要图例：深浅两档本来就靠底色本身表达，
+                    // 角标上的「N 待办」/「✓」也只报数目不报颜色语义。
+                    val visibleByDay = remember(state.courseSlots, state.slotWeeks, state.selectedWeek, state.calendar) {
+                        resolver.slotsInWeek(state.selectedWeek, state.courseSlots, state.slotWeeks)
+                    }
+                    WeekTimetableGrid13(
+                        coursesWithSlots = state.coursesWithSlots,
+                        slots = state.courseSlots,
+                        tasks = state.tasks,
+                        selectedDay = state.selectedScheduleDay,
+                        periodTable = state.periodTable,
+                        visibleSlotsByDay = visibleByDay,
+                        onInspectCourse = onInspectCourse,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    DayTimelineView13(
+                        coursesWithSlots = state.coursesWithSlots,
+                        slots = state.courseSlots,
+                        tasks = state.tasks,
+                        periodTable = state.periodTable,
+                        resolver = resolver,
+                        weeksBySlotId = state.slotWeeks,
+                        onInspectCourse = onInspectCourse,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = PageHInset)
+                    )
+                }
             }
-            WeekTimetableGrid13(
-                coursesWithSlots = state.coursesWithSlots,
-                slots = state.courseSlots,
-                tasks = state.tasks,
-                selectedDay = state.selectedScheduleDay,
-                periodTable = state.periodTable,
-                visibleSlotsByDay = visibleByDay,
-                onInspectCourse = onInspectCourse,
-                modifier = Modifier.weight(1f)
-            )
-        } else {
-            DayTimelineView13(
-                coursesWithSlots = state.coursesWithSlots,
-                slots = state.courseSlots,
-                tasks = state.tasks,
-                periodTable = state.periodTable,
-                resolver = resolver,
-                weeksBySlotId = state.slotWeeks,
-                onInspectCourse = onInspectCourse,
-                modifier = Modifier.weight(1f)
-            )
         }
     }
 }
 
 /**
- * 扁平化分段控件外框：一层平涂浅米底 (#F3EFE8)，不描边、不加阴影。
+ * 分段控件里每一档的宽度。**两档必须等宽**，这不是排版偏好，是动画的前提：
+ * 选中块靠一块会滑动的背景指示器表示位置，位移 = 段宽 × 序号。
+ * 早先两档按内容自适应（「周课表」比「列表」宽）、各自画自己的背景，
+ * 那样「一格消失、另一格出现」读起来像刷新；改成滑动指示器后位移必须有个固定步长，
+ * 等宽正好把这个步长给出来，顺带让控件左右对称。
+ *
+ * 76.dp 的来历：11.5.sp 的「周课表」约 34.dp + 图标 15.dp + 4.dp 间距 = 53.dp，
+ * 剩下的 23.dp 作为居中文字两侧的呼吸；换成有文字标签的版本时也不会挤。
+ */
+private val ScheduleTabSegmentWidth = 76.dp
+
+/** 外框高度。含 3.dp 内边距，选中块（指示器）实际高 24.dp。 */
+private val ScheduleTabHeight = 30.dp
+
+/** 外框内边距，同时也是两档之间的视觉缝宽：选中块要正好贴满整块高度，不留白边。 */
+private val ScheduleTabInset = 3.dp
+
+/**
+ * 选中块滑动 + 字色过渡的时长。
+ *
+ * 220ms 是「看得清它在滑、又没让人等」的那一档：短于 ~150ms 时它读成瞬间跳变，
+ * 长于 ~300ms 就变成一个需要等待的动画了——它只是确认「我切到了」，不是转场。
+ * 字色用同一条曲线，于是绿块走到哪、字就亮到哪，两者是同一件事而不是两件事。
+ */
+private const val ScheduleTabAnimMs = 220
+
+/**
+ * 分段控件外框：一层平涂浅底（surfaceVariant），不描边、不加阴影，
+ * 里面压一块会滑动的选中块。
+ *
+ * 选中态由**一整块会动的绿**表示，而不是让两档各自换背景色：两个独立背景在切换瞬间
+ * 是「一格消失、另一格出现」，读起来像刷新；一块滑过去则是同一个控件换了位置，
+ * 用户能直接看出「这两个是同一个东西的两档」。
+ *
+ * 容器宽度**写死**（两段 + 内边距 + 缝），因为外层那一行要用 Arrangement.Center 把它
+ * 摆到正中，而按内容自适应的话居中的是内容、控件宽度会随文字抖动。
  */
 @Composable
 private fun FlatSegmentedRow(
+    selectedIndex: Int,
     modifier: Modifier = Modifier,
     content: @Composable RowScope.() -> Unit
 ) {
-    Row(
+    // 指示器的位移就是「段宽 + 缝」，索引直接乘进去：两档等宽，所以不需要测宽，
+    // 也不需要在切换时读布局去反推每档的实际位置。
+    val indicatorOffset by animateDpAsState(
+        targetValue = if (selectedIndex == 0) 0.dp
+        else ScheduleTabSegmentWidth + ScheduleTabInset,
+        animationSpec = tween(ScheduleTabAnimMs, easing = FastOutSlowInEasing),
+        label = "schedule_tab_indicator"
+    )
+    Box(
         modifier = modifier
+            // 3 = 左右内边距（2）+ 两档之间的缝（1）
+            .width(ScheduleTabSegmentWidth * 2 + ScheduleTabInset * 3)
+            .height(ScheduleTabHeight)
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        content = content
-    )
+            .padding(ScheduleTabInset)
+    ) {
+        // 指示器必须**叠在外框上**，不能作为 Row 的子项混进排布：它自己就占一个段宽
+        // （76.dp），放进 Row 会把两段文字整体右推，控件宽度又只按两段算，
+        // 于是「列表」被挤出框外看不见——实机截图才发现，编译期完全看不出来。
+        Box(
+            modifier = Modifier
+                .offset(x = indicatorOffset)
+                .width(ScheduleTabSegmentWidth)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.primary)
+        )
+        // 两档排在指示器之后画：同父级里先画的在下，正好转绿块垫在文字底下。
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(ScheduleTabInset),
+            verticalAlignment = Alignment.CenterVertically,
+            content = content
+        )
+    }
 }
 
 /**
- * 扁平化分段按钮：选中 = 主题绿平涂 + 墨炭字，未选中 = 透明 + 次级灰字。
- * 选中态完全交给色块本身表达，不再叠一层描边，所以不会出现「框套框」的脏边。
+ * 分段按钮：**不画自己的底色**，底色由 [FlatSegmentedRow] 里那块滑动的指示器统一表示。
+ *
+ * 选中态在这里只剩两件事：字色换成深墨（配合绿底，见 Color.kt 的全局约定）、
+ * 字重加粗。字号两档一致且固定，所以加粗时文字虽然变宽，但它是**居中排**的——
+ * 两侧同时外扩，不会把整段控件的宽度或相邻档的位置顶动。
  */
 @Composable
 private fun FlatSegment(
@@ -201,14 +300,20 @@ private fun FlatSegment(
     icon: ImageVector? = null,
     testTag: String? = null
 ) {
-    val contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+    // 字色跟着走一段比瞬间跳变顺：指示器要滑 220ms，字色若瞬间换，
+    // 会出现「绿块还在路上、字已经黑了」的一瞬不协调。
+    val contentColor by animateColorAsState(
+        targetValue = if (selected) MaterialTheme.colorScheme.onPrimary
+        else MaterialTheme.colorScheme.onSurfaceVariant,
+        animationSpec = tween(ScheduleTabAnimMs, easing = FastOutSlowInEasing),
+        label = "schedule_tab_label_color"
+    )
     Box(
         modifier = modifier
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
+            .width(ScheduleTabSegmentWidth)
             .clip(RoundedCornerShape(8.dp))
-            .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
-            .clickable { onClick() }
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .clickable { onClick() },
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -367,8 +472,8 @@ private val PeriodRulerWidth = 20.dp
  *    节奏统一，靠课程块的连续色块自己分段；表头与主体之间留一条略沉的分隔线收口；
  * 5. 节次数字淡到 8.5sp 的水印色，只在没课的空格露出来给方位感，绝不压课程块。
  *
- * 行数一律走 [PeriodTable.periodsPerDay]，不写死 13：换作息（浙大是 15 节）时
- * 写死的 13 会让列总高与课程块偏移各说各话，第 14/15 节的卡片直接被裁到列外。
+ * 行数一律走 [PeriodTable.periodsPerDay]，不写死节数：换作息时写死会让
+ * 列总高与课程块偏移各说各话，越界的课程块直接被裁到列外。
  */
 @Composable
 fun WeekTimetableGrid13(
@@ -384,6 +489,7 @@ fun WeekTimetableGrid13(
 ) {
     val dayLabels = listOf("一", "二", "三", "四", "五", "六", "日")
     val courseMap = coursesWithSlots.associateBy { it.course.id }
+    val cardRevealProgress = LocalCardRevealProgress.current
     val periodHeight = PeriodRowHeight
     // 行数只认作息表。空表（periodsPerDay = 0）时给 1，免得整列高度算成 0 什么都不出。
     val periodsPerDay = periodTable.periodsPerDay.coerceAtLeast(1)
@@ -394,28 +500,27 @@ fun WeekTimetableGrid13(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            // 栅格整体是一块云母面板：外面浮起来，内部保持近白的平整底，网格线照旧
-            .glassSurface(shape = RoundedCornerShape(20.dp))
+            // 栅格动态铺满屏幕宽度，平涂微透底色，避免全屏 recursive hazeEffect 引起的渲染残影与开销
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.88f))
     ) {
         // 吸顶星期表头：每列一个独立圆角块，今天填绿，其余是中性片
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 刻度列在表头的占位：宽度要扣掉本 Row 的 6.dp 水平 padding **和** 4.dp 的
-            // 块间距，否则表头会整体右移 10.dp，七个星期块压在七个日列右边一截
-            Box(modifier = Modifier.width(PeriodRulerWidth - 10.dp))
+            // 刻度列在表头的占位：与网格主体刻度列完全同宽（PeriodRulerWidth），保证表头 7 列与网格 7 列精确对齐
+            Box(modifier = Modifier.width(PeriodRulerWidth))
             dayLabels.forEachIndexed { index, day ->
                 val dayNum = index + 1
                 val isToday = dayNum == selectedDay
                 Box(
                     modifier = Modifier
                         .weight(1f)
+                        .padding(horizontal = 2.dp)
                         .height(WeekHeaderHeight)
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(8.dp))
                         // 主题绿只做填充，上面必须是深色前景（Color.kt 的全局约定）。
                         // 原本挂在表头底部的绿色小横条删掉了：整块已经是绿的，横条纯属冗余。
                         .background(
@@ -505,6 +610,16 @@ fun WeekTimetableGrid13(
                 val daySlots = visibleSlotsByDay[dayNum].orEmpty()
                 // 撞课的课在这里被分好列，后面按列宽摆格子
                 val placements = layoutDaySlots(daySlots)
+                // 入场序号按**节次**排，不按并排列：撞课并排的两块在同一行同一高度，
+                // 按列排会让它们一个在左上、一个在右下依次亮起，读起来像错位而不是
+                // 同时出现。所以这里只按 startPeriod 排序，同节次的块拿到同一个序号。
+                val revealOrderBySlotId = remember(placements) {
+                    placements
+                        .sortedBy { it.slot.startPeriod }
+                        .distinctBy { it.slot.startPeriod }
+                        .mapIndexed { index, place -> place.slot.startPeriod to index }
+                        .toMap()
+                }
 
                 BoxWithConstraints(
                     modifier = Modifier
@@ -577,6 +692,10 @@ fun WeekTimetableGrid13(
                                     .width(cellWidth)
                                     .height(cardHeight)
                                     .padding(horizontal = 2.dp, vertical = 2.dp)
+                                    .cardRevealAt(
+                                        cardRevealProgress,
+                                        revealOrderBySlotId[slot.startPeriod] ?: 0
+                                    )
                             ) {
                                 CourseTimetableCell(
                                     course = course,
@@ -618,6 +737,12 @@ private const val CHIP_TEXT_TARGET = 6.5f
 /** 最多往后找几天（两周），够覆盖「这一整周都没课」的极端排课。 */
 private const val DAY_LOOKAHEAD = 14
 
+/** 当天那段的标题。用户用「今日」而不是「今天」。 */
+private const val TODAY_LABEL = "今日"
+
+/** 今天最后一节课已经上完（或这天没排出任何课）时，挂在「今日」后面的收尾文案。 */
+private const val ALL_DAY_DONE_TEXT = "课都上完啦，休息一下吧~"
+
 /** 列表页里的一天：一个日期 + 当天的课（已按开始节次排好）。 */
 private class ScheduleDayGroup(
     val dayOffset: Int, // 0 = 今天，1 = 明天，以此类推
@@ -625,46 +750,77 @@ private class ScheduleDayGroup(
     val slots: List<CourseSlotEntity>
 )
 
+/**
+ * 课表时间的时区。**固定 Asia/Shanghai，不跟随设备时区。**
+ *
+ * 课表上的「08:00–09:35」是学校的**墙上时间**，它表达的是「在浙大校区的钟面上第几小时」，
+ * 不是「用户设备所在时区的第几小时」。跟着设备走会得到两种错法：
+ *
+ *  * 设备不在 UTC+8 时，界面上明明写着 08:00，上课提醒却按设备本地时间算——
+ *    本机测试用的模拟器正是 GMT，于是所有课整体偏 8 小时，「今日」的分隔标题和
+ *    「还有多久」会一起算错，而且**不报任何错**；
+ *  * 「今天是几号」也会跟着偏：北京 00:30 时 GMT 还是前一天，列表会把昨天当成今天。
+ *
+ * 固定成 Asia/Shanghai 之后，北京用户看到的完全不变（本来就是 UTC+8），
+ * 而设备在别的时区时课表依然正确。判断某一时刻属于哪一节课时，
+ * `System.currentTimeMillis()` 本身是绝对时刻、与时区无关，可以照旧用它。
+ */
+private val ScheduleZone: ZoneId = ZoneId.of("Asia/Shanghai")
+
 /** Calendar 的 DAY_OF_WEEK（周日=1）转成 App 的 1=周一 .. 7=周日。 */
 private fun appDayOfWeek(cal: Calendar): Int = (cal.get(Calendar.DAY_OF_WEEK) + 5) % 7 + 1
 
-/** Calendar → epochDay。校历判定统一走 epochDay，不受时区/夏令时影响。 */
+/** Calendar → epochDay。校历判定统一走 epochDay，不受夏令时影响；时区按 [ScheduleZone]。 */
 private fun epochDayOf(cal: Calendar): Long =
-    cal.toInstant().atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay()
+    cal.toInstant().atZone(ScheduleZone).toLocalDate().toEpochDay()
+
+/** 今天 00:00（[ScheduleZone]）。列表页的「当日」锚点。 */
+private fun todayCalendar(): Calendar =
+    Calendar.getInstance(TimeZone.getTimeZone(ScheduleZone)).apply {
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
 
 /**
- * 某个时段在指定日期的开课时刻（epoch millis）。
+ * 把某个日期的 00:00 挪到 [minuteOfDay] 这个钟点（epoch millis）。
  *
- * 取不到该节次时返回 0 —— 越界不该静默兜底成一个「看起来正常」的假时间，
+ * **前提是 [date] 自带 [ScheduleZone]**——`set(HOUR_OF_DAY, …)` 按 Calendar 自己的
+ * 时区解释，换成系统时区就会整体偏移。所有传进来的 date 都来自 [todayCalendar]
+ * 或由它克隆，不再另行取 `Calendar.getInstance()`。
+ *
+ * 返回 0 表示取不到该节次（越界）：不该静默兜底成一个「看起来正常」的假时间，
  * 那正是「改了作息但某个调用点漏改」的藏身处。
  */
+private fun minuteOfDayMillis(
+    date: Calendar,
+    minuteOfDay: Int
+): Long = (date.clone() as Calendar).apply {
+    set(Calendar.HOUR_OF_DAY, minuteOfDay / 60)
+    set(Calendar.MINUTE, minuteOfDay % 60)
+    set(Calendar.SECOND, 0)
+    set(Calendar.MILLISECOND, 0)
+}.timeInMillis
+
+/** 某个时段在指定日期的开课时刻（epoch millis）。取不到该节次时返回 0。 */
 private fun periodStartMillis(
     date: Calendar,
     slot: CourseSlotEntity,
     periodTable: PeriodTable
 ): Long {
     val minute = periodTable.startMinuteOf(slot.startPeriod) ?: return 0L
-    return (date.clone() as Calendar).apply {
-        set(Calendar.HOUR_OF_DAY, minute / 60)
-        set(Calendar.MINUTE, minute % 60)
-        set(Calendar.SECOND, 0)
-        set(Calendar.MILLISECOND, 0)
-    }.timeInMillis
+    return minuteOfDayMillis(date, minute)
 }
 
-/** 某个时段在指定日期的结课时刻（epoch millis）。 */
+/** 某个时段在指定日期的结课时刻（epoch millis）。取不到该节次时返回 0。 */
 private fun periodEndMillis(
     date: Calendar,
     slot: CourseSlotEntity,
     periodTable: PeriodTable
 ): Long {
     val minute = periodTable.endMinuteOf(slot.endPeriod) ?: return 0L
-    return (date.clone() as Calendar).apply {
-        set(Calendar.HOUR_OF_DAY, minute / 60)
-        set(Calendar.MINUTE, minute % 60)
-        set(Calendar.SECOND, 0)
-        set(Calendar.MILLISECOND, 0)
-    }.timeInMillis
+    return minuteOfDayMillis(date, minute)
 }
 
 /**
@@ -682,7 +838,9 @@ private fun buildDayGroups(
     weeksBySlotId: Map<Long, Set<Int>>
 ): List<ScheduleDayGroup> {
     val groups = ArrayList<ScheduleDayGroup>(EXTRA_DAY_GROUPS + 1)
-    val today = Calendar.getInstance()
+    // 「今天」的锚点必须是 Asia/Shanghai 的今天：设备在别的时区时，
+    // 用系统时区会在北京 00:30 之前把前一天当成今天（见 ScheduleZone）。
+    val today = todayCalendar()
     var extra = 0
     var offset = 0
     while (offset < DAY_LOOKAHEAD && extra < EXTRA_DAY_GROUPS) {
@@ -713,27 +871,83 @@ private fun buildDayGroups(
 }
 
 /**
- * 纯文本的日期分隔标题：今天 / 明天 / 后天 / X 月 X 日。
+ * 纯文本的日期分隔标题：今日 / 明天 / 后天 / X 月 X 日。
  *
  * 判定用的是**距今天几天**而不是星期几——同一门课在列表里可能出现好几次，
  * 只有日期能唯一认出「哪一天的哪一节」。
  *
- * 只有今天挂倒计时，而且倒计时数的是「下一节课」而不是「当天第一节课」：
- * 第一节课已经过去的时候，对着它做减法只会得到一个负数。
- * 今天的课全上完了就只留「今天」，不做无意义的补零。
+ * 只有「今日」带状态后缀，见 [todayStatusLabel]：明天/后天没有「还有多久下课」可言，
+ * 硬套一句只会变成假信息。
  */
 private fun daySeparatorLabel(group: ScheduleDayGroup, now: Long, periodTable: PeriodTable): String {
     val base = when (group.dayOffset) {
-        0 -> "今天"
+        0 -> TODAY_LABEL
         1 -> "明天"
         2 -> "后天"
         else -> "${group.date.get(Calendar.MONTH) + 1} 月 ${group.date.get(Calendar.DAY_OF_MONTH)} 日"
     }
     if (group.dayOffset != 0) return base
-    val next = group.slots.firstOrNull { periodEndMillis(group.date, it, periodTable) > now } ?: return base
-    val remain = periodStartMillis(group.date, next, periodTable) - now
-    if (remain <= 0L) return "$base · 进行中"
-    return "$base · 还有 ${remain / 3_600_000L} 小时 ${(remain % 3_600_000L) / 60_000L} 分"
+    return "$base · ${todayStatusLabel(group.date, group.slots, now, periodTable)}"
+}
+
+/**
+ * 「今日」后面的状态后缀，按**现在落在哪一节课的哪一段**分三种。
+ *
+ * 之前只有一档「还有 X 小时 Y 分」，数的是「下一节课还有多久开始」，于是三种处境
+ * 全被压成同一句话：正在上课时它显示的是「下一节课」的时间差（其实是当前这节课
+ * 的剩余时长减去下一节课的间隔），语义完全对不上；最后一节课上完时它算出负数，
+ * 只好退化成只有「今天」两个字，整段标题在列表里突然变得很空。
+ *
+ * 三态：
+ *  1. **正在上课**（now 落在某一节课的 `[start, end)`）→「还有 X 下课」。
+ *     数的是**当前这节课的结束时刻**减 now。
+ *  2. **还没到下一节课**（有课的 start > now）→「下一节课还有 X 开始」。
+ *  3. **课全上完 / 今天没课**（没有任何一节的 end > now）→「课都上完啦，休息一下吧~」。
+ *
+ * 半开区间 `[start, end)` 的两端是有讲究的：下课那一刻就该切换成「下一节课还有
+ * 多久开始」，而不是继续显示「还有 0 分下课」。
+ *
+ * [now] 是绝对时刻，与时区无关；和课表钟点的对齐由 [ScheduleZone] 负责。
+ */
+private fun todayStatusLabel(
+    date: Calendar,
+    slots: List<CourseSlotEntity>,
+    now: Long,
+    periodTable: PeriodTable
+): String {
+    // 先把每一节的 [开始, 结束] 算出来并剔掉无效项（作息表里找不到的节次返回 0）。
+    // slots 已经是按开始节次排好的，firstOrNull 天然就取到了「最早的那一节」。
+    val windows = slots.mapNotNull { slot ->
+        val start = periodStartMillis(date, slot, periodTable)
+        val end = periodEndMillis(date, slot, periodTable)
+        if (start <= 0L || end <= start) null else start to end
+    }
+    if (windows.isEmpty()) return ALL_DAY_DONE_TEXT
+
+    windows.firstOrNull { (start, end) -> now >= start && now < end }
+        ?.let { (_, end) -> return "还有 ${formatRemaining(end - now)} 下课" }
+
+    windows.firstOrNull { (start, _) -> start > now }
+        ?.let { (start, _) -> return "下一节课还有 ${formatRemaining(start - now)} 开始" }
+
+    return ALL_DAY_DONE_TEXT
+}
+
+/**
+ * 把剩余时长写成中文。
+ *
+ * 不要写成固定的「X 小时 Y 分」：剩 45 分钟时「0 小时 45 分」既难看又像坏了。
+ * 不足一小时只报分钟，整小时只报小时。
+ */
+private fun formatRemaining(millis: Long): String {
+    val totalMinutes = (millis / 60_000L).coerceAtLeast(0L)
+    val h = totalMinutes / 60
+    val m = totalMinutes % 60
+    return when {
+        h <= 0L -> "$m 分"
+        m == 0L -> "$h 小时"
+        else -> "$h 小时 $m 分"
+    }
 }
 
 /**
@@ -780,67 +994,69 @@ fun DayTimelineView13(
         return
     }
 
+    val cardRevealProgress = LocalCardRevealProgress.current
+
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(top = 2.dp, bottom = IslandBottomInset)
     ) {
-        groups.forEach { group ->
+        groups.forEachIndexed { groupIndex, group ->
             item(key = "day_${group.dayOffset}") {
                 Column {
                     Text(
                         text = daySeparatorLabel(group, now, periodTable),
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(CardBlockGap))
                 }
             }
-            group.slots.forEach { slot ->
+            group.slots.forEachIndexed { slotIndex, slot ->
                 item(key = "slot_${group.dayOffset}_${slot.id}") {
                     val cWithSlots = courseMap[slot.courseId]
                     val course = cWithSlots?.course
                     if (course != null) {
+                        // 入场序号要跨分组累计，才是从整页最上面一路数下来。
+                        // 用 `groups.take(groupIndex).sumOf { … }` 而不是外面挂一个
+                        // 累加计数器：LazyColumn 的 item 内容是**懒执行**的，捕获的
+                        // 计数器在滚动时被后续 item 复用，会算到越滚越大的序号。
+                        val revealOrder = groups
+                            .take(groupIndex)
+                            .sumOf { it.slots.size } + slotIndex
+
                         ScheduleCourseCard(
                             courseWithSlots = cWithSlots,
                             slot = slot,
                             periodTable = periodTable,
-                            onInspectCourse = { onInspectCourse(cWithSlots) }
+                            onInspectCourse = { onInspectCourse(cWithSlots) },
+                            modifier = Modifier.cardRevealAt(cardRevealProgress, revealOrder)
                         )
-                        Spacer(modifier = Modifier.height(14.dp))
+                        Spacer(modifier = Modifier.height(CardListGap))
                     }
                 }
             }
         }
         item(key = "tail") {
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(CardBlockGap))
         }
     }
 }
 
 /**
  * 列表页的课程卡：整张卡就是一个入口，点了弹出「有待办」面板（[CourseLinkageSheet]）。
- *
- * 交互只留这一种，不是为了省代码——卡片内联展开待办有实打实的三个问题：
- * 1. 一屏放不下。三天 × 每天三四堂课，展开一两条之后后面的课就得滚，
- *    「扫一眼今天有什么」这个主要用途反而没了；
- * 2. 两个层级打架。卡片头部原本点开课程详情、下面那行点开待办，
- *    一张卡两个落点，用户得先猜该点哪；
- * 3. 功能是重复的。[CourseLinkageSheet] 里已经有勾选、添加、编辑课程，
- *    卡内再摆一份等于是同一个东西的第二个实现，改一处漏一处。
- *
- * 所以卡片上只剩两行信息：课程名 + 时段 chip，以及一行元信息。
- * 有没有待办不进卡片——点开弹层第一眼就是「关联待办 · N」，在卡片上再报一遍是重复。
- *
- * 时段 chip 的字用 [deepEnoughForWhite] 而不是 [readableOn]：前者压明度的同时补饱和，
- * 出来的深色仍认得出是蓝是绿是橙（也就是「与主题色呼应」），后者往墨炭里 lerp，
- * 彩度掉到三四成，摆在呼应主题色的位置上只会显得寡淡。
  */
 @Composable
 private fun ScheduleCourseCard(
     courseWithSlots: CourseWithSlots,
     slot: CourseSlotEntity,
     periodTable: PeriodTable,
-    onInspectCourse: () -> Unit
+    onInspectCourse: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val course = courseWithSlots.course
     val courseColor = parseColor(course.colorHex)
@@ -850,22 +1066,18 @@ private fun ScheduleCourseCard(
     val room = slot.classroom.ifBlank { course.classroom }
 
     Card(
-        // 云母面板 + 无描边：卡片比页面底亮一档，靠投影浮起来。
-        // clickable 挂在 Card 上而不是里面的某一行——整卡任意位置都能点开面板，
-        // 也就不会出现「点得到但要点对地方」的情况。
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { onInspectCourse() },
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-        elevation = CardDefaults.cardElevation(0.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .clickable(onClick = onInspectCourse)
+        elevation = CardDefaults.cardElevation(0.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .glassSurface(shape = RoundedCornerShape(18.dp), tint = courseColor, tintAlpha = CourseTintAlpha, vividness = CourseTintVivid)
-                .padding(14.dp)
+                .padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
             // Header: 课程名 + 时段
             Row(
@@ -873,7 +1085,25 @@ private fun ScheduleCourseCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // 课程名 + 时段 chip。
+                //
+                // weight 必须挂在**这个 Row** 上，不能挂里面的 Text：外层 Row 先量非弹性
+                // 子项，而「包着 Text 的那个 Row」自己是非弹性的，所以里面的 Text 根本
+                // 等不到弹性那一轮——结果是课程名照旧先占满、chip 被挤到截断。
+                //
+                // 让课程名去吸收宽度不足，而不是反过来：chip 拿到完整宽度，剩下的才分给名字。
+                // 被截的应该是名字而不是时间——「18:50-21:1…」会被读成 21:10，
+                // 一个残缺的时间比一个残缺的名字有害得多。
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    // 课程名左侧的课程色竖条。这根条**一度删掉又按用户要求恢复**，
+                    // 恢复的理由成立：卡面染色只有 20% 的粉彩（CourseTintAlpha），
+                    // 一列长列表往下扫时那个浅色块不足以让人一眼认出是哪门课，
+                    // 而这根实色竖条是更强的识别线索。
+                    // 两者不是同一信息的重复表达——染色是「暗示」，竖条是「标识」，
+                    // 色弱、色弱分辨或小屏幕上浅色块更容易被忽略。
                     Box(
                         modifier = Modifier
                             .width(4.dp)
@@ -885,7 +1115,9 @@ private fun ScheduleCourseCard(
                     Text(
                         text = course.name,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
@@ -905,7 +1137,13 @@ private fun ScheduleCourseCard(
                     Text(
                         text = "${formatPeriodRange(slot.startPeriod, slot.endPeriod)} ($timeStart-$timeEnd)",
                         color = deepEnoughForWhite(courseColor, target = CHIP_TEXT_TARGET),
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        // 单行是硬约束，不给 chip 折行的余地：宽度不够就截断加省略号，
+                        // 而不是把这一张卡拉高到邻居的两倍。卡片高度必须由内容决定，
+                        // 不能由某一个长字符串决定。
+                        // 正常情况下是课程名先让位（见上面的 weight），这里只兜底。
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -915,7 +1153,11 @@ private fun ScheduleCourseCard(
             Text(
                 text = "@$room · ${course.teacher} · ${course.category}",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                // 和总览页课程卡同一个理由用 TextSecondary：这一行压在**这门课的粉彩**上，
+                // 实测全局的 onSurfaceVariant（= TextMuted #78827B）只有 2.2~3.7:1，
+                // 紫课面 #EBD8FF 上更是只有 2.99:1，11sp 小字过不了 AA。
+                // TextSecondary #4A524D 在同一批卡面上是 6.1~6.6:1。
+                color = TextSecondary
             )
         }
     }

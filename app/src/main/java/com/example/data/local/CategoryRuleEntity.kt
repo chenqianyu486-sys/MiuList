@@ -21,3 +21,32 @@ data class CategoryRuleEntity(
     @androidx.room.ColumnInfo(defaultValue = "5")
     val preDueBeforeMinutes: Int = 5
 )
+
+/**
+ * 映射放在这里而不是某个 Repository 私有。
+ *
+ * 「课程联动规则」现在跨两个仓库：`ScheduleSettingsRepository` 写类别规则并写穿课程开关，
+ * `CourseRepository` 新建课程时反过来读类别规则来初始化开关。两边各抄一份映射，
+ * 迟早有一边少拷一个字段——而少拷的那格不会报错，只会让联动「半个生效」。
+ */
+internal fun CategoryRuleEntity.toDomain() =
+    com.example.data.model.CategoryRule(
+        category = category,
+        autoPreStudy = preStudy,
+        autoPostHomework = postHomework,
+        autoLabReport = labReport,
+        defaultPostDays = defaultPostDays,
+        defaultMinutes = defaultMinutes,
+        preDueBeforeMinutes = preDueBeforeMinutes
+    )
+
+internal fun com.example.data.model.CategoryRule.toEntity() =
+    CategoryRuleEntity(
+        category = category,
+        preStudy = autoPreStudy,
+        postHomework = autoPostHomework,
+        labReport = autoLabReport,
+        defaultPostDays = defaultPostDays,
+        defaultMinutes = defaultMinutes,
+        preDueBeforeMinutes = preDueBeforeMinutes
+    )

@@ -181,6 +181,8 @@ private const val VIVID_L_MAX = 0.62f
  * 彩度上限仍是 1-|2L-1|，由 [fromHsl] 自己兜住，这里 clamp 只是防溢出。
  *
  * 调用方请用 [deepEnoughForWhite]，它会按对比度目标二分出合适的比例。
+ * 输出色相经过 [hueCorrectForDeepen] 修正：橙黄区间（15°-55°）在低明度下
+ * 会落到棕色/橄榄色的感知死区，精细修正后下推绕开脏色带，橙色转为夕阳珊瑚橙，黄色转为暖阳金。
  */
 private fun deepenCourse(
     color: Color,
@@ -198,10 +200,54 @@ private fun deepenCourse(
     // 标准 HSL 饱和度：s = d / (1 - |2L - 1|)，分母按明度分两支写
     val denom = if (l > 0.5f) (2f - maxC - minC) else (maxC + minC)
     val s = if (denom <= 0f) 0f else d / denom
+    val h = hue(r, g, b, maxC, minC)
+    val hDeg = h * 360f
+
+    // 暖色系（橙、黄 15°-55°）：饱和度适度补益至 1.60f，既消除发灰发暗的泥土感，
+    // 又保持柔和轻透的粉彩/马卡龙淡雅调（避免 100% 满彩度导致的过于浓烈焦灼）；
+    // 冷色系维持原 satBoost 1.45 保持通透自然的粉彩深调。
+    val effectiveSatBoost = if (hDeg in DEEPEN_HUE_CORRECT_LO..DEEPEN_HUE_CORRECT_HI) 1.60f else satBoost
+
     val targetL = (l * lightnessScale).coerceIn(0f, 1f)
-    val targetS = (s * satBoost).coerceIn(0f, 1f)
-    return fromHsl(hue(r, g, b, maxC, minC), targetS, targetL)
+    val targetS = (s * effectiveSatBoost).coerceIn(0f, 1f)
+    return fromHsl(hueCorrectForDeepen(h), targetS, targetL)
 }
+
+/**
+ * 橙黄色相在压深时的色相精细调校（柔和偏淡调）。
+ *
+ * 核心设计目标：
+ * 1. 橙色（原约 31°）：下推 ~11.0° 至 ~19.8°，呈现柔润淡雅的「轻暖淡珊瑚杏橙」（#EC9164），
+ *    清爽明亮、柔和适度，绝无浓重刺眼感与暗焦糖感。
+ * 2. 黄色（原约 50°）：微调 ~6.5° 至 ~44.5°，呈现轻盈温润的「淡暖阳鹅黄/金芒黄」（#E7B936），
+ *    明亮纯粹、温润怡人，彻底告别沉重浓黄与暗浊感。
+ * 3. 边界处（15° 与 55°）平滑衔接归零，红与绿完全不受影响。
+ */
+private fun hueCorrectForDeepen(h: Float): Float {
+    val deg = h * 360f
+    if (deg < DEEPEN_HUE_CORRECT_LO || deg > DEEPEN_HUE_CORRECT_HI) return h
+    val shift = when {
+        deg <= 30f -> {
+            val t = (deg - DEEPEN_HUE_CORRECT_LO) / (30f - DEEPEN_HUE_CORRECT_LO)
+            t * 11.0f
+        }
+        deg <= 50f -> {
+            val t = (deg - 30f) / 20f
+            11.0f - t * 4.5f // 30° 时偏 11.0°，50° 时偏 6.5°（黄落到 ~44.5° 柔暖淡鹅黄）
+        }
+        else -> {
+            val t = (deg - 50f) / (DEEPEN_HUE_CORRECT_HI - 50f)
+            6.5f * (1f - t)
+        }
+    }
+    return ((deg - shift) / 360f).coerceIn(0f, 1f)
+}
+
+/** 色相修正区间下界（°）：15° 以下为红系，无需修正。 */
+private const val DEEPEN_HUE_CORRECT_LO = 15f
+
+/** 色相修正区间上界（°）：55° 以上为黄绿系，无需修正。 */
+private const val DEEPEN_HUE_CORRECT_HI = 55f
 
 /**
  * 把颜色按 [alpha] 比例保留、和白色混合，算出**实际显示**的那一档颜色。
@@ -342,22 +388,66 @@ fun pushAwayFrom(bg: Color, fg: Color, target: Float = 4.5f): Color {
  *
  * 想要严格过 AA 时把 target 传 5.5 即可：白字 5.5:1、教室号 4.88:1，
  * 代价是颜色压得比设置页那条主题色竖条明显更深。
+ *
+ * **暖色区自动降档**：橙/黄（20°-55°）在低明度下脏感远比冷色严重，
+ * 同样 3.8:1 的蓝仍是「深蓝」，黄已经是「土黄」。[warmHueTargetAdjust]
+ * 会把暖色的有效目标线性降到 3.0，让深色版本停在干净的橙金色而不是棕泥色。
  */
 fun deepEnoughForWhite(
     color: Color,
     target: Float = 3.8f,
     satBoost: Float = 1.45f
 ): Color {
-    if (contrastRatio(color, CourseCellOnPending) >= target) return color
+    val effectiveTarget = warmHueTargetAdjust(color, target)
+    if (contrastRatio(color, CourseCellOnPending) >= effectiveTarget) return color
     // lo = 仍满足对比度的最亮比例，hi = 已不满足的比例
     var lo = 0.04f
     var hi = 1.0f
     repeat(20) {
         val mid = (lo + hi) / 2f
         val candidate = deepenCourse(color, lightnessScale = mid, satBoost = satBoost)
-        if (contrastRatio(candidate, CourseCellOnPending) >= target) lo = mid else hi = mid
+        if (contrastRatio(candidate, CourseCellOnPending) >= effectiveTarget) lo = mid else hi = mid
     }
     return deepenCourse(color, lightnessScale = lo, satBoost = satBoost)
+}
+
+/**
+ * 暖色区（橙/黄）的对比度目标下调。
+ *
+ * 为什么必须下调：
+ * 相对亮度公式中绿色分量权重大 (0.7152)，黄色与橙色天生带强烈的红绿组合。
+ * 如果强行按冷色的 3.8 对比度二分压暗，系统必须把亮度和明度大幅砍到 44% 以下，
+ * 物理上立刻成为暗浊泥土/屎黄/焦泥琥珀。
+ *
+ * 暖色本身与白色在课表大色块（10.5sp 半粗体）上具备极高的色相知觉分离度，
+ * 将橙色对比度目标适度放宽至 ~2.33、黄色放宽至 ~1.79，
+ * 就能让深色档橙色呈现明亮柔润的轻淡珊瑚杏橙（#EC9164），让黄色呈现清亮轻盈的淡暖阳鹅黄（#E7B936），
+ * 整体色调更加清淡柔和、舒目耐看。
+ *
+ * 只对色相 15°-55° 生效，冷色仍走调用方传入的 [target]（默认 3.8）。
+ */
+private fun warmHueTargetAdjust(color: Color, target: Float): Float {
+    val r = color.red; val g = color.green; val b = color.blue
+    val maxC = maxOf(r, g, b); val minC = minOf(r, g, b)
+    if (maxC == minC) return target
+    val hDeg = hue(r, g, b, maxC, minC) * 360f
+    if (hDeg < DEEPEN_HUE_CORRECT_LO || hDeg > DEEPEN_HUE_CORRECT_HI) return target
+
+    val drop = when {
+        hDeg <= 30f -> {
+            val t = (hDeg - DEEPEN_HUE_CORRECT_LO) / (30f - DEEPEN_HUE_CORRECT_LO)
+            t * 1.45f // 15° 时无降档，30° 时降 1.45 (目标 3.8 -> 2.35，使橙色明亮偏淡)
+        }
+        hDeg <= 50f -> {
+            val t = (hDeg - 30f) / 20f
+            1.45f + t * 0.75f // 50° 时降 2.20 (目标 3.8 -> ~1.79，使黄色明朗偏淡)
+        }
+        else -> {
+            val t = (hDeg - 50f) / (DEEPEN_HUE_CORRECT_HI - 50f)
+            2.20f * (1f - t)
+        }
+    }
+    return target - drop
 }
 
 /** WCAG 相对亮度。阈值 0.03928 是 sRGB→线性 的分段点。 */
@@ -459,6 +549,20 @@ val PastelYellow = Color(0xFFFDE047)                 // 粉彩黄 (Pastel Yellow
 // 6. 辅助状态颜色
 val AlertRed = Color(0xFFEF4444)                     // 紧急截止/告警
 
+/**
+ * 告警红的**文字档**，比 [AlertRed] 深一档。
+ *
+ * 为什么要有两支：#EF4444 是红-500，它压在本项目所有浅底上只有 **3.4:1**
+ * （实机采样：淡红卡面 #FCF3F4 上 3.45、弹层白面 #FAFBFC 上 3.44）。
+ * 拿它当图标色没问题，拿它当 11sp 正文就不行 —— WCAG 对小字要 4.5:1，
+ * 而「失败：连不上浙大服务器」这种行恰恰是必须看清的。
+ *
+ * 所以文字往红-700 走一档：同一色相、视觉上仍然是「红」，但小字能过 AA
+ * （实测 6.2:1）。**两支不要合并** —— 合并等于把所有红字都变深，
+ * 连图标与 14sp 粗体标题那种本来合规的地方也会跟着变味。
+ */
+val AlertRedText = Color(0xFFB91C1C)                 // 告警文字专用（红-700）
+
 // 7. 扁平化课表栅格色 (Flat Timetable Grid)
 // 栅格线全部转冷调：网格现在画在冷色玻璃面板上，原来那套暖米灰（#EDE9E1/#D9D2C2）
 // 在薄荷青背景上会显脏，是「复古感」的一大来源。
@@ -507,19 +611,24 @@ val TaskCheckIdleFill = Color(0xFFFFFFFF)
  *
  * 不用主题绿：#BCE472 压近白底 1.4:1、压染色卡面 1.15:1，星形会整个消失
  * （见「主题绿只能当填充色」那条约定）。
+ *
+ * ---
+ *
+ * **也用作清单「按星标」组头的色块**（2026-10-15）：那道 5×20dp 的圆角色标
+ * 原本是更深的一档 #D08F00（白底 2.76:1，理由是「亮黄做这道竖条等于没画」），
+ * 用户要它亮一些，于是换成和星形同一支：2.76:1 → 1.58:1，色块比原来难找，
+ * 但仍是这一组唯一的黄色信号。那支 #D08F00 已随之删除。
+ *
+ * **只用色块、不用标题**：组头标题「已标星」试过也走本支（1.58:1），
+ * 14sp 粗体在近白页面上直接淡没了，所以退回普通墨色。组头是列表里的主要
+ * 地标，「能读出来」优先于「和色块同色」。
+ *
+ * 应用：
+ * - **别按 3:1 把色块压深「修对比度」**。这是知情选的，要改先问。
+ * - 纯白是 App 内对浅黄最友好的底，所以 1.58:1 已是本支黄的上限；
+ *   再「亮一点」只会更低（#FEDE4F 是 1.33:1，近白页面上等于没有）。
  */
 val StarInk = Color(0xFFFFC53D)
-
-/**
- * 星标**组头色标**用的深一档黄 [#D08F00]。
- *
- * 和 [StarInk] 分开是因为两者的底不同：星形压在染色卡面上，靠色相就能认；
- * 而 4×12dp 的色标压在纯白页面上，亮黄只有 1.79:1，那道竖条等于没画。
- * 这一档实测 2.27~2.76:1（白底 2.76:1），仍是同一支黄、仍认得出是黄。
- *
- * 组头**文字**两档都不能用：白底上 1.79:1 的标题直接消失，所以标题走普通墨色。
- */
-val StarGroupPill = Color(0xFFD08F00)
 
 // =========================================================================
 // Backward Compatibility Mappings

@@ -23,6 +23,8 @@ import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -77,7 +79,7 @@ fun ScheduleTransferDialog(
     isBusy: Boolean,
     report: ImportReport?,
     onSourceChange: (ImportSource) -> Unit,
-    onZjuImport: (studentId: String, password: String, option: ZjuTermOption) -> Unit,
+    onZjuImport: (studentId: String, password: String, option: ZjuTermOption, remember: Boolean) -> Unit,
     onStrategyChange: (ImportStrategy) -> Unit,
     onExport: (android.net.Uri) -> Unit,
     onImportUri: (android.net.Uri) -> Unit,
@@ -93,16 +95,13 @@ fun ScheduleTransferDialog(
         ActivityResultContracts.OpenDocument()
     ) { uri -> uri?.let(onImportUri) }
 
-    // 账号密码只活在这个 composable 的内存里：弹层一关就没了。
-    // 刻意不放进 ViewModel / MainUiState —— 那两处会进进程状态、可能被 dump。
     var studentId by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var rememberCredentials by remember { mutableStateOf(true) }
     var selectedTermKey by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         title = {
             Text(
                 text = "课表导入 / 导出",
@@ -217,15 +216,34 @@ fun ScheduleTransferDialog(
                         )
                     }
 
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { rememberCredentials = !rememberCredentials }
+                    ) {
+                        Checkbox(
+                            checked = rememberCredentials,
+                            onCheckedChange = { rememberCredentials = it },
+                            colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "安全记住学号密码 (Android KeyStore 硬件加密)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
                     Text(
-                        text = "账号密码仅用于本次登录，不会保存。取课表走浙大教务网，校历来自公开配置。",
+                        text = "通过设备硬件 Keystore 加密存储，不提交版本库。断网直接读取本地缓存。",
                         style = MaterialTheme.typography.labelSmall,
                         color = TextSecondary
                     )
 
                     Button(
                         onClick = {
-                            selected?.let { onZjuImport(studentId, password, it) }
+                            selected?.let { onZjuImport(studentId, password, it, rememberCredentials) }
                         },
                         enabled = !isZjuRunning && selected != null && studentId.isNotBlank() && password.isNotBlank(),
                         shape = RoundedCornerShape(10.dp),
@@ -312,6 +330,16 @@ fun ScheduleTransferDialog(
                         if (r.timetableUpdated) Text("作息表已更新", style = MaterialTheme.typography.bodySmall)
                         if (r.noClassDayCount > 0) Text("停课 ${r.noClassDayCount} 天", style = MaterialTheme.typography.bodySmall)
                         if (r.makeupDayCount > 0) Text("补课 ${r.makeupDayCount} 天", style = MaterialTheme.typography.bodySmall)
+                        if (r.tasksRelinked > 0) {
+                            Text("待办保持关联 ${r.tasksRelinked} 条", style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (r.tasksUnlinked > 0) {
+                            Text(
+                                "${r.tasksUnlinked} 条待办已移入「未关联课程」",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
                     }
                 }
             }
@@ -374,7 +402,15 @@ private fun PreviewBlock(preview: ImportPreview, issues: List<ImportIssue>) {
         )
         if (preview.strategy == ImportStrategy.REPLACE) {
             Text(
-                text = "注意：将清空现有 ${preview.existingCourseCount} 门课程与 ${preview.existingTaskCount} 条待办，且不可撤销。",
+                text = buildString {
+                    append("注意：将清空现有 ${preview.existingCourseCount} 门课程并整份导入，课程不可撤销。")
+                    append("现有 ${preview.existingTaskCount} 条待办不会被删除：")
+                    append("${preview.tasksKeepingCourse} 条继续挂在原课程下")
+                    if (preview.tasksLosingCourse > 0) {
+                        append("，${preview.tasksLosingCourse} 条因课程不在新表里而移入「未关联课程」")
+                    }
+                    append("。")
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error
             )

@@ -176,7 +176,7 @@ fun PeriodTable.toDrafts(): List<PeriodDraft> = periods.map {
     PeriodDraft(it.period, it.startTime, it.endTime, it.section)
 }
 
-/** 由预设作息（如浙大 15 节）生成草稿。 */
+/** 由预设作息（如浙大作息）生成草稿。 */
 fun List<PeriodSlot>.toDrafts(): List<PeriodDraft> = sortedBy { it.period }.map {
     PeriodDraft(it.period, it.startTime, it.endTime, it.section)
 }

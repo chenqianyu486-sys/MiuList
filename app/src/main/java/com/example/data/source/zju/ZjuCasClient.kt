@@ -58,7 +58,7 @@ class ZjuCasClient(
             // 形如 `unexpected end of stream on https://zjuam.zju.edu.cn/cas/login?...`，
             // 用户完全看不懂，更不知道该检查网络还是该找浙大。实测（2026-10-13，
             // 模拟器在宿主代理不通的环境下）这个原始异常是界面上唯一能看到的东西。
-            throw ZjuException(networkFailureReason(e))
+            throw networkFailure(e)
         }
     }
 
@@ -68,7 +68,7 @@ class ZjuCasClient(
         val page = client.newCall(Request.Builder().url(loginUrl).get().build()).execute()
         val pageBody = page.use { it.body?.string().orEmpty() }
         val execution = extractExecution(pageBody)
-            ?: throw ZjuException("浙大登录页结构变了，请稍后再试")
+            ?: throw ZjuException("浙大登录页结构变了，请稍后再试", ZjuFailureKind.SERVER)
         // 页面上的 <input name="ys" value="5">：认证方式标记（5 = 密码）。
         // 缺了它 CAS 仍可能放行，但带上更贴近浏览器真实提交，少一分不确定性。
         val authType = LoginPageParser().input(pageBody, "ys") ?: "5"
@@ -80,7 +80,7 @@ class ZjuCasClient(
         val modulus = extractJsonString(pubKeyJson, "modulus")
         val exponent = extractJsonString(pubKeyJson, "exponent")
         if (modulus == null || exponent == null) {
-            throw ZjuException("浙大登录公钥取不到，请稍后再试")
+            throw ZjuException("浙大登录公钥取不到，请稍后再试", ZjuFailureKind.SERVER)
         }
         val encrypted = ZjuRsa.encryptPassword(password, modulus, exponent)
 
@@ -107,23 +107,30 @@ class ZjuCasClient(
         // 浙大登录失败时返回的是 200 + 一段错误提示 HTML，HTTP 状态码一律是 200。
         when {
             body.contains("账号被锁定") || body.contains("账号已被暂时锁定") ->
-                throw ZjuException("密码错误次数过多，账号被暂时锁定，请等解锁后再试")
+                throw ZjuException("密码错误次数过多，账号被暂时锁定，请等解锁后再试", ZjuFailureKind.LOCKED)
 
             body.contains("用户名或密码错误") || body.contains("异常登录") ->
-                throw ZjuException("学号或密码错误")
+                throw ZjuException("学号或密码错误", ZjuFailureKind.CREDENTIAL)
 
             // 5xx 一律**不**报「学号或密码错误」：execution 被解析坏时 CAS 同样回 500，
             // 那是我们的请求有问题，让用户去改密码只会把人带偏。
             response.code >= 500 ->
-                throw ZjuException("浙大登录服务出错（HTTP ${response.code}），请稍后再试")
+                throw ZjuException(
+                    "浙大登录服务出错（HTTP ${response.code}），请稍后再试",
+                    ZjuFailureKind.SERVER
+                )
 
             // 403 在浙大这里是**账号被暂时锁定**（连续输错密码后的反制页），
             // 不是「没权限」。归到「密码错误」会让用户以为自己密码被改了。
             response.code == 403 ->
-                throw ZjuException("密码错误次数过多，账号被暂时锁定，请等解锁后再试")
+                throw ZjuException("密码错误次数过多，账号被暂时锁定，请等解锁后再试", ZjuFailureKind.LOCKED)
 
+            // 剩下的 4xx（400/404/429…）**不是**凭据问题。
+            // 早先这里一律报「学号或密码错误（HTTP xxx）」，与本类注释里那条
+            // 「只有正文明确说是凭据问题才这么说」自相矛盾：用户会去反复改密码直到撞上锁号，
+            // 而状态码从一开始就没说密码有任何问题。分类留 UNKNOWN，让界面别把矛头指向凭据。
             !response.isSuccessful ->
-                throw ZjuException("学号或密码错误（HTTP ${response.code}）")
+                throw ZjuException("浙大登录返回了 HTTP ${response.code}，原因未说明", ZjuFailureKind.UNKNOWN)
         }
 
         /**
@@ -138,7 +145,7 @@ class ZjuCasClient(
          * 把排查方向整个带偏 —— 这正是之前踩过的坑。
          */
         if (finalUrl.contains("/cas/login") || !finalUrl.contains("zdbk.zju.edu.cn")) {
-            throw ZjuException(casFailureReason(body))
+            throw ZjuException(casFailureReason(body), ZjuFailureKind.CREDENTIAL)
         }
     }
 
@@ -178,7 +185,7 @@ class ZjuCasClient(
             } catch (e: ZjuException) {
                 throw e
             } catch (e: Exception) {
-                throw ZjuException(networkFailureReason(e))
+                throw networkFailure(e)
             }
         }
 
@@ -196,14 +203,17 @@ class ZjuCasClient(
 
             val text = response.use { it.body?.string().orEmpty() }
             if (!response.isSuccessful) {
-                throw ZjuException(scheduleFailureReason(response.code))
+                throw ZjuException(scheduleFailureReason(response.code), scheduleFailureKind(response.code))
             }
             // 200 也可能是 zdbk 的登录页（会话被顶掉），正文不是 JSON 就算没拿到。
             if (text.isBlank() || !text.trimStart().startsWith("{")) {
                 if (text.contains("登录") || text.contains("login")) {
-                    throw ZjuException("教务网会话已失效，请重新获取课表")
+                    throw ZjuException("教务网会话已失效，请重新获取课表", ZjuFailureKind.SESSION)
                 }
-                throw ZjuException("教务网没返回课表，试试在浙大钉的个人课表里确认")
+                throw ZjuException(
+                    "教务网没返回课表，试试在浙大钉的个人课表里确认",
+                    ZjuFailureKind.EMPTY
+                )
             }
             return text
     }
@@ -228,6 +238,19 @@ class ZjuCasClient(
     }
 
     /**
+     * 课表接口失败的**分类**，与 [scheduleFailureReason] 同一张表。
+     *
+     * 两者必须成对：文案是给人读的，分类是给界面决定「你该去做什么」用的。
+     * 只有文案没有分类的话，界面只能猜——而猜错的方向通常是「去改密码」。
+     */
+    internal fun scheduleFailureKind(code: Int): ZjuFailureKind = when (code) {
+        504, in 500..599 -> ZjuFailureKind.SERVER
+        401, 403 -> ZjuFailureKind.SESSION
+        // 4xx 里除 403 外的那些不是凭据问题，别把矛头指向学号密码。
+        else -> ZjuFailureKind.EMPTY
+    }
+
+    /**
      * 把传输层异常翻译成用户看得懂、且**知道下一步该做什么**的中文。
      *
      * 这一层不是锦上添花：不加它，界面上出现的就是 OkHttp 的原始英文，
@@ -242,16 +265,29 @@ class ZjuCasClient(
      * - 其余 `IOException` → 连不上，让用户检查网络；
      * - 其它 → 兜底，但**不编造**具体原因。
      */
-    internal fun networkFailureReason(e: Throwable): String {
-        val name = generateSequence(e) { it.cause }.map { it.javaClass.simpleName }.toList()
-        return when {
-            name.any { it.contains("Timeout") } ->
-                "连接浙大超时，请检查网络后重试"
-            e is java.io.IOException ->
-                "连不上浙大登录服务，请检查网络（或代理/VPN）后重试"
-            else ->
-                "取课表时发生异常，请稍后再试"
+    internal fun networkFailureReason(e: Throwable): String = when {
+        isTimeout(e) -> "连接浙大超时，请检查网络后重试"
+        e is java.io.IOException -> "连不上浙大登录服务，请检查网络（或代理/VPN）后重试"
+        else -> "取课表时发生异常，请稍后再试"
+    }
+
+    /** 超时一路。原因看不准，但「这是网络那一侧的事」是确定的。 */
+    private fun isTimeout(e: Throwable): Boolean =
+        generateSequence(e) { it.cause }.any { it.javaClass.simpleName.contains("Timeout") }
+
+    /**
+     * 传输层异常直接包成带分类的 [ZjuException]。
+     *
+     * 超时与连不上都归 [ZjuFailureKind.NETWORK] —— 对用户是同一件事：
+     * 「本机到浙大这条路不通」，下一步都是先看网络/代理。
+     * 只有完全认不出来的异常才落到 UNKNOWN，因为那时**不能**说成是网络问题。
+     */
+    private fun networkFailure(e: Throwable): ZjuException {
+        val kind = when {
+            isTimeout(e) || e is java.io.IOException -> ZjuFailureKind.NETWORK
+            else -> ZjuFailureKind.UNKNOWN
         }
+        return ZjuException(networkFailureReason(e), kind)
     }
 
     /**
@@ -404,8 +440,92 @@ internal class InMemoryCookieJar : CookieJar {
         }
 }
 
+/**
+ * 失败分类。**抛出时就带上，不要事后拿文案去猜。**
+ *
+ * ## 为什么必须分类，而不能靠匹配中文文案
+ *
+ * 早先 [com.example.data.sync.ScheduleSyncManager] 是用
+ * `msg.contains("学号或密码错误") || msg.contains("锁定")` 判的。
+ * 那样写的代价不是「写起来短」，而是**分类和文案绑死了**：
+ * 谁把上面 [ZjuCasClient] 里那句「连接浙大超时」改成「请求超时，请稍后再试」，
+ * 分支就悄悄失效，于是「稍后重试」变成「去改密码」——
+ * 而连续改密码正是账号被锁的成因。
+ *
+ * 更糟的是它没法表达界面真正要区分的东西：
+ * 「数据换了但没生效」和「换密码也没用，浙大自己挂了」对用户是完全不同的两件事，
+ * 前者能靠重新输入解决，后者怎么点都没用。
+ * 所以分类得是**抛出点自己声明的事实**，文案只是它的展示。
+ */
+enum class ZjuFailureKind {
+    /** 学号或密码不对。用户能自己解决：改凭据。 */
+    CREDENTIAL,
+
+    /** 密码错太多次被锁。**再试只会延长锁定期**，必须明确劝阻。 */
+    LOCKED,
+
+    /** CAS 会话被顶掉 / 课表接口要求重新登录。重新登录即可，与密码对错无关。 */
+    SESSION,
+
+    /** 网络连不上、被代理或 VPN 掐断、超时。 */
+    NETWORK,
+
+    /** 浙大自己出问题：5xx、网关超时、页面结构变了。 */
+    SERVER,
+
+    /** 学期选错，或校历配置里没有这一期。换学期能解决。 */
+    TERM,
+
+    /** 云端确实没返回这张课表。 */
+    EMPTY,
+
+    /**
+     * 云端数据拉下来了，但**没通过我们自己的校验**：字段缺失、学期自相矛盾之类。
+     *
+     * 这条不属于「浙大那边出了什么事」，是拉回来的东西用不了，
+     * 所以单列一类 —— 界面要说的是「换学期 / 改用文件导入」，
+     * 而不是「稍后重试」，重试一百次结果一样。
+     */
+    DATA_INVALID,
+
+    /** 兜底。**不许编造**具体原因，只如实说「不知道」。 */
+    UNKNOWN;
+
+    /**
+     * 短标题：界面上「是什么」那一行。
+     *
+     * 放在枚举上而不是让各处自己写，是因为曾同时存在过两份映射
+     * （弹层一份、Snackbar 一份），措辞迟早分叉成「网络错误」和「连不上浙大」，
+     * 用户会以为是两回事。**一个分类只能有一个名字。**
+     */
+    val title: String
+        get() = when (this) {
+            CREDENTIAL -> "学号或密码不对"
+            LOCKED -> "账号被暂时锁定"
+            SESSION -> "登录状态已失效"
+            NETWORK -> "连不上浙大服务器"
+            SERVER -> "浙大教务系统异常"
+            TERM -> "这学期取不到课表"
+            EMPTY -> "云端没有返回课表"
+            DATA_INVALID -> "云端数据没通过校验"
+            UNKNOWN -> "同步失败"
+        }
+
+    /** 是否要引导用户去重新输入学号/密码。 */
+    val needsCredentials: Boolean
+        get() = this == CREDENTIAL || this == LOCKED || this == SESSION
+
+    /** 责任在浙大那边，重试和改密码都没用，只能等。 */
+    val isUpstream: Boolean
+        get() = this == SERVER || this == EMPTY || this == TERM
+}
+
 /** 所有对用户可见的失败原因。文案照搬上游语义，见 [ZjuCasClient] 的类注释。 */
-class ZjuException(message: String) : Exception(message)
+class ZjuException(
+    message: String,
+    /** 抛出点声明的事实分类。没给就是 [ZjuFailureKind.UNKNOWN]，不猜。 */
+    val kind: ZjuFailureKind = ZjuFailureKind.UNKNOWN
+) : Exception(message)
 
 /** 浙大的学期枚举与教务网查询串。与 zju-ical `pkg/zjuservice/zjuconst/extension.go` 一致。 */
 object ZjuTerms {

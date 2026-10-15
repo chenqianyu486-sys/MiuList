@@ -24,7 +24,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * v3 → v4 → v5 → v6 真实迁移。Robolectric + 真实 SQLite。
+ * v3 → v4 → v5 → v6 → v7 → v8 真实迁移。Robolectric + 真实 SQLite。
  *
  * 为什么非要有这个测试：`fallbackToDestructiveMigration()` 已经移除，
  * **漏写或写错迁移的代价是升级即崩溃**，而崩溃发生在所有老用户的第一次启动上。
@@ -41,6 +41,12 @@ import org.robolectric.annotation.Config
  *
  * v5 → v6 覆盖「类型可自定义 + 类型可留空」：新建自定义类型那张表，
  * 以及已下线的 REVIEW / CUSTOM 必须被改写成空串而不是留成解析不出的悬空值。
+ *
+ * v6 → v7 覆盖「浙大作息只有 13 节」：当初那份 15 节种子的尾部两行要被删掉，
+ * 而用户自己配的 14/15 节必须原样留着。
+ *
+ * v7 → v8 覆盖「类别联动规则的默认值改了」：仍等于旧种子的规则行与课程开关
+ * 一起改写，用户单独调过的那一门课、以及自定义类别必须一个都不动。
  *
  * 这里刻意不用 `AppDatabase.getDatabase()`：那个单例在 Robolectric 的
  * 沙箱里会跨测试方法存活，拿它测「打开一个旧库」会串味。
@@ -110,7 +116,7 @@ class MigrationTest {
 
     private fun openWithMigrations(): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, dbName)
-            .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
             .build()
 
     /**
@@ -216,7 +222,11 @@ class MigrationTest {
             assertEquals("高等数学", course.name)
             assertEquals("MATH101", course.code)
             assertEquals("#93C5FD", course.colorHex)
-            assertTrue(course.autoPreStudy)
+            // 三个开关已经不是当年那组了：这门课是「公共基础 / (预习开,作业开,实验关)」，
+            // 与 v7 的内置默认值逐位相同，于是 v7 → v8 按旧种子判据把它改成「只作业」。
+            // 行本身一条不少地活下来（上面 3 行断言的就是这件事），变的是默认取值的版本。
+            assertFalse(course.autoPreStudy)
+            assertTrue(course.autoPostHomework)
             assertFalse(course.autoLabReport)
 
             assertEquals("两个时段一条都不能少", 2, db.courseSlotDao().getAllSlotsOnce().size)
@@ -501,6 +511,275 @@ class MigrationTest {
             db.close()
         }
     }
+
+    // ---------------------------------------------------------------- v6 → v7
+
+    /**
+     * 造一个**真的处在 v6** 的库，用来单独验 v6 → v7。
+     *
+     * 3 → 4 → 5 → 6 一路跑完，然后把「当初那份 15 节种子」的第 14、15 节插回去 ——
+     * 这正是全新安装用户升级前的库样子：`ensureDefaultPeriods` 播的是当时的
+     * `ZJU_PERIODS`，而那份表有 15 节。
+     *
+     * 默认参数给的是当初那两行的**逐值原样**。传别的时刻就代表「用户自己配的
+     * 14/15 节」，迁移必须原样留着 —— 见下面那条对照组用例。传 null 表示那节不存在。
+     */
+    private fun createVersion6Database(
+        period14: Triple<Int, Int, String>? = Triple(21 * 60 + 20, 22 * 60 + 5, "晚上"),
+        period15: Triple<Int, Int, String>? = Triple(22 * 60 + 10, 22 * 60 + 55, "晚上")
+    ) {
+        createVersion5Database()
+
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(dbName)
+                .callback(object : SupportSQLiteOpenHelper.Callback(6) {
+                    override fun onCreate(db: SupportSQLiteDatabase) = Unit
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {
+                        MIGRATION_5_6.migrate(db)
+                    }
+                })
+                .build()
+        )
+        try {
+            val rows = listOfNotNull(
+                period14?.let { "(14,${it.first},${it.second},'${it.third}')" },
+                period15?.let { "(15,${it.first},${it.second},'${it.third}')" }
+            )
+            if (rows.isNotEmpty()) {
+                helper.writableDatabase.execSQL(
+                    """
+                    INSERT INTO `timetable_periods` (`period`,`startMinute`,`endMinute`,`section`) VALUES
+                    ${rows.joinToString(",")}
+                    """.trimIndent()
+                )
+            }
+        } finally {
+            helper.close()
+        }
+    }
+
+    @Test
+    fun `the phantom 14th and 15th ZJU periods are dropped on upgrade`() = runBlocking {
+        createVersion6Database()
+        val db = openWithMigrations()
+        try {
+            val rows = db.calendarDao().timetablePeriodsOnce()
+            assertEquals(
+                "浙大只有 13 节。留着这两行，栅格底部会一直吊着两格永远空着的行",
+                PeriodTable.ZJU_PERIODS.size,
+                rows.size
+            )
+            assertNull(rows.firstOrNull { it.period == 14 })
+            assertNull(rows.firstOrNull { it.period == 15 })
+            // 前 13 节一条都不能动：v3→v4 播进来的是通用表，迁移只该删自己写的那两行。
+            // 顺带说明迁移不依赖「前 13 节 == 浙大作息」这个假设 ——
+            // 真实用户的前 13 节可能是通用表，也可能被他自己改过，两种都要照样删对。
+            assertEquals(
+                PeriodTable.DEFAULT_PERIODS.map { listOf(it.period, it.startMinute, it.endMinute, it.section) },
+                rows.map { listOf(it.period, it.startMinute, it.endMinute, it.section) }
+            )
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `a timetable the user configured with extra evening periods is left alone`() = runBlocking {
+        // 作息表是可以自定义的，设置页能填到 20 节。用户自己排的 14/15 节
+        // 哪怕时刻跟我们的脏种子不一样，也轮不到迁移替他删 —— 那是在删他真的在上的课。
+        createVersion6Database(
+            period14 = Triple(19 * 60, 19 * 60 + 45, "晚上"),
+            period15 = Triple(19 * 60 + 50, 20 * 60 + 35, "晚上")
+        )
+        val db = openWithMigrations()
+        try {
+            val rows = db.calendarDao().timetablePeriodsOnce().associateBy { it.period }
+            assertEquals("用户自己配的第 14 节不该被删", 19 * 60, rows[14]?.startMinute)
+            assertEquals(19 * 60 + 45, rows[14]?.endMinute)
+            assertEquals("用户自己配的第 15 节不该被删", 19 * 60 + 50, rows[15]?.startMinute)
+            assertEquals(20 * 60 + 35, rows[15]?.endMinute)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `a timetable that already stops at 13 is migrated without complaint`() = runBlocking {
+        // 已经自己改过节的库：根本没有 14/15 行，迁移必须是空操作而不是报错。
+        // DELETE 删不到东西不会失败，但这条用例守住的是「别把空表跑挂」。
+        createVersion6Database(period14 = null, period15 = null)
+        val db = openWithMigrations()
+        try {
+            val rows = db.calendarDao().timetablePeriodsOnce()
+            assertEquals(PeriodTable.DEFAULT_PERIODS.size, rows.size)
+            assertEquals((1..13).toList(), rows.map { it.period })
+        } finally {
+            db.close()
+        }
+    }
+
+    // ---------------------------------------------------------------- v7 → v8
+
+    /**
+     * 造一个**真的处在 v7** 的库，用来单独验 v7 → v8。
+     *
+     * 一路跑到 6，再用一个声明版本 7 的 OpenHelper 跑 MIGRATION_6_7（对种子数据是空操作），
+     * 然后塞进**当初那份 5 条类别规则种子**和一批还带着旧三件套开关的课程。
+     * 这正是全新安装用户升级前的库样子：`ensureDefaultRules` 只在空表时播种，
+     * 播的又是当时那版 `DEFAULT_CATEGORY_RULES`。
+     *
+     * 课程表里已经有一门 v3 时代的老课（高等数学 / 公共基础 / 1,1,0），
+     * 它正好等于旧种子，可以直接当「没被用户动过」的样本，不必再插一条。
+     */
+    private fun createVersion7Database(
+        publicFoundationRuleSeed: Triple<Int, Int, Int> = Triple(1, 1, 0)
+    ) {
+        createVersion6Database()
+
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(dbName)
+                .callback(object : SupportSQLiteOpenHelper.Callback(7) {
+                    override fun onCreate(db: SupportSQLiteDatabase) = Unit
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {
+                        MIGRATION_6_7.migrate(db)
+                    }
+                })
+                .build()
+        )
+        try {
+            val w = helper.writableDatabase
+            // 覆盖 v4 造库时插的那条「公共基础」（它的 defaultPostDays=3 是为了验 v5 补列，
+            // 不是真种子），换成真种子值，顺便留一条用户自己配出来的类别规则。
+            w.execSQL(
+                """
+                INSERT OR REPLACE INTO `category_rules`
+                  (`category`,`preStudy`,`postHomework`,`labReport`,`defaultPostDays`,
+                   `defaultMinutes`,`preDueBeforeMinutes`)
+                VALUES ('公共基础',${publicFoundationRuleSeed.first},${publicFoundationRuleSeed.second},
+                        ${publicFoundationRuleSeed.third},6,45,5),
+                       ('专业必修',1,1,0,6,60,5),
+                       ('实验实践',1,0,1,6,90,5),
+                       ('通识公共',1,1,0,6,30,5),
+                       ('专业选修',1,1,0,6,45,5),
+                       ('体育',0,1,1,6,30,5)
+                """.trimIndent()
+            )
+            // 三门「与旧种子完全一致」的课：迁移该把它们一起改写，
+            // 因为开关的真相源在 courses 上，只改类别规则行等于联动方向反过来。
+            w.execSQL(
+                """
+                INSERT INTO `courses`
+                  (`id`,`name`,`code`,`category`,`teacher`,`classroom`,`colorHex`,
+                   `autoPreStudy`,`autoPostHomework`,`autoLabReport`,`autoReview`,
+                   `defaultPostDueDays`,`preStudyEstimatedMinutes`,`postHomeworkEstimatedMinutes`,
+                   `labReportEstimatedMinutes`)
+                VALUES (2,'数据结构与算法','CS201','专业必修','李成远','信息楼 304','#208E9E',1,1,0,0,4,45,90,90),
+                       (3,'大学英语','ENG103','通识公共','Sarah Miller','外语楼 205','#F9A8D4',1,1,0,0,4,25,45,90),
+                       (4,'人工智能与深度学习','AI301','专业选修','郑晓宇','AI创新中心 410','#FDBA74',1,1,0,0,4,35,75,90),
+                       (5,'操作系统实验','CS302L','实验实践','周立峰','计机实验楼 502','#D8B4FE',1,0,1,0,5,40,60,120),
+                       (6,'信号与系统','EE201','公共基础','郑晓宇','教二-208','#86EFAC',1,0,0,0,3,30,60,90)
+                """.trimIndent()
+            )
+        } finally {
+            helper.close()
+        }
+    }
+
+    @Test
+    fun `category rules still carrying the old seed are rewritten to the new defaults`() = runBlocking {
+        createVersion7Database()
+        val db = openWithMigrations()
+        try {
+            val rules = db.categoryRuleDao().getAllOnce().associateBy { it.category }
+            assertEquals(
+                "公共基础 / 专业必修 / 专业选修 收敛到「只作业」",
+                Triple(false, true, false),
+                switchesOf(rules.getValue("公共基础"))
+            )
+            assertEquals(Triple(false, true, false), switchesOf(rules.getValue("专业必修")))
+            assertEquals(Triple(false, true, false), switchesOf(rules.getValue("专业选修")))
+            assertEquals("通识课三个都不勾", Triple(false, false, false), switchesOf(rules.getValue("通识公共")))
+            assertEquals(
+                "实验实践新旧一致，迁移不该动它",
+                Triple(true, false, true),
+                switchesOf(rules.getValue("实验实践"))
+            )
+            // 只改三个开关：截止参数是用户/别的规则给的，迁移不能顺手推倒。
+            assertEquals(6, rules.getValue("公共基础").defaultPostDays)
+            assertEquals(45, rules.getValue("公共基础").defaultMinutes)
+            assertEquals(5, rules.getValue("公共基础").preDueBeforeMinutes)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `courses follow their category down to the new switches`() = runBlocking {
+        createVersion7Database()
+        val db = openWithMigrations()
+        try {
+            val byName = db.courseDao().getAllCoursesOnce().associateBy { it.name }
+            listOf("高等数学", "数据结构与算法", "人工智能与深度学习").forEach {
+                assertEquals("$it 只该留课后作业", Triple(false, true, false), switchesOf(byName.getValue(it)))
+            }
+            assertEquals("通识课三个都不开", Triple(false, false, false), switchesOf(byName.getValue("大学英语")))
+            assertEquals("实验课是预习 + 实验报告", Triple(true, false, true), switchesOf(byName.getValue("操作系统实验")))
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `switches the user set on one course are left alone`() = runBlocking {
+        createVersion7Database()
+        val db = openWithMigrations()
+        try {
+            // 信号与系统与旧种子 (1,1,0) 不同 —— 用户在课程里单独关掉了课后作业。
+            // 升级不该把他这一门课按回类别默认值。
+            val course = db.courseDao().getAllCoursesOnce().first { it.name == "信号与系统" }
+            assertEquals(Triple(true, false, false), switchesOf(course))
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `a category rule the user already customised is left alone`() = runBlocking {
+        createVersion7Database()
+        val db = openWithMigrations()
+        try {
+            val rules = db.categoryRuleDao().getAllOnce().associateBy { it.category }
+            // 「体育」不在任何内置清单里，值也是用户自己设的：一个都不该碰。
+            assertEquals(Triple(false, true, true), switchesOf(rules.getValue("体育")))
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `a rule already on the new value migrates without complaint`() = runBlocking {
+        // 用户早就把「公共基础」调成只作业了：迁移对这一行必须是空操作而不是报错。
+        createVersion7Database(publicFoundationRuleSeed = Triple(0, 1, 0))
+        val db = openWithMigrations()
+        try {
+            val rules = db.categoryRuleDao().getAllOnce().associateBy { it.category }
+            assertEquals(Triple(false, true, false), switchesOf(rules.getValue("公共基础")))
+            // 它的课程还带着旧开关，照样被改写 —— 那一侧按旧种子判据，不看规则行现值。
+            val course = db.courseDao().getAllCoursesOnce().first { it.name == "高等数学" }
+            assertEquals(Triple(false, true, false), switchesOf(course))
+        } finally {
+            db.close()
+        }
+    }
+
+    /** (preStudy, postHomework, labReport) —— 类别规则与课程两个实体的列名不同，只能各写一次。 */
+    private fun switchesOf(rule: CategoryRuleEntity) =
+        Triple(rule.preStudy, rule.postHomework, rule.labReport)
+
+    private fun switchesOf(course: CourseEntity) =
+        Triple(course.autoPreStudy, course.autoPostHomework, course.autoLabReport)
 
     private companion object {
         // v3 的 courses 没有 dedupeKey 一列，也没有它的索引

@@ -131,28 +131,40 @@ class PeriodTableTest {
     }
 
     @Test
-    fun `the ZJU timetable is the 15 period grid and keeps the upstream times`() {
+    fun `the ZJU timetable is the 13 period grid and matches the school calendar`() {
         val t = PeriodTable.ZJU
-        assertEquals(15, t.periodsPerDay)
-        assertEquals(15, t.periods.size)
-        assertEquals((1..15).toList(), t.periods.map { it.period })
-        // 逐值对齐 zju-ical 的 NewClassPeriod。浙大是压缩作息：第 5 节 12:25 就结课、
-        // 第 6 节 13:25 才上课（中间那 1 小时是午休），跟上面那份通用 13 节表不一样。
+        assertEquals(13, t.periodsPerDay)
+        assertEquals(13, t.periods.size)
+        assertEquals((1..13).toList(), t.periods.map { it.period })
+        // 逐值对齐浙大官方学年校历里列出的上课时间。浙大是压缩作息：第 5 节 12:25
+        // 就结课、第 6 节 13:25 才上课（中间那 1 小时是午休），跟上面那份通用表不一样。
         // 这里错一个数，整个学期的上课时间就全错，而且错得看起来还挺合理。
         assertEquals("08:00" to "08:45", t.timeRange(1, 1))
         assertEquals("11:40" to "12:25", t.timeRange(5, 5))
         assertEquals("13:25" to "14:10", t.timeRange(6, 6))
-        assertEquals("22:10" to "22:55", t.timeRange(15, 15))
+        assertEquals("20:30" to "21:15", t.timeRange(13, 13))
     }
 
     @Test
-    fun `the ZJU timetable splits into the same five ten fifteen sections as the default`() {
-        // 分段是本项目自己的（上游没有这个概念），但要跟 DEFAULT 的切法保持一致：
+    fun `the ZJU grid stops at 13 because the school has no 14th or 15th period`() {
+        // 这条是本文件最重要的一条断言。曾经照抄第三方库的 Go 常量把表写成 15 节，
+        // 照抄来的常量不等于学校的事实 —— 浙大校历、选课指南、选课工具 MOTIS
+        // 三处独立来源都只到 13 节。留一条显式断言，下次再有人「补齐」上游的
+        // 14/15 节时，测试会当场拦下，而不是等到用户看见两行永远空着的课表。
+        val t = PeriodTable.ZJU
+        assertNull("浙大没有第 14 节", t.slotOf(14))
+        assertNull("浙大没有第 15 节", t.slotOf(15))
+        assertNull(t.timeRange(13, 14))
+    }
+
+    @Test
+    fun `the ZJU timetable splits into the same five ten thirteen sections as the default`() {
+        // 分段是本项目自己的（学校不提供这个概念），但要跟 DEFAULT 的切法保持一致：
         // 否则同一份 UI 代码在两套作息下会画出数量不同的分隔线。
-        assertEquals(listOf(5, 10), (1..15).filter { PeriodTable.ZJU.isSectionEnd(it) })
-        assertFalse(PeriodTable.ZJU.isSectionEnd(15))
-        assertNull(PeriodTable.ZJU.slotOf(16))
-        assertNull(PeriodTable.ZJU.timeRange(1, 16))
+        assertEquals(listOf(5, 10), (1..13).filter { PeriodTable.ZJU.isSectionEnd(it) })
+        assertFalse(PeriodTable.ZJU.isSectionEnd(13))
+        assertNull(PeriodTable.ZJU.slotOf(14))
+        assertNull(PeriodTable.ZJU.timeRange(1, 14))
     }
 
     @Test
@@ -162,9 +174,10 @@ class PeriodTableTest {
         assertEquals(13, PeriodTable.DEFAULT.periodsPerDay)
         assertEquals(13, PeriodTable.DEFAULT_PERIODS.size)
         assertNotSame(PeriodTable.DEFAULT_PERIODS, PeriodTable.ZJU_PERIODS)
-        // 浙大第 13 节是 20:30，通用表第 13 节是 22:05 —— 两者确实不是同一份数据
-        assertEquals("20:30", PeriodTable.ZJU.slotOf(13)?.startTime)
-        assertEquals("22:05", PeriodTable.DEFAULT.slotOf(13)?.startTime)
+        // 两张表节数相同但时刻不同：浙大第 5 节 12:25 结课，通用表第 5 节 14:45 才下课。
+        // 节数撞上不代表是同一份数据，别因为「都是 13 节」就合并掉。
+        assertEquals("11:40", PeriodTable.ZJU.slotOf(5)?.startTime)
+        assertEquals("14:00", PeriodTable.DEFAULT.slotOf(5)?.startTime)
     }
 
     @Test
@@ -186,8 +199,9 @@ class PeriodTableTest {
         // 越界返回 0 而不是兜底成 45：总览会把 0 原样加进去，露出真实的问题，
         // 悄悄给个假值会让这个数字永远错一点，且没人看得出错在哪。
         assertEquals(0, t.durationMinutesOf(0, 1))
-        assertEquals(0, t.durationMinutesOf(1, 16))
-        assertEquals(0, t.durationMinutesOf(16, 16))
+        // 14 是浙大作息表外的第一节，也是迁移删掉的那两行留下的边界
+        assertEquals(0, t.durationMinutesOf(1, 14))
+        assertEquals(0, t.durationMinutesOf(14, 14))
         // 倒序（end 在 start 之前）同样是数据错误，不返回负数把总和拉低
         assertEquals(0, t.durationMinutesOf(6, 5))
     }

@@ -26,6 +26,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,8 +49,6 @@ fun WeekPickerDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -135,18 +134,42 @@ fun WeekPickerDialog(
     )
 }
 
+/**
+ * 「课程联动规则」= **按类别批量设置**该类别下所有课程的待办开关。
+ *
+ * 改动先落在本地暂存上，点「应用」才落库，点「取消」全部丢弃。
+ * 早期版本是点一下勾就存，但那时保存只推「相对上一版变了的那几格」；
+ * 改成全量刷之后（每个类别对其下所有课程都有权威）即时落库就意味着
+ * 「勾第一格就把 9 门课的三个开关全盖掉」，所以暂存与取消是这条语义的前置条件，
+ * 不是额外的贴心设计。
+ *
+ * 每张类别卡上标出它影响几门课：批量设置改的是别人已经配好的课，
+ * 不显示波及范围，用户是在不知情的情况下改动整批设置。
+ */
 @Composable
 fun CategoryRulesDialog(
     rules: List<CategoryRule>,
+    /** 类别 → 该类别下的课程门数，用来显示批量设置的波及范围。 */
+    courseCountByCategory: Map<String, Int> = emptyMap(),
     onDismiss: () -> Unit,
-    onSaveRule: (CategoryRule) -> Unit
+    onApply: (List<CategoryRule>) -> Unit
 ) {
     val scrollState = rememberScrollState()
+    // 弹层每次打开都是新的组合（调用方按 isCategoryRulesDialogOpen 条件渲染），
+    // 所以这里记得的就是本次打开时的原始值，不需要额外的重置逻辑。
+    var staged by remember { mutableStateOf(rules) }
+
+    val changed = staged.filter { next ->
+        rules.firstOrNull { it.category == next.category } != next
+    }
+    val affectedCourses = changed.sumOf { courseCountByCategory[it.category] ?: 0 }
+
+    fun toggle(category: String, apply: (CategoryRule) -> CategoryRule) {
+        staged = staged.map { if (it.category == category) apply(it) else it }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -179,112 +202,115 @@ fun CategoryRulesDialog(
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
-                    text = "按课程类别决定生成哪些待办：",
+                    text = "按类别批量设置该类别下所有课程的待办开关：",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                rules.forEach { rule ->
-                    var preStudy by remember(rule) { mutableStateOf(rule.autoPreStudy) }
-                    var postHomework by remember(rule) { mutableStateOf(rule.autoPostHomework) }
-                    var labReport by remember(rule) { mutableStateOf(rule.autoLabReport) }
+                staged.forEach { rule ->
+                    val courseCount = courseCountByCategory[rule.category] ?: 0
+                    val dirty = changed.any { it.category == rule.category }
 
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
                             .background(MaterialTheme.colorScheme.surface)
-                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
+                            .border(
+                                1.dp,
+                                if (dirty) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.outline,
+                                RoundedCornerShape(12.dp)
+                            )
                             .padding(12.dp)
                     ) {
-                        Text(
-                            text = rule.category,
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = rule.category,
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            // 波及范围写在类别名旁边：这是「批量设置」，改的不是这一行，
+                            // 而是这一类下的每一门课（含用户已单独调过的那几门）。
+                            Text(
+                                text = "$courseCount 门课程",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
 
                         Spacer(modifier = Modifier.height(4.dp))
 
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    preStudy = !preStudy
-                                    onSaveRule(rule.copy(autoPreStudy = preStudy))
-                                }
-                        ) {
-                            Checkbox(
-                                checked = preStudy,
-                                onCheckedChange = {
-                                    preStudy = it
-                                    onSaveRule(rule.copy(autoPreStudy = it))
-                                },
-                                colors = androidx.compose.material3.CheckboxDefaults.colors(
-                                    checkedColor = MaterialTheme.colorScheme.primary
-                                )
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(text = "课前预习", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
-                        }
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    postHomework = !postHomework
-                                    onSaveRule(rule.copy(autoPostHomework = postHomework))
-                                }
-                        ) {
-                            Checkbox(
-                                checked = postHomework,
-                                onCheckedChange = {
-                                    postHomework = it
-                                    onSaveRule(rule.copy(autoPostHomework = it))
-                                },
-                                colors = androidx.compose.material3.CheckboxDefaults.colors(
-                                    checkedColor = MaterialTheme.colorScheme.primary
-                                )
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(text = "课后作业", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
-                        }
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    labReport = !labReport
-                                    onSaveRule(rule.copy(autoLabReport = labReport))
-                                }
-                        ) {
-                            Checkbox(
-                                checked = labReport,
-                                onCheckedChange = {
-                                    labReport = it
-                                    onSaveRule(rule.copy(autoLabReport = it))
-                                },
-                                colors = androidx.compose.material3.CheckboxDefaults.colors(
-                                    checkedColor = MaterialTheme.colorScheme.primary
-                                )
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(text = "实验报告", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
-                        }
+                        SwitchRow(
+                            label = "课前预习",
+                            checked = rule.autoPreStudy,
+                            onChange = { on -> toggle(rule.category) { it.copy(autoPreStudy = on) } }
+                        )
+                        SwitchRow(
+                            label = "课后作业",
+                            checked = rule.autoPostHomework,
+                            onChange = { on -> toggle(rule.category) { it.copy(autoPostHomework = on) } }
+                        )
+                        SwitchRow(
+                            label = "实验报告",
+                            checked = rule.autoLabReport,
+                            onChange = { on -> toggle(rule.category) { it.copy(autoLabReport = on) } }
+                        )
                     }
                 }
             }
         },
+        dismissButton = {
+            TextButton(onClick = onDismiss, shape = RoundedCornerShape(10.dp)) {
+                Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
         confirmButton = {
             Button(
-                onClick = onDismiss,
+                // 没改动时不让点：让「应用」永远代表一次真实写入，
+                // 也免得用户以为按了没反应。
+                enabled = changed.isNotEmpty(),
+                onClick = {
+                    onApply(changed)
+                    onDismiss()
+                },
                 shape = RoundedCornerShape(10.dp),
-                colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary
+                )
             ) {
-                Text("完成", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
+                Text(
+                    text = if (affectedCourses > 0) "应用到 $affectedCourses 门课程" else "应用",
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimary
+                )
             }
         }
     )
+}
+
+/** 一行「标签 + 勾选框」，整行是落点。三个开关行长得一样，抽出来免得写三遍。 */
+@Composable
+private fun SwitchRow(
+    label: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onChange(!checked) }
+    ) {
+        Checkbox(
+            checked = checked,
+            onCheckedChange = onChange,
+            colors = androidx.compose.material3.CheckboxDefaults.colors(
+                checkedColor = MaterialTheme.colorScheme.primary
+            )
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(text = label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+    }
 }

@@ -135,9 +135,9 @@ class PeriodDraftsTest {
 
     @Test
     fun `appending never produces a row that starts before the previous one ended`() {
-        // 浙大作息排到 15 节已经到 22:55，再往 20 节加就撞到午夜了。
-        // 把起点夹回 24:00 - 45 会让第 16 节「开始于 23:15」而第 15 节「结束于 22:55」
-        // 之后的几行反而更早 —— 每行单独看都合法，整张表却是倒着排的。
+        // 浙大作息 13 节排到 21:15 收工，再往 20 节加 7 行就撞到午夜了。
+        // 把起点夹回 24:00 - 45 会让后面某一行「开始于 23:15」却夹在
+        // 上一行「结束于 22:55」之前 —— 每行单独看都合法，整张表却是倒着排的。
         // 这种表存进去，课表上读出来的时间是乱的，而界面上看不出任何异常。
         val rows = resizePeriodDrafts(PeriodTable.ZJU_PERIODS.toDrafts(), 20)
         assertEquals(20, rows.size)

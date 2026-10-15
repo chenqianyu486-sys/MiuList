@@ -55,6 +55,13 @@ fun TaskItemCard(
     /** 用户新建的待办类型。类型徽标要靠它解析，必传——漏传就编译不过。 */
     customTypes: List<CustomTaskType>,
     onToggleComplete: () -> Unit,
+    /**
+     * 点右侧那颗星切换星标。
+     *
+     * 必传而不是给默认值：它和 [onToggleComplete] 是同一级的行内控件，
+     * 漏传一个的卡就是一颗点不动的星——那比编译不过更难发现。
+     */
+    onToggleStar: () -> Unit,
     /** 点整张卡打开待办详情弹层，编辑/删除都在弹层里做。 */
     onOpenDetail: () -> Unit,
     modifier: Modifier = Modifier,
@@ -79,9 +86,10 @@ fun TaskItemCard(
     val typeOption = remember(task.taskType, customTypes) {
         TaskTypes.resolve(task.taskType, customTypes)
     }
-    val isStarred = remember(task.priority) { TaskStar.isMarked(task.priority) }
     // 类别的墨色不用在这里再取一遍：它走 TaskTypeBadge（淡彩底 + 墨色字，
-    // 验算见 EnumsAndModels）；星标是纯图标，色值固定在 StarInk。
+    // 验算见 EnumsAndModels）；星标的两态配色也定在 TaskStarToggle 里（白 / StarInk），
+    // 这层只负责把「标没标」这个布尔喂过去。
+    val isStarred = remember(task.priority) { TaskStar.isMarked(task.priority) }
 
     Card(
         modifier = modifier
@@ -221,16 +229,23 @@ fun TaskItemCard(
                 // ② 位置固定在右下角，整屏扫下来眼睛走的是一条直线，
                 // 「哪些是我挑出来的」不用逐行读就能看出来。
                 //
-                // 没标星就不画，连间距一起省掉——满屏的空星占位
-                // 只会把真正标星的那几条淹没在噪点里。
+                // **两态都画**，因为它现在是开关而不是徽章：只画「已标星」那一态，
+                // 这颗星就只能取消不能标记，交互反而不成立。空星用白色描边，
+                // 实心星用 [StarInk]——认的是形状差（空 / 实），不是颜色深浅。
                 //
                 // 尺寸跟左侧的勾选圈（24.dp）**对齐**：两个都是「这条待办的状态」，
                 // 一样大小才像一对。并排两个不等大的图标（24 的圈 + 19 的星）
                 // 看着就像星是个附属品，而它其实和完成状态一样重要。
-                if (isStarred) {
-                    Spacer(modifier = Modifier.width(10.dp))
-                    TaskStarMark(size = 24.dp)
-                }
+                //
+                // 卡面**不跟着变**：颜色这一格只归星标，卡面仍染这门课的粉彩。
+                // 之前想过「标星就把整张卡染黄」，但那样「标星」被表达了两遍，
+                // 而且黄的卡面会让 meta 行里按课程色取的墨色失掉参照。
+                Spacer(modifier = Modifier.width(10.dp))
+                TaskStarToggle(
+                    isStarred = isStarred,
+                    onToggle = onToggleStar,
+                    modifier = Modifier.testTag("task_star_${task.id}")
+                )
             }
             // 备注整块搬走了，只留在详情弹层里（TaskDetailSheet）。
             // 备注是待办里最长最不受约束的一段文字，放在卡片上必然把它撑成两行三行，

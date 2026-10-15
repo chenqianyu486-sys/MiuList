@@ -20,21 +20,32 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Dashboard
-import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -193,21 +204,32 @@ private val IslandIconSize = 22.dp
 /**
  * 单个入口的最小宽度。
  *
- * 去掉 weight(1f) 之后岛会按内容收窄，但标签只有两个中文字（约 22dp），
- * 直接贴着内容走触摸区域会小到不好按。62dp 配 64dp 的岛高，纵向触摸区域
- * 稳过 Material 的 48dp×48dp 建议值；整颗岛 289dp 宽，在 411dp 屏上占七成。
+ * 适当加宽按键，配合内侧更舒展的左右边距，给文字和图标更充足的横向呼吸感。
+ * 72dp 配 64dp 岛高，比例协调舒展，触摸更舒适稳妥。
  */
-private val IslandEntryMinWidth = 62.dp
+private val IslandEntryMinWidth = 72.dp
+
+/**
+ * 浮岛两端最左、右侧边距（水平内边距）。
+ *
+ * 原先为 4dp，贴着胶囊圆角弧度过紧显得局促；
+ * 适当增大到 12dp 后两端留出充分的圆角呼吸空间，按键与外壳更协调。
+ */
+private val IslandHorizontalPadding = 12.dp
 
 /**
  * 入口之间的间距。
  *
- * 图标 22dp，间距取 11dp 正好是图标的一半（1:2）：四个入口散开才像四颗独立的钮，
- * 而不是并排挤成一条。整颗岛放大时这条比例要跟着一起走，别只把图标撑大。
+ * 图标 22dp，间距取 10dp：三个入口散开呈独立的胶囊色块，
+ * 比例适中，整颗岛宽约 260dp，居中悬浮呼吸感更自然。
  *
- * 改这个值记得重算整颗岛宽：4×62 + 3×11 + 2×4 = 289dp。
+ * 重算整颗岛宽：3×72 + 2×10 + 2×12 = 260dp。
+ *
+ * **岛里只有三个入口**：设置已经挪到顶栏展开出来的抽屉（[MoreDrawer]）。
+ * 一个入口在两个地方都能点到，用户会犹豫该点哪个，而「设置」这种低频入口
+ * 也不值得在每一屏都占一个常驻位置。
  */
-private val IslandEntryGap = 11.dp
+private val IslandEntryGap = 10.dp
 
 /**
  * 底部浮岛导航。
@@ -225,80 +247,116 @@ private val IslandEntryGap = 11.dp
  * IslandEntryMinWidth / IslandEntryGap），它们之间是有比例的，别只动一个：
  * 间距要一直是图标的一半，岛高变了 IslandBottomInset 也要跟着变。
  */
+/**
+ * 底部浮岛导航。
+ *
+ * 悬浮在屏幕底部的毛玻璃胶囊，底层包含平滑滑动的绿色高亮色块。
+ * 动画非线性变化：平移滑动先快后慢、柔和停住（Emphasized Decelerate 曲线），自然美观不突兀。
+ */
 @Composable
 fun FloatingIslandNav(
     current: NavigationTab,
     onSelect: (NavigationTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Row(
+    val selectedIndex = when (current) {
+        NavigationTab.DASHBOARD -> 0
+        NavigationTab.SCHEDULE -> 1
+        NavigationTab.CHECKLIST -> 2
+        else -> -1
+    }
+
+    val density = LocalDensity.current
+    val stepDistance = IslandEntryMinWidth + IslandEntryGap
+    val targetOffsetPx = with(density) {
+        if (selectedIndex >= 0) (stepDistance * selectedIndex).toPx() else 0f
+    }
+
+    // 平移动画：在 Draw/GPU 阶段通过 translationX 驱动，时长 150ms 与页面转场完全同频，杜绝拖沓与重绘残影
+    val indicatorOffsetPx by animateFloatAsState(
+        targetValue = targetOffsetPx,
+        animationSpec = tween(
+            durationMillis = 150,
+            easing = CubicBezierEasing(0.2f, 0.0f, 0.1f, 1.0f)
+        ),
+        label = "island_indicator_offset"
+    )
+
+    Box(
         modifier = modifier
+            .testTag("floating_island_nav")
             .navigationBarsPadding()
             .padding(horizontal = 20.dp, vertical = 14.dp)
-            // 浮岛压在滚动内容上面，所以这里必须用 haze 真·背景模糊：
-            // 屏幕对齐重绘只会把页面底那张渐变搬进来，身后的卡片会被整块盖掉，
-            // 看着是块实心板；haze 才能把滚过去的卡片连文字一起糊掉。
             .glassSurface(
                 shape = GlassIslandShape,
-                // 见 IslandBlurRadius：96dp 不是为了让字更糊（72dp 已经够），
-                // 是为了让糊出来的平均色不随滚动抖。
                 blurRadius = IslandBlurRadius,
-                // 只有浮岛需要糊完再洗一层白：它背后是滚过去的卡片文字，
-                // 不洗就读得出底下的字。普通卡片不洗，白一洗卡面就被统一拉淡，
-                // 内外两层的层次会糊成一片（实测被拉平到同一个 #EEF6FF）。
                 hazeWash = IslandHazeWash,
-                // 面调薄换通透（见 IslandFaceAlphaScale）。
                 faceAlphaScale = IslandFaceAlphaScale,
-                // 颗粒放回来撑质感（见 IslandNoiseFactor）。
                 noiseFactor = IslandNoiseFactor,
-                // 主力：把背光最暗的那截钳平，限定突变范围（见 IslandHazeFloor）。
                 hazeFloor = IslandHazeFloor
             )
             .height(IslandHeight)
-            .padding(horizontal = 4.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(IslandEntryGap),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = IslandHorizontalPadding, vertical = 4.dp),
+        contentAlignment = Alignment.CenterStart
     ) {
-        IslandEntry(
-            modifier = Modifier.widthIn(min = IslandEntryMinWidth),
-            label = "总览",
-            icon = Icons.Outlined.Dashboard,
-            selectedIcon = Icons.Filled.Dashboard,
-            selected = current == NavigationTab.DASHBOARD,
-            onClick = { onSelect(NavigationTab.DASHBOARD) },
-            testTag = "nav_tab_dashboard"
-        )
-        IslandEntry(
-            modifier = Modifier.widthIn(min = IslandEntryMinWidth),
-            label = "课表",
-            icon = Icons.Outlined.CalendarMonth,
-            selectedIcon = Icons.Filled.CalendarMonth,
-            selected = current == NavigationTab.SCHEDULE,
-            onClick = { onSelect(NavigationTab.SCHEDULE) },
-            testTag = "nav_tab_schedule"
-        )
-        IslandEntry(
-            modifier = Modifier.widthIn(min = IslandEntryMinWidth),
-            label = "清单",
-            icon = Icons.Outlined.Checklist,
-            selectedIcon = Icons.Filled.Checklist,
-            selected = current == NavigationTab.CHECKLIST,
-            onClick = { onSelect(NavigationTab.CHECKLIST) },
-            testTag = "nav_tab_checklist"
-        )
-        IslandEntry(
-            modifier = Modifier.widthIn(min = IslandEntryMinWidth),
-            label = "设置",
-            icon = Icons.Outlined.Settings,
-            selectedIcon = Icons.Filled.Settings,
-            selected = current == NavigationTab.SETTINGS,
-            onClick = { onSelect(NavigationTab.SETTINGS) },
-            testTag = "nav_tab_settings"
-        )
+        // 1. 底层高亮平移滑块：严格在 RenderNode Draw 阶段平移，不触发组件 Relayout，轻盈丝滑无拖影
+        if (selectedIndex >= 0) {
+            Box(
+                modifier = Modifier
+                    .graphicsLayer {
+                        translationX = indicatorOffsetPx
+                    }
+                    .width(IslandEntryMinWidth)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(LimeGreenPrimary)
+            )
+        }
+
+        // 2. 上层各按键入口行
+        Row(
+            modifier = Modifier.fillMaxHeight(),
+            horizontalArrangement = Arrangement.spacedBy(IslandEntryGap),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IslandEntry(
+                modifier = Modifier
+                    .width(IslandEntryMinWidth)
+                    .fillMaxHeight(),
+                label = "总览",
+                icon = Icons.Outlined.Dashboard,
+                selectedIcon = Icons.Filled.Dashboard,
+                selected = current == NavigationTab.DASHBOARD,
+                onClick = { onSelect(NavigationTab.DASHBOARD) },
+                testTag = "nav_tab_dashboard"
+            )
+            IslandEntry(
+                modifier = Modifier
+                    .width(IslandEntryMinWidth)
+                    .fillMaxHeight(),
+                label = "课表",
+                icon = Icons.Outlined.CalendarMonth,
+                selectedIcon = Icons.Filled.CalendarMonth,
+                selected = current == NavigationTab.SCHEDULE,
+                onClick = { onSelect(NavigationTab.SCHEDULE) },
+                testTag = "nav_tab_schedule"
+            )
+            IslandEntry(
+                modifier = Modifier
+                    .width(IslandEntryMinWidth)
+                    .fillMaxHeight(),
+                label = "清单",
+                icon = Icons.Outlined.Checklist,
+                selectedIcon = Icons.Filled.Checklist,
+                selected = current == NavigationTab.CHECKLIST,
+                onClick = { onSelect(NavigationTab.CHECKLIST) },
+                testTag = "nav_tab_checklist"
+            )
+        }
     }
 }
 
-/** 浮岛内的单个入口：选中 = 主题绿平涂色块，未选中 = 透明 + 次级灰。 */
+/** 浮岛内的单个入口：前景文字与图标在滑块滑入时柔和变色。 */
 @Composable
 private fun IslandEntry(
     label: String,
@@ -309,18 +367,19 @@ private fun IslandEntry(
     modifier: Modifier = Modifier,
     testTag: String? = null
 ) {
+    val contentColor by animateColorAsState(
+        targetValue = if (selected) LimeGreenOnPrimary else TextMuted,
+        animationSpec = tween(
+            durationMillis = 140,
+            easing = FastOutSlowInEasing
+        ),
+        label = "island_entry_content"
+    )
+
     Column(
         modifier = modifier
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
             .clip(RoundedCornerShape(20.dp))
-            .background(
-                // 选中就是一块平涂的主题绿；未选中保持透明，形状照样裁剪、点击区域一致。
-                // 这里原来是一层 #BCE472→#A6CD56 的上下渐变（注释写「避免纯色块太死」），
-                // 但渐变本身就是一道明暗轴，和这版「面里不藏光影」的扁平原则冲突。
-                // 顺带一提，本函数自己的文档注释写的就是「主题绿平涂色块」，
-                // 代码和文档早就不一致了。
-                if (selected) LimeGreenPrimary else Color.Transparent
-            )
             .clickable { onClick() }
             .padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -329,7 +388,7 @@ private fun IslandEntry(
         Icon(
             imageVector = if (selected) selectedIcon else icon,
             contentDescription = label,
-            tint = if (selected) LimeGreenOnPrimary else TextMuted,
+            tint = contentColor,
             modifier = Modifier.size(IslandIconSize)
         )
         Spacer(modifier = Modifier.height(3.dp))
@@ -337,7 +396,7 @@ private fun IslandEntry(
             text = label,
             fontSize = 11.5.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            color = if (selected) LimeGreenOnPrimary else TextMuted
+            color = contentColor
         )
     }
 }

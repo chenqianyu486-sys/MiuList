@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -38,6 +39,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -48,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -56,6 +59,7 @@ import com.example.data.local.CourseSlotEntity
 import com.example.data.local.CourseWithSlots
 import com.example.data.local.TaskEntity
 import com.example.data.model.CustomTaskType
+import com.example.data.model.TaskStar
 import com.example.data.model.TaskTypes
 import com.example.data.timetable.PeriodTable
 import com.example.data.timetable.WeekSet
@@ -396,23 +400,21 @@ fun CourseLinkageSheet(
     totalWeeks: Int = 25,
     onDismiss: () -> Unit,
     onToggleTaskComplete: (TaskEntity) -> Unit,
+    onInspectTask: (TaskEntity) -> Unit = {},
     onAddNewTaskForCourse: () -> Unit,
     onEditCourse: () -> Unit,
     onDeleteCourse: () -> Unit
 ) {
     val course = courseWithSlots.course
     val slots = courseWithSlots.slots
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val courseColor = parseColor(course.colorHex)
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState
-    ) {
+    GlassBottomSheetHost(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .padding(horizontal = 20.dp)
+                .padding(top = 4.dp, bottom = 12.dp)
         ) {
             // Header
             Row(
@@ -420,7 +422,12 @@ fun CourseLinkageSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 8.dp)
+                ) {
                     Box(
                         modifier = Modifier
                             .size(14.dp)
@@ -464,19 +471,60 @@ fun CourseLinkageSheet(
                         .glassSurface(shape = RoundedCornerShape(18.dp), tint = courseColor, tintAlpha = CourseTintAlpha, vividness = CourseTintVivid)
                         .padding(14.dp)
                 ) {
+                    val distinctRooms = slots
+                        .map { it.classroom.ifBlank { course.classroom } }
+                        .filter { it.isNotBlank() }
+                        .distinct()
+                    val hasMultipleRooms = distinctRooms.size > 1
+                    val commonRoom = when {
+                        distinctRooms.size == 1 -> distinctRooms.first()
+                        hasMultipleRooms -> "多地点（共 ${distinctRooms.size} 处）"
+                        course.classroom.isNotBlank() -> course.classroom
+                        else -> "未指定地点"
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Outlined.Person, contentDescription = null, modifier = Modifier.size(15.dp), tint = accentOnCourse(courseColor))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(end = 12.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.Person,
+                                contentDescription = null,
+                                modifier = Modifier.size(15.dp),
+                                tint = accentOnCourse(courseColor)
+                            )
                             Spacer(modifier = Modifier.width(5.dp))
-                            Text(text = "教师: ${course.teacher}", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurface)
+                            Text(
+                                text = "教师: ${course.teacher.ifBlank { "未指定" }}",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
                         }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Outlined.LocationOn, contentDescription = null, modifier = Modifier.size(15.dp), tint = accentOnCourse(courseColor))
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text(text = "教室: ${course.classroom}", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurface)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier.weight(1f, fill = false)
+                        ) {
+                            Icon(
+                                Icons.Outlined.LocationOn,
+                                contentDescription = null,
+                                modifier = Modifier.size(15.dp),
+                                tint = accentOnCourse(courseColor)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "地点: $commonRoom",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.End
+                            )
                         }
                     }
 
@@ -493,30 +541,74 @@ fun CourseLinkageSheet(
 
                     slots.sortedWith(compareBy({ it.dayOfWeek }, { it.startPeriod })).forEach { s ->
                         val (sTime, eTime) = periodTable.timeRange(s.startPeriod, s.endPeriod) ?: ("--" to "--")
-                        val room = s.classroom.ifBlank { course.classroom }
+                        val weekLabel = slotWeeks[s.id]?.takeIf { it.isNotEmpty() }
+                            ?.let { WeekSet.describe(it, totalWeeks) }
+                        val specificRoom = s.classroom.ifBlank { course.classroom }
+
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 3.dp),
+                                .padding(vertical = 3.5.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Outlined.Schedule, contentDescription = null, modifier = Modifier.size(13.dp), tint = accentOnCourse(courseColor))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "${getDayName(s.dayOfWeek)} ${formatPeriodRange(s.startPeriod, s.endPeriod)} ($sTime-$eTime) @ $room",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            // 开课周次标签：从集合反推，不额外存列
-                            val weekLabel = slotWeeks[s.id]?.takeIf { it.isNotEmpty() }
-                                ?.let { WeekSet.describe(it, totalWeeks) }
-                            if (weekLabel != null) {
-                                Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(5.dp),
+                                color = accentOnCourse(courseColor).copy(alpha = 0.12f),
+                                border = BorderStroke(0.5.dp, accentOnCourse(courseColor).copy(alpha = 0.25f))
+                            ) {
                                 Text(
-                                    text = weekLabel,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    text = getDayName(s.dayOfWeek),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = accentOnCourse(courseColor),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                 )
+                            }
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = formatPeriodRange(s.startPeriod, s.endPeriod),
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "($sTime-$eTime)",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                if (hasMultipleRooms && specificRoom.isNotBlank()) {
+                                    Text(
+                                        text = "📍 $specificRoom",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = accentOnCourse(courseColor),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+
+                            if (weekLabel != null) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(5.dp),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                                ) {
+                                    Text(
+                                        text = weekLabel,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
                             }
                         }
                     }
@@ -609,7 +701,7 @@ fun CourseLinkageSheet(
                                         // 已完成的压扁，和 TaskItemCard 的处理保持一致
                                         faceAlphaScale = if (task.isCompleted) 0.78f else 1f
                                     )
-                                    .clickable { onToggleTaskComplete(task) }
+                                    .clickable { onInspectTask(task) }
                                     .padding(10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -618,12 +710,14 @@ fun CourseLinkageSheet(
                                     modifier = Modifier
                                         .size(26.dp)
                                         .clip(CircleShape)
-                                        .background(if (isTaskGreen) TeaColor else courseColor.copy(alpha = 0.15f)),
+                                        .background(if (isTaskGreen) TeaColor else courseColor.copy(alpha = 0.15f))
+                                        .clickable { onToggleTaskComplete(task) }
+                                        .testTag("course_sheet_task_check_${task.id}"),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = if (task.isCompleted) Icons.Outlined.CheckCircle else Icons.Outlined.Schedule,
-                                        contentDescription = null,
+                                        contentDescription = if (task.isCompleted) "标记为未完成" else "标记为已完成",
                                         // 图标 tint 同理：粉彩黄/紫在近白底上等于隐形
                                         tint = if (isTaskGreen) TeaOnColor else readableOn(courseColor),
                                         modifier = Modifier.size(16.dp)
@@ -640,10 +734,17 @@ fun CourseLinkageSheet(
                                         }
                                         Text(
                                             text = task.title,
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontWeight = if (task.isCompleted) FontWeight.Normal else FontWeight.SemiBold,
+                                                textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None
+                                            ),
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
+                                        if (TaskStar.isMarked(task.priority)) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            TaskStarMark(size = 14.dp)
+                                        }
                                     }
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Text(

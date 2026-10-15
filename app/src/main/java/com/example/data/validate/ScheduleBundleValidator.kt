@@ -14,9 +14,10 @@ import com.example.data.local.MakeupDayEntity
 import com.example.data.local.NoClassDayEntity
 import com.example.data.local.SemesterEntity
 import com.example.data.model.COURSE_PALETTE
+import com.example.data.model.CourseCategory
 import com.example.data.model.CourseKeys
-import com.example.data.model.DEFAULT_CATEGORY
 import com.example.data.model.isValidHexColor
+import com.example.data.model.formatPeriodRange
 import com.example.data.model.CategoryRule
 import com.example.data.timetable.PeriodSlot
 import com.example.data.timetable.PeriodTable
@@ -417,8 +418,15 @@ class ScheduleBundleValidator {
                 }
                 COURSE_PALETTE[index % COURSE_PALETTE.size]
             }
-            val slots = validateSlots(course.slots, periodsPerDay, totalWeeks, scope, issues)
-            val category = course.category?.trim()?.takeIf { it.isNotEmpty() } ?: DEFAULT_CATEGORY
+            // 时段先归一化（补齐缺项、裁周次），再把同一天的相连时段并起来。
+            val slots = mergeAdjacentSlots(
+                validateSlots(course.slots, periodsPerDay, totalWeeks, scope, issues),
+                scope,
+                issues
+            )
+            // 文档写了类别就照用；没写才按课程名猜（实验课 → 实验实践，其余 → 默认类别）。
+            val category = course.category?.trim()?.takeIf { it.isNotEmpty() }
+                ?: CourseCategory.classifyOnImport(course.name)
             course.copy(
                 colorHex = color,
                 category = category,
@@ -476,4 +484,87 @@ class ScheduleBundleValidator {
         }
         return out
     }
+
+    /**
+     * 把「同一门课 + 同一天 + 同一地点 + 周次相同 + 节次相连」的时段并成一条。
+     *
+     * 教务系统常把连堂课拆成多行发（第 6 节、第 7 节各一条），导入后课表上就成了
+     * 上下两块挤在一起的卡，看着像两节课，其实是一节连堂。
+     *
+     * **周次必须进分组键**：同一地点的第 1-8 节与第 9-16 节是学期前后两段，
+     * 并起来周次就变成 1-16 —— 那是凭空多出一半课，比不合并错得离谱。
+     * 地点不同的两段（同一节课换了教室）同样不并。
+     *
+     * 只有一段的组**原样按原顺序输出**：合并只在确实能并时发生，不顺手重排时段。
+     * 合并过就往 [issues] 记一条，与本文件「不做静默变换」的规矩一致。
+     */
+    private fun mergeAdjacentSlots(
+        slots: List<SlotBundle>,
+        scope: String,
+        issues: MutableList<ImportIssue>
+    ): List<SlotBundle> {
+        if (slots.size < 2) return slots
+
+        val groups = LinkedHashMap<SlotGroupKey, MutableList<SlotBundle>>()
+        slots.forEach { s ->
+            val key = SlotGroupKey(
+                dayOfWeek = s.dayOfWeek ?: 0,
+                classroom = s.classroom.orEmpty().trim(),
+                weeks = s.weeksKey()
+            )
+            groups.getOrPut(key) { mutableListOf() } += s
+        }
+
+        val out = mutableListOf<SlotBundle>()
+        groups.forEach { _, group ->
+            val folded = foldAdjacent(group.sortedBy { it.startPeriod ?: 0 })
+            if (folded.size < group.size) {
+                issues += ImportIssue(
+                    scope,
+                    "同一天的同一地点有 ${group.size} 段相连课时，已合并为 " +
+                        folded.joinToString("、") {
+                            formatPeriodRange(it.startPeriod ?: 0, it.endPeriod ?: it.startPeriod ?: 0)
+                        }
+                )
+            }
+            out += folded
+        }
+        return out
+    }
+
+    /** 已按起始节排好序的一组时段折叠成不相邻的几段。相接与重叠都算相连。 */
+    private fun foldAdjacent(sorted: List<SlotBundle>): List<SlotBundle> {
+        if (sorted.isEmpty()) return emptyList()
+        val folded = mutableListOf<SlotBundle>()
+        var current = sorted.first()
+        sorted.drop(1).forEach { next ->
+            val curEnd = current.endPeriod ?: current.startPeriod ?: 0
+            val nextStart = next.startPeriod ?: 0
+            current = if (nextStart <= curEnd + 1) {
+                current.copy(endPeriod = maxOf(curEnd, next.endPeriod ?: curEnd))
+            } else {
+                folded += current
+                next
+            }
+        }
+        folded += current
+        return folded
+    }
+
+    /**
+     * 周次分组键。经过 [WeekSet.parse] 之后一定是 `Set<Int>`，这里仍按集合取而不是
+     * 直接 cast：JSON 解出来的周次是 `List<Number>`，写死 `as Set<Int>` 会在某天
+     * 形状变了时抛 ClassCastException，把整档导入带崩。
+     */
+    private fun SlotBundle.weeksKey(): Set<Int> = when (val raw = weeks) {
+        is Collection<*> -> raw.mapNotNull { (it as? Number)?.toInt() }.toSet()
+        else -> emptySet()
+    }
+
+    /** 「能不能并成一段」的分组键：同一天 + 同一地点 + 同一组周次。 */
+    private data class SlotGroupKey(
+        val dayOfWeek: Int,
+        val classroom: String,
+        val weeks: Set<Int>
+    )
 }

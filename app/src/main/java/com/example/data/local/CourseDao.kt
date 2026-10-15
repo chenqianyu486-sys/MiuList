@@ -38,6 +38,12 @@ interface CourseDao {
     @Query("SELECT * FROM courses ORDER BY id ASC")
     suspend fun getAllCoursesOnce(): List<CourseEntity>
 
+    /**
+     * 按类别取课。「课程联动规则」写穿时按这个取：一次只动这一个类别的课程。
+     */
+    @Query("SELECT * FROM courses WHERE category = :category ORDER BY id ASC")
+    suspend fun getByCategory(category: String): List<CourseEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCourse(course: CourseEntity): Long
 
@@ -46,6 +52,10 @@ interface CourseDao {
 
     @Update
     suspend fun updateCourse(course: CourseEntity)
+
+    /** 批量写回，只改开关时不用为每门课单开一条 UPDATE。 */
+    @Update
+    suspend fun updateCourses(courses: List<CourseEntity>)
 
     @Delete
     suspend fun deleteCourse(course: CourseEntity)

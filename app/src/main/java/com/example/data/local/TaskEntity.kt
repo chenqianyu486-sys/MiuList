@@ -11,7 +11,8 @@ import com.example.data.model.STAR_UNMARKED
     // 故意不声明到 courses 的外键：
     // 「不关联课程」用 courseId = 0 表示（见 UNLINKED_COURSE_ID），
     // 外键会在每次保存未关联待办时抛 SQLiteConstraintException——courses 表里没有 id=0 的行。
-    // 去掉外键不影响删课程的行为：CourseTodoRepository.deleteCourse() 本来就显式先删待办和时段。
+    // 去掉外键也不影响删课程的行为：CourseRepository.deleteCourse() 会在同一个事务里
+    // 先把待办改挂到 courseId = 0（见 TaskDao.unlinkTasksByCourseId），再删课程与时段。
     indices = [
         Index(value = ["courseId"]),
         Index(value = ["dueDateTimestamp"]),

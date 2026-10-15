@@ -403,6 +403,139 @@ class ScheduleBundleValidatorTest {
     }
 
     @Test
+    fun `a course with no category but a lab name gets the lab one`() {
+        // 文件导入也走同一套判定：教务系统导出的课表不带类别，
+        // 名字带「实验」的课不该顶着一个「公共基础」的名字混在基础课里。
+        val b = valid(ScheduleBundle(timetable = timetable(course(name = "大学物理实验"))))
+        assertEquals("实验实践", b.courses.first().category)
+    }
+
+    @Test
+    fun `a category written in the document wins over the guess`() {
+        // 文档显式写了类别就照用 —— 导入不能把用户已经整理好的类别改回去。
+        val explicit = course().copy(category = "通识公共")
+        val b = valid(ScheduleBundle(timetable = timetable(explicit)))
+        assertEquals("通识公共", b.courses.first().category)
+    }
+
+    // ---------------------------------------------------------------- 相连时段合并
+
+    @Test
+    fun `同一门课同一天同一地点的相连时段被合并`() {
+        // 教务系统常把连堂课拆成多行发；不合并的话课表上是两块挤在一起的卡。
+        val c = course(
+            slots = listOf(
+                com.example.data.codec.SlotBundle(1, 6, 6, "教二-301", null),
+                com.example.data.codec.SlotBundle(1, 7, 7, "教二-301", null)
+            )
+        )
+        val b = valid(ScheduleBundle(timetable = timetable(c)))
+        val slots = b.courses.first().slots
+        assertEquals(1, slots.size)
+        assertEquals(6, slots.first().startPeriod)
+        assertEquals(7, slots.first().endPeriod)
+        assertTrue(b.issues.any { it.detail.contains("已合并") })
+    }
+
+    @Test
+    fun `三段连排合并成一段`() {
+        val c = course(
+            slots = listOf(
+                com.example.data.codec.SlotBundle(1, 1, 1, "教二-301", null),
+                com.example.data.codec.SlotBundle(1, 2, 2, "教二-301", null),
+                com.example.data.codec.SlotBundle(1, 3, 3, "教二-301", null)
+            )
+        )
+        val b = valid(ScheduleBundle(timetable = timetable(c)))
+        val slot = b.courses.first().slots.first()
+        assertEquals(1, b.courses.first().slots.size)
+        assertEquals(1, slot.startPeriod)
+        assertEquals(3, slot.endPeriod)
+        // issue 要说清并成了什么，而不是只丢一句「已处理」
+        assertTrue(b.issues.any { it.detail.contains("第1-3节") })
+    }
+
+    @Test
+    fun `中间空一节的不合并`() {
+        val c = course(
+            slots = listOf(
+                com.example.data.codec.SlotBundle(1, 1, 2, "教二-301", null),
+                com.example.data.codec.SlotBundle(1, 4, 5, "教二-301", null)
+            )
+        )
+        val b = valid(ScheduleBundle(timetable = timetable(c)))
+        assertEquals(2, b.courses.first().slots.size)
+    }
+
+    @Test
+    fun `地点不同的两段不合并`() {
+        // 同一节课换了教室就是两件事，并起来会把其中一个地点吞掉。
+        val c = course(
+            slots = listOf(
+                com.example.data.codec.SlotBundle(1, 6, 6, "教二-301", null),
+                com.example.data.codec.SlotBundle(1, 7, 7, "紫金港西2-101", null)
+            )
+        )
+        val b = valid(ScheduleBundle(timetable = timetable(c)))
+        assertEquals(2, b.courses.first().slots.size)
+    }
+
+    @Test
+    fun `星期不同的两段不合并`() {
+        val c = course(
+            slots = listOf(
+                com.example.data.codec.SlotBundle(1, 6, 6, "教二-301", null),
+                com.example.data.codec.SlotBundle(2, 7, 7, "教二-301", null)
+            )
+        )
+        val b = valid(ScheduleBundle(timetable = timetable(c)))
+        assertEquals(2, b.courses.first().slots.size)
+    }
+
+    @Test
+    fun `周次不同的两段不合并`() {
+        // 这条最容易写错：同一地点的第1-8节与第9-16节是学期前后两段，
+        // 并起来周次就变成 1-16 —— 凭空多出一半课，比不合并错得离谱。
+        val c = course(
+            slots = listOf(
+                com.example.data.codec.SlotBundle(1, 1, 8, "教二-301", listOf(1, 2, 3, 4, 5, 6, 7, 8)),
+                com.example.data.codec.SlotBundle(1, 9, 16, "教二-301", listOf(9, 10, 11, 12, 13, 14, 15, 16))
+            )
+        )
+        val b = valid(ScheduleBundle(timetable = timetable(c)))
+        assertEquals(2, b.courses.first().slots.size)
+    }
+
+    @Test
+    fun `每周与整学期全周是同一组周次 可以并`() {
+        // 「每周」(null) 与「第1-20周」经 WeekSet.parse 之后都是 {1..20}，
+        // 语义相同就该并；分组键用归一化后的集合，正好自动满足这一条。
+        val b = valid(
+            ScheduleBundle(
+                calendar = term(),
+                timetable = timetable(
+                    course(
+                        slots = listOf(
+                            com.example.data.codec.SlotBundle(1, 1, 2, "教二-301", null),
+                            com.example.data.codec.SlotBundle(1, 3, 4, "教二-301", "1-20周")
+                        )
+                    )
+                )
+            )
+        )
+        val slots = b.courses.first().slots
+        assertEquals(1, slots.size)
+        assertEquals(1, slots.first().startPeriod)
+        assertEquals(4, slots.first().endPeriod)
+    }
+
+    @Test
+    fun `没有可合并的时段就不产生合并 issue`() {
+        val b = valid(ScheduleBundle(timetable = timetable(course())))
+        assertTrue(b.issues.none { it.detail.contains("已合并") })
+    }
+
+    @Test
     fun `a slot whose weekday is out of range is skipped`() {
         val bad = course(slots = listOf(com.example.data.codec.SlotBundle(0, 1, 2, "", null)))
         val b = valid(ScheduleBundle(timetable = timetable(bad)))

@@ -21,13 +21,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Clear
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,9 +35,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
+import com.example.ui.theme.cardRevealAt
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -58,9 +53,12 @@ import com.example.ui.components.NO_DUE_TEXT
 import com.example.ui.components.TaskItemCard
 import com.example.ui.components.parseColor
 import com.example.ui.theme.ChipSurfaceNeutral
+import com.example.ui.theme.CardBlockGap
+import com.example.ui.theme.CardListGap
 import com.example.ui.theme.GlassEdgeBottom
 import com.example.ui.theme.PageHInset
-import com.example.ui.theme.StarGroupPill
+import com.example.ui.theme.LocalCardRevealProgress
+import com.example.ui.theme.StarInk
 import com.example.ui.viewmodel.MainUiState
 import com.example.ui.viewmodel.TaskGroupingMode
 import com.example.ui.viewmodel.TaskStatusFilter
@@ -92,15 +90,6 @@ private val GROUP_PILL_GAP = 9.dp
  * （组头一条、卡片一条），而卡片本身的染色面 + 组头色标已经足够分出层级。
  */
 private val GROUP_CONTENT_INSET = 0.dp
-
-/**
- * 列表 item 之间的间距。
- *
- * 曾经是 14.dp，用户按「卡片上下挤一点」的要求压到 40%（5.6dp）：
- * 每张卡自身是 14dp 内边距的染色面，卡片之间只需要够看见分界，
- * 原来的 14dp 在一页里能少放两条。
- */
-private val LIST_ITEM_GAP = 5.6.dp
 
 /**
  * 一个分组。**四种分组模式共用这一个结构**。
@@ -344,11 +333,19 @@ private fun buildChecklistRows(
                         id = "${mode.name}:$marked",
                         title = if (marked) STAR_GROUP_TITLE else UNSTARRED_GROUP_TITLE,
                         count = groupTasks.size,
-                        // 色标是色块，不是文字：黄色要在这里可见就得比星标本身深一档
-                        // （StarInk 压白底只有 1.79:1，做 4×12dp 的竖条等于没画）。
-                        // 但组头**文字**不能用任何一档黄：1.79:1 的标题在页面上直接消失，
-                        // 所以它是普通墨色，黄色只承担「这一组是星标」这一个信号。
-                        pillColor = if (marked) StarGroupPill else null,
+                        // 只有**色块**走 [StarInk]，标题仍是普通墨色。
+                        //
+                        // 色块原本是更深的一档 #D08F00（白底 2.76:1），理由是
+                        // 「亮黄做这道 5×20dp 的竖条等于没画」。用户要它亮一些，
+                        // 于是换成和星形同一支黄：2.76:1 → 1.58:1，色块比原来难找，
+                        // 但仍是这一组唯一的黄色信号。
+                        //
+                        // 标题**试过**也走 [StarInk]（1.58:1），14sp 粗体在近白页面上
+                        // 直接淡没了，所以退回普通墨色——组头是列表里的主要地标，
+                        // 「能读出来」优先于「和色块同色」。
+                        //
+                        // 别按 3:1 把色块压深「修对比度」：这是知情选的，要改先问。
+                        pillColor = if (marked) StarInk else null,
                         inkColor = defaultInk
                     ),
                     groupTasks
@@ -427,16 +424,17 @@ private fun TaskGroupHeader(
 @Composable
 fun ChecklistScreen(
     state: MainUiState,
-    onSearchChange: (String) -> Unit,
     onSelectTaskTypeKey: (String?) -> Unit,
     onOpenNewTypeDialog: () -> Unit,
     onConfirmDeleteType: (CustomTaskType) -> Unit,
     onSelectGroupingMode: (TaskGroupingMode) -> Unit,
     onSelectStatusFilter: (TaskStatusFilter) -> Unit,
     onToggleTaskComplete: (TaskEntity) -> Unit,
+    onToggleTaskStar: (TaskEntity) -> Unit,
     onInspectTask: (TaskEntity) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val cardRevealProgress = LocalCardRevealProgress.current
     // Filter tasks based on search, type, and status
     val filteredTasks = remember(
         state.tasks,
@@ -498,6 +496,20 @@ fun ChecklistScreen(
         )
     }
 
+    // 入场序号按卡片从上往下数，**组头不占号**。
+    //
+    // 必须预先算好并按 row.key 索引，不能在 item 里拿累加计数器：`items` 的内容
+    // 是懒执行的，捕获的计数器在滚动时被后续 item 复用，序号会越滚越大，
+    // 而且这种错只在滚动后才看得见，静止时一切正常。
+    val revealOrderByRowKey = remember(rows) {
+        buildMap {
+            var i = 0
+            rows.forEach { row ->
+                if (row is ChecklistRow.Item) put(row.key, i++)
+            }
+        }
+    }
+
     val typeOptions = remember(state.customTaskTypes) {
         TaskTypes.options(state.customTaskTypes)
     }
@@ -507,81 +519,13 @@ fun ChecklistScreen(
             .fillMaxSize()
             .padding(horizontal = PageHInset)
     ) {
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Search Input
+        // 顶栏从 64.dp 收到 40.dp 之后，这一行留白也跟着收：原来那 8.dp 是在
+        // 补偿一条高顶栏的视觉重量，现在顶栏自己已经够轻，再留一截会显得内容被推走。
         //
-        // 这里没有用 M3 的 OutlinedTextField：它把上下留白按自己的 56dp MinHeight 算死，
-        // 从外面硬卡一个 44dp 只会让文字溢出框外被裁掉（截图上表现为占位文字只剩上半截）。
-        // 而且 1.3.0 的 OutlinedTextField 还没有 contentPadding 参数可以救——
-        // contentPadding 是 1.4 才加的。BasicTextField 把内边距完全交给我们自己算，
-        // 想多矮就多矮，文字永远在框里居中。
-        var focused by remember { mutableStateOf(false) }
-        val shape = RoundedCornerShape(14.dp)
-        BasicTextField(
-            value = state.searchQuery,
-            onValueChange = onSearchChange,
-            singleLine = true,
-            textStyle = androidx.compose.ui.text.TextStyle(
-                fontSize = 13.5.sp,
-                color = MaterialTheme.colorScheme.onSurface
-            ),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(44.dp)
-                .clip(shape)
-                .background(
-                    if (focused) Color.White.copy(alpha = 0.58f) else Color.White.copy(alpha = 0.46f)
-                )
-                .border(
-                    width = 1.dp,
-                    color = if (focused) MaterialTheme.colorScheme.primary else GlassEdgeBottom,
-                    shape = shape
-                )
-                .testTag("checklist_search_input")
-                // BasicTextField 自己就是可聚焦的，焦点直接挂在它身上，
-                // 不要再套一个空的 focusable 盒子 —— 那会多出一个焦点目标并抢走点击。
-                .onFocusChanged { focused = it.isFocused },
-            decorationBox = { inner ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(start = 12.dp, end = 6.dp)
-                ) {
-                    Icon(
-                        Icons.Outlined.Search,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Box(Modifier.weight(1f)) {
-                        if (state.searchQuery.isEmpty()) {
-                            Text(
-                                "搜索课程或待办",
-                                fontSize = 13.5.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        inner()
-                    }
-                    if (state.searchQuery.isNotBlank()) {
-                        IconButton(onClick = { onSearchChange("") }, modifier = Modifier.size(32.dp)) {
-                            Icon(
-                                Icons.Outlined.Clear,
-                                contentDescription = "清除搜索",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
+        // 这里原来还压着一个 44.dp 的满宽搜索框，已经挪进顶栏（见 MainActivity 的
+        // SearchFieldStrip）：搜索框是正文里最占地方的一行，收起态下它一出现，
+        // 第一屏就永远少一张卡片。现在这一行下面直接就是筛选 chip。
+        Spacer(modifier = Modifier.height(4.dp))
 
         // 第一行 chip：分组方式 + 状态筛选。
         //
@@ -610,7 +554,7 @@ fun ChecklistScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
         // 第二行 chip：待办类型。
         // 「全部 / 各类型 / 未分类 / + 新建」排在一起——它们回答的是同一个问题
@@ -669,14 +613,15 @@ fun ChecklistScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(CardBlockGap))
 
         // Task List with Grouping
         if (filteredTasks.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
+                    .weight(1f)
+                    .cardRevealAt(cardRevealProgress, 0),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -699,7 +644,7 @@ fun ChecklistScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(LIST_ITEM_GAP),
+                verticalArrangement = Arrangement.spacedBy(CardListGap),
                 // 底部给浮岛导航留出收尾空间，内容本身仍会滚到岛底下被毛玻璃糊住
                 contentPadding = PaddingValues(bottom = IslandBottomInset)
             ) {
@@ -734,9 +679,14 @@ fun ChecklistScreen(
                             task = row.task,
                             customTypes = state.customTaskTypes,
                             onToggleComplete = { onToggleTaskComplete(row.task) },
+                            onToggleStar = { onToggleTaskStar(row.task) },
                             onOpenDetail = { onInspectTask(row.task) },
                             modifier = Modifier
                                 .animateItem(fadeInSpec = null, fadeOutSpec = null)
+                                .cardRevealAt(
+                                    cardRevealProgress,
+                                    revealOrderByRowKey[row.key] ?: 0
+                                )
                                 // 卡片与页面左边距对齐，不再比组头缩进
                                 .padding(start = GROUP_CONTENT_INSET)
                         )

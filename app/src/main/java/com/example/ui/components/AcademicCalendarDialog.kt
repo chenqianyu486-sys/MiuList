@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -120,10 +119,9 @@ fun AcademicCalendarDialog(
         "第 1 周 = ${EpochDays.formatCn(firstMonday)} – ${EpochDays.formatCn(firstMonday + 6)}"
     } else null
 
-    AlertDialog(
+    GlassOverlayHost(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = GlassDialogShape,
         title = {
             Text(
                 text = "本学期校历",
@@ -280,14 +278,19 @@ fun AcademicCalendarDialog(
 
                 OutlinedButton(
                     onClick = {
-                        val resized = resizePeriodDrafts(PeriodTable.ZJU_PERIODS.toDrafts(), 15)
+                        // 节数从常量取，不写死：这张表改过一次（15 → 13），
+                        // 写死的数字只会让按钮又变回上一版的错值。
+                        val resized = resizePeriodDrafts(
+                            PeriodTable.ZJU_PERIODS.toDrafts(),
+                            PeriodTable.ZJU_PERIODS.size
+                        )
                         periodDrafts.clear()
                         periodDrafts.addAll(resized)
                         periodsPerDayText = resized.size.toString()
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp)
-                ) { Text("填入浙大作息（15 节）", fontSize = 12.sp) }
+                ) { Text("填入浙大作息（${PeriodTable.ZJU_PERIODS.size} 节）", fontSize = 12.sp) }
 
                 SectionLabel("每节起止时刻")
                 periodDrafts.forEachIndexed { index, draft ->

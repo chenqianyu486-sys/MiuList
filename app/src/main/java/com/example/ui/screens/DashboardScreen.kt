@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -35,8 +36,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import com.example.ui.theme.cardRevealAt
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.CourseWithSlots
@@ -48,13 +51,16 @@ import com.example.ui.components.formatPeriodRange
 import com.example.data.calendar.EpochDays
 import com.example.data.calendar.ScheduleResolver
 import com.example.ui.components.parseColor
+import com.example.ui.theme.CardBlockGap
 import com.example.ui.theme.PageHInset
 import com.example.ui.theme.CourseTintAlpha
 import com.example.ui.theme.CourseTintVivid
 import com.example.ui.theme.TeaColor
 import com.example.ui.theme.TeaColorBorder
 import com.example.ui.theme.TeaOnColor
+import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.glassSurface
+import com.example.ui.theme.LocalCardRevealProgress
 import com.example.ui.viewmodel.MainUiState
 import com.example.ui.viewmodel.NavigationTab
 import java.text.SimpleDateFormat
@@ -69,6 +75,7 @@ fun DashboardScreen(
     onGenerateTodayTasks: () -> Unit = {},
     onPreviewGenerateTasks: () -> Unit = {},
     onToggleTaskComplete: (TaskEntity) -> Unit,
+    onToggleTaskStar: (TaskEntity) -> Unit,
     onInspectTask: (TaskEntity) -> Unit,
     onInspectCourse: (CourseWithSlots) -> Unit,
     onOpenWeekPicker: () -> Unit,
@@ -126,11 +133,20 @@ fun DashboardScreen(
         String.format(Locale.getDefault(), "%.1f 小时", minutes / 60.0)
     }
 
+    val cardRevealProgress = LocalCardRevealProgress.current
+
+    // 入场序号是**整页**一条，从上往下数：学期卡 → 今日课程 → 待办。
+    // 每段的起点由前面段落的条数推出来，而不是三个各从 0 开始——各从 0 开始的话
+    // 「今日没课」的空态卡和学期卡同时亮，五张待办卡又和学期卡同时亮，整页就变成
+    // 三批一起亮，看不出是从上往下的。
+    val courseOrderBase = 1
+    val taskOrderBase = courseOrderBase + todaySlots.size
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = PageHInset),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(CardBlockGap),
         // 底部给浮岛导航留出收尾空间，内容本身仍会滚到岛底下被毛玻璃糊住
         contentPadding = PaddingValues(bottom = IslandBottomInset)
     ) {
@@ -141,6 +157,7 @@ fun DashboardScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .cardRevealAt(cardRevealProgress, 0)
                     .testTag("dashboard_semester_card"),
                 shape = RoundedCornerShape(22.dp),
                 colors = CardDefaults.cardColors(containerColor = Color.Transparent),
@@ -179,10 +196,13 @@ fun DashboardScreen(
                                     )
                                 }
                                 Spacer(modifier = Modifier.width(8.dp))
+                                // 学期名取自校历，和设置页、顶栏同一个来源。
+                                // 原来这里写死成「2026 秋季学期」：换个学期、或者用户
+                                // 自己改了校历，这张卡和别处就会显示两个不同的学期名。
                                 Text(
-                                    text = "2026 秋季学期",
+                                    text = state.semester?.name?.ifBlank { null } ?: "本学期",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = TextSecondary
                                 )
                             }
 
@@ -202,7 +222,7 @@ fun DashboardScreen(
                             Text(
                                 text = "${state.courses.size} 门课 · ${weekHoursText}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = TextSecondary
                             )
                         }
 
@@ -227,7 +247,7 @@ fun DashboardScreen(
                                 Text(
                                     text = "完成率",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = TextSecondary,
                                     fontSize = 8.5.sp
                                 )
                             }
@@ -291,7 +311,9 @@ fun DashboardScreen(
                     shape = RoundedCornerShape(18.dp),
                     colors = CardDefaults.cardColors(containerColor = Color.Transparent),
                     elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .cardRevealAt(cardRevealProgress, courseOrderBase)
                 ) {
                     Box(
                         modifier = Modifier
@@ -303,7 +325,7 @@ fun DashboardScreen(
                         Text(
                             text = "🎉 今天没课，适合把作业一次清空",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = TextSecondary
                         )
                     }
                 }
@@ -314,7 +336,7 @@ fun DashboardScreen(
             // 抛 `Key "N" was already used` 直接闪退。
             // 这个撞车平时看不出来——只有「今天有课」且「有待办」时才同时存在这两段，
             // 所以在周日（没排课）怎么测都复现不出来。
-            items(todaySlots, key = { "slot_${it.id}" }) { slot ->
+            itemsIndexed(todaySlots, key = { _, slot -> "slot_${slot.id}" }) { slotIndex, slot ->
                 val cWithSlots = courseMap[slot.courseId]
                 val course = cWithSlots?.course
                 if (course != null) {
@@ -330,15 +352,19 @@ fun DashboardScreen(
                         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .cardRevealAt(cardRevealProgress, courseOrderBase + slotIndex)
                             .clickable { onInspectCourse(cWithSlots) }
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .glassSurface(shape = RoundedCornerShape(18.dp), tint = courseColor, tintAlpha = CourseTintAlpha, vividness = CourseTintVivid)
-                                .padding(14.dp),
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // 左侧课程色竖条（一度删掉又按用户要求恢复）：
+                            // 卡面染色只有 20% 的粉彩，扫视时不足以一眼认出课程；
+                            // 这根实色竖条是更强的识别线索，不是同一信息的重复表达。
                             Box(
                                 modifier = Modifier
                                     .size(4.dp, 44.dp)
@@ -348,6 +374,19 @@ fun DashboardScreen(
                             Spacer(modifier = Modifier.width(12.dp))
 
                             Column(modifier = Modifier.weight(1f)) {
+                                // weight 挂在**课名 Text** 上，而且必须是这个 RowScope 里的。
+                                //
+                                // 两个坑连着：
+                                // ① 挂到外面那个 Course Row 上不行——它在 `Column` 里，
+                                //    ColumnScope 的 weight 是**纵向**权重，会把这一行撑成竖向
+                                //    满格甚至直接量不出高度（实测课名和教室整行消失）。
+                                // ② 能不能生效取决于外层结构：这张卡的 Column 自己带 weight(1f)，
+                                //    宽度在进入这里之前就已经被定成「卡片减色条、待办 chip」的余量，
+                                //    所以里面的 chip 先按这个上限量、课名再拿剩下的——顺序才对。
+                                //    （课表列表页那种「包课名的 Row 本身是非弹性直接子项」的结构，
+                                //    weight 必须挂在那个 Row 上，否则反过来被 chip 截。）
+                                // 让**课程名**去吸收宽度不足，教室保持完整：课名截断只是信息不全，
+                                // 而教室被折行会让整张卡比邻居高出一截。
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
                                         text = course.name,
@@ -355,7 +394,10 @@ fun DashboardScreen(
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 14.5.sp
                                         ),
-                                        color = MaterialTheme.colorScheme.onSurface
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.weight(1f, fill = false),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Box(
@@ -367,8 +409,10 @@ fun DashboardScreen(
                                         Text(
                                             text = "@$room",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            fontSize = 10.sp
+                                            color = TextSecondary,
+                                            fontSize = 10.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
                                 }
@@ -376,7 +420,12 @@ fun DashboardScreen(
                                 Text(
                                     text = "${formatPeriodRange(slot.startPeriod, slot.endPeriod)} ($timeStart-$timeEnd) · ${course.teacher}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    // 这行是这张卡里最该被扫到的时间信息，用 TextSecondary 而不是
+                                    // 全局的 onSurfaceVariant（= TextMuted #78827B）：本卡压的是
+                                    // **这门课的粉彩**，实测 TextMuted 在四种卡面上只有
+                                    // 2.2~3.3:1，10~11sp 的小字过不了 AA。TextSecondary #4A524D
+                                    // 在同一批卡面上是 6.1~6.6:1。设置页的功能卡早就在用同一个理由换过。
+                                    color = TextSecondary
                                 )
                             }
 
@@ -420,7 +469,7 @@ fun DashboardScreen(
                                 ) {
                                     Text(
                                         text = "✓ 已结清",
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        color = TextSecondary,
                                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
                                         fontSize = 11.sp
                                     )
@@ -486,7 +535,9 @@ fun DashboardScreen(
                     shape = RoundedCornerShape(18.dp),
                     colors = CardDefaults.cardColors(containerColor = Color.Transparent),
                     elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .cardRevealAt(cardRevealProgress, taskOrderBase)
                 ) {
                     Box(
                         modifier = Modifier
@@ -498,18 +549,26 @@ fun DashboardScreen(
                         Text(
                             text = "✨ 全部完成",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = TextSecondary
                         )
                     }
                 }
             }
         } else {
-            items(pendingTasks.take(5), key = { "task_${it.id}" }) { task ->
+            itemsIndexed(
+                pendingTasks.take(5),
+                key = { _, task -> "task_${task.id}" }
+            ) { taskIndex, task ->
                 TaskItemCard(
                     task = task,
                     customTypes = state.customTaskTypes,
                     onToggleComplete = { onToggleTaskComplete(task) },
-                    onOpenDetail = { onInspectTask(task) }
+                    onToggleStar = { onToggleTaskStar(task) },
+                    onOpenDetail = { onInspectTask(task) },
+                    modifier = Modifier.cardRevealAt(
+                        cardRevealProgress,
+                        taskOrderBase + taskIndex
+                    )
                 )
             }
         }

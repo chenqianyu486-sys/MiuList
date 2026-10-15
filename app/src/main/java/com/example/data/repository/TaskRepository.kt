@@ -2,6 +2,7 @@ package com.example.data.repository
 
 import com.example.data.local.TaskDao
 import com.example.data.local.TaskEntity
+import com.example.data.model.TaskStar
 import kotlinx.coroutines.flow.Flow
 
 /** 待办的读写。 */
@@ -32,6 +33,13 @@ class TaskRepository(private val taskDao: TaskDao) {
         val newStatus = !currentStatus
         val completedAt = if (newStatus) System.currentTimeMillis() else null
         taskDao.updateTaskCompletion(id, newStatus, completedAt)
+    }
+
+    /**
+     * 设星标。取值一律过 [TaskStar.encode]，别在别处拼 `STAR` / 空串。
+     */
+    suspend fun setTaskStar(id: Long, marked: Boolean) {
+        taskDao.updateTaskStar(id, TaskStar.encode(marked))
     }
 
     /**

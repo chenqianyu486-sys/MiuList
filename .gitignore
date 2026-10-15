@@ -35,3 +35,13 @@ google-services.json
 # 用 ! 把占位模板 .env.example 放回来，它需要被跟踪。
 .env.*
 !.env.example
+
+# --- 调试产物：截图、录屏、uiautomator dump ---
+# 对比配色和抓交互时留下的中间产物，不是源码，也不是要发布的资源。
+# 全部锚到仓库根目录，避免误伤 app/src 下的同名文件。
+.shots/
+/_shots/
+/*.mp4
+/window_dump*.xml
+/ui.xml
+/test_screen.png

@@ -172,8 +172,6 @@ fun TaskEditDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         // 关掉平台默认宽度：默认左右各留一大截内边距，这里全是单行控件，
         // 那点宽度换不来任何信息量
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -456,9 +454,9 @@ fun TaskEditDialog(
             initialMinute = dueCal.get(Calendar.MINUTE),
             is24Hour = true
         )
-        AlertDialog(
+        GlassOverlayHost(
             onDismissRequest = { showTimePicker = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
+            horizontalPadding = 24.dp,
             title = { Text("选择时间", color = MaterialTheme.colorScheme.onSurface) },
             text = {
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {

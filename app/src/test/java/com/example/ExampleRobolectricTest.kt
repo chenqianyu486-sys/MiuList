@@ -59,9 +59,10 @@ class ExampleRobolectricTest {
         container.calendarRepository.ensureDefaultPeriods()
 
         val periods = container.calendarRepository.periodsOnce()
-        assertEquals(15, periods.size)
+        assertEquals(13, periods.size)
         assertEquals(
-            // 全新安装的种子是浙大作息（15 节），不是通用的 13 节表。
+            // 全新安装的种子是浙大作息，不是通用的 13 节表 —— 节数撞上了，
+            // 但第 5 节 11:40 开始 vs 通用表 14:00 开始，是两份不同的数据。
             // 通用表仍留给 v3→v4 迁移写给升级用户，两者并存，见 PeriodTable 的注释。
             "全新安装的作息必须与内置默认逐字段一致",
             PeriodTable.ZJU_PERIODS.map { listOf(it.period, it.startMinute, it.endMinute, it.section) },

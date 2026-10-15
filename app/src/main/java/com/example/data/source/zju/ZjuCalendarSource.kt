@@ -69,7 +69,13 @@ class ZjuCalendarSource(
             remote != null && bundled != null -> merge(remote, bundled)
             remote != null -> remote
             bundled != null -> bundled
-            else -> throw ZjuException("校历配置拉取失败，可改用文件导入")
+            else -> throw ZjuException(
+                "校历配置拉取失败，可改用文件导入",
+                // 联网那份拿不到**不等于**用户网络有问题：内置那份也解析不了时才会走到这里，
+                // 更像是配置本身出了岔子。归到 SERVER 而不是 NETWORK，
+                // 是为了不让界面把矛头指向用户的网络设置。
+                ZjuFailureKind.SERVER
+            )
         }
     }
 
@@ -122,7 +128,7 @@ class ZjuCalendarSource(
     fun parse(text: String): CalendarBundle {
         val dto = runCatching {
             moshi.adapter(UpstreamConfigDto::class.java).fromJson(text)
-        }.getOrNull() ?: throw ZjuException("校历配置格式无法解析")
+        }.getOrNull() ?: throw ZjuException("校历配置格式无法解析", ZjuFailureKind.SERVER)
 
         return CalendarBundle(
             lastUpdated = dto.lastUpdated,

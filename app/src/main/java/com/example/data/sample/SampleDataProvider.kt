@@ -12,6 +12,13 @@ import java.util.Locale
 
 object SampleDataProvider {
 
+    val DEMO_COURSE_CODES: Set<String> = setOf("MATH101", "CS201", "CS205", "ENG103", "CS302L", "AI301")
+
+    fun isDemoCourseList(courses: List<CourseEntity>): Boolean {
+        if (courses.isEmpty()) return false
+        return courses.all { it.code in DEMO_COURSE_CODES }
+    }
+
     val sampleCourses = listOf(
         CourseEntity(
             id = 1,
@@ -21,7 +28,9 @@ object SampleDataProvider {
             teacher = "王明阳 教授",
             classroom = "仙林教二-301",
             colorHex = "#93C5FD", // 粉彩蓝 (Pastel Blue)
-            autoPreStudy = true,
+            // 三个开关逐条对齐 AppContainer.DEFAULT_CATEGORY_RULES：演示数据是给新用户
+            // 看「联动规则长什么样」的第一手样本，规则说关而这里开着就成了假演示。
+            autoPreStudy = false,
             autoPostHomework = true,
             autoLabReport = false,
             defaultPostDueDays = 3,
@@ -36,7 +45,7 @@ object SampleDataProvider {
             teacher = "李成远 副教授",
             classroom = "信息楼 304",
             colorHex = "#208E9E", // 粉彩青 (Pastel Cyan)
-            autoPreStudy = true,
+            autoPreStudy = false,
             autoPostHomework = true,
             autoLabReport = false,
             defaultPostDueDays = 4,
@@ -51,7 +60,7 @@ object SampleDataProvider {
             teacher = "赵海 教授",
             classroom = "科技馆 B201",
             colorHex = "#86EFAC", // 粉彩绿 (Pastel Green)
-            autoPreStudy = true,
+            autoPreStudy = false,
             autoPostHomework = true,
             autoLabReport = false,
             defaultPostDueDays = 3,
@@ -66,8 +75,9 @@ object SampleDataProvider {
             teacher = "Sarah Miller",
             classroom = "外语楼 205",
             colorHex = "#F9A8D4", // 粉彩粉 (Pastel Pink)
-            autoPreStudy = true,
-            autoPostHomework = true,
+            // 通识公共三个开关默认全关（用户 2026-10-14 定）
+            autoPreStudy = false,
+            autoPostHomework = false,
             autoLabReport = false,
             defaultPostDueDays = 4,
             preStudyEstimatedMinutes = 25,
@@ -96,7 +106,7 @@ object SampleDataProvider {
             teacher = "郑晓宇 教授",
             classroom = "AI创新中心 410",
             colorHex = "#FDBA74", // 粉彩橙 (Pastel Orange)
-            autoPreStudy = true,
+            autoPreStudy = false,
             autoPostHomework = true,
             autoLabReport = false,
             defaultPostDueDays = 4,

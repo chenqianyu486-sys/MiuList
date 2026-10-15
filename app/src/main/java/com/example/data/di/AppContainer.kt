@@ -5,6 +5,7 @@ import com.example.data.codec.JsonScheduleCodec
 import com.example.data.codec.ScheduleCodec
 import com.example.data.local.AppDatabase
 import com.example.data.model.CategoryRule
+import com.example.data.model.CourseCategory
 import com.example.data.repository.AcademicCalendarRepository
 import com.example.data.repository.CourseRepository
 import com.example.data.repository.ScheduleSettingsRepository
@@ -12,6 +13,8 @@ import com.example.data.repository.TaskRepository
 import com.example.data.repository.TaskTypeRepository
 import com.example.data.source.zju.ZjuCalendarSource
 import com.example.data.source.zju.ZjuImportService
+import com.example.data.security.SecureAccountStorage
+import com.example.data.sync.ScheduleSyncManager
 import com.example.data.transfer.ScheduleExportService
 import com.example.data.transfer.ScheduleImportService
 import com.example.data.validate.ScheduleBundleValidator
@@ -35,7 +38,8 @@ class AppContainer(context: Context) {
             courseDao = database.courseDao(),
             slotDao = database.courseSlotDao(),
             weekDao = database.courseSlotWeekDao(),
-            taskDao = database.taskDao()
+            taskDao = database.taskDao(),
+            categoryRuleDao = database.categoryRuleDao()
         )
     }
 
@@ -49,7 +53,8 @@ class AppContainer(context: Context) {
         ScheduleSettingsRepository(
             database,
             database.categoryRuleDao(),
-            database.taskGenerationRuleDao()
+            database.taskGenerationRuleDao(),
+            database.courseDao()
         )
     }
 
@@ -88,17 +93,59 @@ class AppContainer(context: Context) {
         ZjuImportService(calendarSource = ZjuCalendarSource(assets = appContext.assets))
     }
 
+    val secureAccountStorage: SecureAccountStorage by lazy {
+        SecureAccountStorage(appContext)
+    }
+
+    val syncManager: ScheduleSyncManager by lazy {
+        ScheduleSyncManager(
+            zjuImportService = zjuImportService,
+            importService = importService,
+            courseRepo = courseRepository,
+            calendarRepo = calendarRepository,
+            secureStorage = secureAccountStorage
+        )
+    }
+
     companion object {
         /**
          * 内置类别规则。这 5 条现在退居为「默认值层」：课程 × 类型的规则优先，
          * 这里只在课程级没配时兜底（见 `GenerationRuleResolver`）。
+         *
+         * 三个开关按「这类课实际要交什么」给，而不是一律预习 + 作业（用户 2026-10-14 定）：
+         * - 专业必修 / 专业选修 / 公共基础：只交课后作业 → 只开作业
+         * - 实验实践：交实验报告，且动手课需要看讲义 → 开预习 + 实验报告，不开作业
+         * - 通识公共：三个都不默认开（课外阅读型，成绩不按周作业算）
+         *
+         * 改动不只落在这份常量：已装机的库里 `category_rules` 与课程上的 `auto*`
+         * 都已经按旧默认值写过，由 `MIGRATION_7_8` 按「值仍等于旧种子」精确改写。
          */
         val DEFAULT_CATEGORY_RULES: List<CategoryRule> = listOf(
-            CategoryRule("公共基础", true, true, false, 6, 45),
-            CategoryRule("专业必修", true, true, false, 6, 60),
-            CategoryRule("实验实践", true, false, true, 6, 90),
-            CategoryRule("通识公共", true, true, false, 6, 30),
-            CategoryRule("专业选修", true, true, false, 6, 45)
+            CategoryRule(
+                "公共基础",
+                autoPreStudy = false, autoPostHomework = true, autoLabReport = false,
+                defaultPostDays = 6, defaultMinutes = 45
+            ),
+            CategoryRule(
+                "专业必修",
+                autoPreStudy = false, autoPostHomework = true, autoLabReport = false,
+                defaultPostDays = 6, defaultMinutes = 60
+            ),
+            CategoryRule(
+                CourseCategory.LAB,
+                autoPreStudy = true, autoPostHomework = false, autoLabReport = true,
+                defaultPostDays = 6, defaultMinutes = 90
+            ),
+            CategoryRule(
+                "通识公共",
+                autoPreStudy = false, autoPostHomework = false, autoLabReport = false,
+                defaultPostDays = 6, defaultMinutes = 30
+            ),
+            CategoryRule(
+                "专业选修",
+                autoPreStudy = false, autoPostHomework = true, autoLabReport = false,
+                defaultPostDays = 6, defaultMinutes = 45
+            )
         )
     }
 }

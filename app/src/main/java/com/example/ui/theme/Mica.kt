@@ -1,5 +1,18 @@
 package com.example.ui.theme
 
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -7,12 +20,21 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.State
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.chrisbanes.haze.HazeDefaults
@@ -20,6 +42,7 @@ import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeStyle
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
+import kotlinx.coroutines.delay
 
 // =========================================================================
 // 纯白底 + 粉彩染色毛玻璃卡片
@@ -68,6 +91,234 @@ private val HazeFallbackBg = CanvasPureWhite
  * 拿不到这个 Local，正好落回平涂，功能不会崩。
  */
 val LocalGlassHazeState = staticCompositionLocalOf<HazeState?> { null }
+
+/**
+ * 切页转场里「主体卡片入场」的**总进度**（0f → 1f）。
+ *
+ * 这是整页一条的时间轴，不是「每张卡片各自的进度」：每张卡片按自己在页面上
+ * 从上到下的序号，从这条轴上切出自己的窗口（见 [cardStaggerAlpha]）。节奏因此
+ * 只由 [CARD_STAGGER_STEP] 一个数决定，改一处整页跟着变。
+ *
+ * 给的是 [State] 而不是 Float，是为了让卡片把 `.value` 读到 **draw 阶段**去：
+ * 只触发重绘，不触发重组。一屏十几张卡片每帧重组一次是不能接受的。
+ * 默认值恒为 1f——首帧渲染这类不在转场里的场合直接满显示。
+ */
+val LocalCardRevealProgress = compositionLocalOf<State<Float>> { mutableStateOf(1f) }
+
+/**
+ * 相邻两张卡片的错峰步长，占总时间轴的比例。
+ *
+ * 它不是直接当偏移用的，而是喂给 [cardStaggerAlpha] 里的软上限，所以列表再长
+ * 也不会出现「后面一整批同时淡入」——步长会自己被压缩掉。
+ *
+ * 0.20 配 [TAB_CARD_MS] 的 600ms 是每张错开 120ms 的起步量，经软上限压缩后
+ * 相邻卡片的实际起跑间隔呈 **83 → 44 → 27 → 19 → 13 → 10 → 8ms**：越往下越密，
+ * 合起来就是一道「先快后慢」往下推的波。早先 0.07 配 160ms 只有 11ms 间隔，
+ * 不足一帧，慢放下才看得出顺序、正常速度下等于没做。
+ */
+private const val CARD_STAGGER_STEP = 0.20f
+
+/**
+ * 单张卡片自身「由虚及实」占的窗口，占总时间轴的比例。剩下的额度全部留给错峰。
+ *
+ * 0.55 意味着任意一张卡的起点都不会超过 0.45：再靠后的卡片至少还有半条时间轴
+ * 用来淡完，不会因为被挤到末尾就半路停住。
+ */
+private const val CARD_FADE_WINDOW = 0.55f
+
+/**
+ * 第 [order] 张卡片（0 起，从上往下）在当前总进度下该有多不透明。
+ *
+ * 起点用软上限 `maxStart * raw / (maxStart + raw)` 而不是 `coerceAtMost(maxStart)`：
+ * 前者对任意 order 都严格递增且恒小于上限；后者会让排在后面的卡片全部撞在同一个
+ * 上限上同时起跑——总览页那种「学期卡 + 3 张课程卡 + 5 张待办卡」有九张，最后几张
+ * 就变成「啪」地一起亮，前面排出来的顺序白排了。
+ */
+fun cardStaggerAlpha(progress: Float, order: Int): Float {
+    if (progress >= 1f) return 1f
+    val maxStart = 1f - CARD_FADE_WINDOW
+    val raw = order * CARD_STAGGER_STEP
+    val start = if (raw <= 0f) 0f else maxStart * raw / (maxStart + raw)
+    val t = ((progress - start) / CARD_FADE_WINDOW).coerceIn(0f, 1f)
+    // 单卡曲线是 easeOutCubic，即用户要的「先快后慢」：起步快、尾巴长，
+    // 「由虚及实」读起来是「清晰起来」而不是「亮起来」。
+    //
+    // 注意**不要**再把减速加到驱动这条轴的时间轴缓动上（见 MainActivity 的
+    // `LinearEasing` 注释）：实测那会把错峰压成一记顿挫。
+    val inv = 1f - t
+    return 1f - inv * inv * inv
+}
+
+/**
+ * 卡片的入场修饰符：纯淡入，不带缩放。
+ *
+ * 「弹入」的观感全部由不透明度承担——由虚及实、从上往下依次点亮。缩放反而会让
+ * 卡片在淡入的同时轻微变形，读成「抖一下」而不是「浮现」。
+ *
+ * `.value` 刻意写在 `graphicsLayer` 的 lambda 里：那是在 draw 阶段执行的，
+ * 读 snapshot state 只会让这一层重绘，不会让整张卡（连带它里面所有 Text 和
+ * 图形）重组。这是这个修饰符存在的全部理由，别在调用点把它提到外面算好再传进来。
+ */
+fun Modifier.cardRevealAt(progress: State<Float>, order: Int): Modifier =
+    graphicsLayer { alpha = cardStaggerAlpha(progress.value, order) }
+
+// =========================================================================
+// 切页转场的时间轴（三段串起来 ≈ 300ms）
+//
+//  0ms ─── 85ms    旧界面：以屏幕中央为参照点缩小并淡出
+//  75ms ── 185ms    新界面骨架（不含卡片）：略缩小淡入，再放大到位
+// 185ms ── 785ms    主体卡片：由虚及实，按从上往下的顺序依次亮起
+//
+// **有两个地方用这一套**：底部浮岛切页（MainActivity），以及课表页内
+// 「周课表 ↔ 列表」两种视图的切换（ScheduleScreen）。它们是同一个动作的
+// 两种规模——换一个数据视图和换一页，区别只是排版结构，节奏不该另起一套。
+// 所以常量、转场规格、入场时间轴都定义在这里，两个调用点只管提供
+// `targetState` 和内容。
+//
+// 为什么是这三段、而不是一次交叉淡入淡出：
+//
+//  * **拖影**：旧页必须在新页开始出现之前就淡干净。85ms 的加速离场里，新页要到
+//    75ms 才起步，两者只重叠 10ms，此时旧页的透明度已经只剩 2%——肉眼读不到，
+//    但也足以保证不会看到两层文字叠在一起。
+//  * **闪白**：单次交叉淡入的中点必然是「旧页淡完、新页刚起」的一瞬纯底，中间
+//    什么都看不见，于是像闪了一下白。分段之后新页骨架先在，闪白的位置上填着
+//    标题、筛选、分隔这些小体量元素；更要紧的是此刻**卡片还没到**，屏幕上大片
+//    是留白而不是空洞，观感就变成「新内容在长出来」而不是「屏幕白了」。
+//
+// 第三段独占 600ms，是为了让「依次」看得见也看得清。相邻卡片的起跑间隔是
+// 83 → 44 → 27 → 19 → 13 → 10 → 8ms：**越往下越密**，于是整道波读起来就是
+// 「先快后慢」往下推。早先压到 120ms 时间隔只有 11ms，不足一帧，慢放下才看得出
+// 顺序、正常速度下整批卡片「啪」地一起亮，等于没做错峰。
+// 换页因此总长 785ms：前 185ms 依旧利落，慢的是内容显形，不是页面切换本身。
+// =========================================================================
+
+/** 第一段：旧界面缩小淡出的时长。 */
+const val TAB_OUT_MS = 85
+
+/** 第二段：新界面骨架的起步延迟。取 [TAB_OUT_MS] - 10ms，只为那 10ms 的交叠余量。 */
+const val TAB_IN_DELAY_MS = 75
+
+/** 第二段：新界面骨架淡入并放大到位的时长。 */
+const val TAB_IN_MS = 110
+
+/**
+ * 第三段：主体卡片起步的延迟。
+ *
+ * 严格等于 [TAB_IN_DELAY_MS] + [TAB_IN_MS]，也就是骨架**刚好**放大到位的时刻——
+ * 「先让骨架到位，再让内容弹进来」这个顺序本身就是效果的一部分，抢 10ms 提前
+ * 起跑会让两者糊在一起。类型是 Long，`delay` 不吃 Int。
+ */
+val TAB_CARD_DELAY_MS = TAB_IN_DELAY_MS + TAB_IN_MS.toLong()
+
+/**
+ * 第三段：卡片入场的总时长，也是整条错峰时间轴的长度。
+ *
+ * 它要同时装下「错峰铺开的偏移」和「单张淡入的窗口」，所以比前两段加起来还长。
+ * 压到 120ms 不是更快，是顺序根本读不出来——见本文件的 [CARD_STAGGER_STEP]。
+ */
+const val TAB_CARD_MS = 600
+
+/**
+ * 切页转场的规格。两个调用点都直接用它：
+ * `AnimatedContent(transitionSpec = { pageChangeSpec() })`。
+ *
+ * 收成函数而不是让两处各抄一遍，是因为这里每一个数字都牵着理由（见上面的时间轴）：
+ * 抄一份就等于把「10ms 防拖影交叠」「必须线性驱动卡片轴」这些结论放进某一个人的
+ * 记忆里，而这类数字最容易被后来者当成手感参数随手改。
+ *
+ * [S] 只为让调用点少写一次泛型推断，两种 `targetState` 类型都能用。
+ */
+fun <S> AnimatedContentTransitionScope<S>.pageChangeSpec(): ContentTransform {
+    // 第一段：旧界面各元素以屏幕中央为参照点略缩小并淡出。
+    // 用加速曲线，让它「走掉」而不是「停下来」——收尾越干脆，
+    // 第三段卡片弹入时就越读得出「新的一页正在成形」。
+    val exitTransition = fadeOut(
+        animationSpec = tween(
+            durationMillis = TAB_OUT_MS,
+            easing = FastOutLinearInEasing
+        )
+    ) + scaleOut(
+        targetScale = 0.94f,
+        transformOrigin = TransformOrigin.Center,
+        animationSpec = tween(
+            durationMillis = TAB_OUT_MS,
+            easing = FastOutLinearInEasing
+        )
+    )
+
+    // 第二段：新界面（卡片除外）略缩小淡入、再放大到 1.0。
+    // 起步比旧页的淡出晚 10ms，那 10ms 是防拖影的唯一窗口。
+    val enterTransition = fadeIn(
+        animationSpec = tween(
+            durationMillis = TAB_IN_MS,
+            delayMillis = TAB_IN_DELAY_MS,
+            easing = LinearOutSlowInEasing
+        )
+    ) + scaleIn(
+        initialScale = 0.96f,
+        transformOrigin = TransformOrigin.Center,
+        animationSpec = tween(
+            durationMillis = TAB_IN_MS,
+            delayMillis = TAB_IN_DELAY_MS,
+            easing = LinearOutSlowInEasing
+        )
+    )
+
+    return (enterTransition togetherWith exitTransition).using(
+        SizeTransform(clip = false)
+    )
+}
+
+/**
+ * 第三段那条「卡片由虚及实」的时间轴，返回可直接喂给 [LocalCardRevealProgress] 的值。
+ *
+ * **必须在 `AnimatedContent` 的内容 lambda 里调用**：`targetState` 一变，内容块
+ * 会重建，`remember` 不带 key，于是每次重建都新建一条 0f 起步的轴——这就是
+ * 「换一次页就重放一次入场」的机制本身。
+ *
+ * 这条轴**必须线性**，减速放在每张卡片自己的曲线里（[cardStaggerAlpha] 的 easeOutCubic）。
+ * 理由是实测的，不是偏好：时间轴一旦减速，越靠后的卡片起跑点（progress 越大）就越被
+ * 挤到同一小段时间里。600ms 总长下，
+ *   线性时间轴：相邻卡片起跑间隔 83 → 44 → 27 → 19 → 13 → 10 → 8ms，
+ *               梯度能铺满约 54% 的时长；
+ *   FastOutSlowIn：间隔塌成 57 → 11 → 7 → 5 → 3 → 3 → 2ms，
+ *               梯度只剩 18%——第一张之后其余全糊在一起，读成一记顿挫而不是一道波。
+ * 所以「先快后慢」不能加在轴上，要靠 [CARD_STAGGER_STEP] 让减速出现在**波往下推的节奏**上。
+ *
+ * @param firstMountSeed 第一次挂载时这条轴的起点。默认 0f = 照常放入场动画。
+ *   只有**冷启动的首帧**该传 1f：那时根本没有「旧界面」，依次亮起只会让用户对着
+ *   空页面先等 [TAB_CARD_DELAY_MS]。判断交给调用点的 App 级标志
+ *   （MainActivity 持有；课表页内切视图每次重建都真的有一次「旧视图」，别传 1f）。
+ */
+@Composable
+fun rememberCardRevealProgress(firstMountSeed: Float = 0f): State<Float> {
+    val progress = remember { Animatable(firstMountSeed) }
+    LaunchedEffect(Unit) {
+        if (progress.value >= 1f) return@LaunchedEffect
+        delay(TAB_CARD_DELAY_MS)
+        progress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = TAB_CARD_MS, easing = LinearEasing)
+        )
+    }
+    // `Animatable` 不是 `State<Float>`，卡片那边只想要一个「会变的数值」，
+    // 不需要知道这是条动画。包一层 derivedStateOf，免得把动画类型漏进主题层。
+    return remember(progress) { derivedStateOf { progress.value } }
+}
+
+/**
+ * 弹层专用的 haze 状态，**整个进程共用这一个实例**。
+ *
+ * haze 的源层和效果层必须持有同一个 [HazeState] 才能对上。页面内没问题，
+ * 弹层是另一回事：`Dialog` / `ModalBottomSheet` 跑在独立窗口里，
+ * MainActivity 挂在 CompositionLocal 上的那份传不进去（跨窗口就是另一棵
+ * Composition 树），而 `remember { HazeState() }` 又会在每个 Composition 各造一个。
+ * 所以这份只能挂在进程级的单例上，MainActivity 与所有弹层都指它。
+ *
+ * 独立窗口能不能真模糊到主窗口的内容，取决于 haze 对跨窗口源层的处理——
+ * 这一条是实测出来的，不是读文档读出来的，见 [OverlayHazeState] 的使用方注释。
+ */
+val OverlayHazeState = HazeState()
 
 /**
  * 玻璃面的默认染色：中性冷灰，接近白。
@@ -183,19 +434,64 @@ val GlassEdgeBottom = Color(0xFFE3E9EF)
 val ChipSurfaceNeutral = Color(0xFFF1F5F9)
 
 /**
- * 页面左右留白，四个主页面（总览 / 课表 / 清单 / 设置）共用一个值。
+ * 页面左右留白，四个主页面（总览 / 课表 / 清单 / 设置）共用一个值，顶栏也跟着它对齐。
  *
- * 之前是各写各的：课表 12.dp，其余三页 16.dp。同一套设计里两种页面边距
- * 会让横滑到下一页时内容宽度明显一跳，所以收成一个共享常量。
+ * 沿革：课表 12.dp、其余三页 16.dp → 收成共享的 10.dp → **6.dp**。
  *
- * 值取 10.dp（用户要求减小边距）：页面底是纯白，卡片自己是染色面，
- * 边距只是「卡片不要贴到屏幕边缘」的那点缓冲，10.dp 足够看清分界，
- * 又不会让一条待办的标题平白少掉两个字的宽度。
+ * 压到 6.dp 是「提高信息密度」这一条要求里最直接的一档：411dp 宽的屏上，
+ * 卡片宽度从 391.dp 变成 399.dp，一条待办的标题多出约两个字的宽度，
+ * 而屏幕左右各 6.dp 仍足够让 18.dp 圆角的卡片不贴边（小于 4.dp 时圆角会显得被切掉）。
  *
  * 弹窗（TaskEditDialog / NewTaskTypeDialog）里那个 16.dp 不跟着改：
  * 那是弹窗自己离屏幕多远，不是页面边距。
  */
-val PageHInset = 10.dp
+val PageHInset = 6.dp
+
+/**
+ * 顶栏本体高度，不含状态栏（那部分由 `statusBarsPadding()` 补）。
+ *
+ * 原来是 M3 `TopAppBar` 的 64.dp，其中约 20.dp 排在标题「MiuList」上——
+ * 一个不承载操作、也不随页面变化的装饰字。删掉之后一行里最高的只剩
+ * 22.dp 的周次 chip 和 [TopBarActionSize] 的按钮，40.dp 已经宽松。
+ *
+ * 别再往下压：一行顶栏既是唯一的全局操作区，也承担「现在在第几周」的指示，
+ * 太矮会把它挤成一条状态栏残片。
+ */
+val TopBarHeight = 40.dp
+
+/**
+ * 顶栏右侧动作按钮的边长（同时也是触摸区域）。
+ *
+ * 用 `Box` + `clickable` 而不是 `IconButton`：后者挂着
+ * `minimumInteractiveComponentSize()`，那个 Modifier 用 `maxOf(measured, 48.dp)`
+ * 算尺寸、**不参考父级的 maxHeight**，放进 [TopBarHeight] = 40.dp 的行里会溢出。
+ */
+val TopBarActionSize = 32.dp
+
+/**
+ * 同一列表里**卡片与卡片**的竖直间距。
+ *
+ * 全 App 统一收在这一个值上，因为以前是各写各的：清单页 5.6.dp、课表列表页 14.dp、
+ * 设置页 16.dp。同一套设计里三种卡片间距，横竖切页时卡片的疏密会明显跳一下，
+ * 「哪一页更挤」变成布局的副产品而不是有意为之。
+ *
+ * 4.dp 够用的理由：卡片自己是一块 18.dp 圆角的染色面，两张卡之间留 4.dp 的白缝，
+ * 圆角 + 白色内线（玻璃边缘折射高光）已经把分界画出来了。间距再大只是把
+ * 同样的信息用空白重复表达一遍，一屏能放的条数就少了。
+ *
+ * 注意它和 [CardBlockGap] 是两种间距，别混用：这里管「一列连续的同层卡片」，
+ * 那里管「一个大块和下一个大块」（主卡、分区标题、分区内容）。
+ */
+val CardListGap = 4.dp
+
+/**
+ * 页面里**大块之间**的竖直间距（总览的主卡↔分区、设置页的功能卡↔功能卡）。
+ *
+ * 比 [CardListGap] 宽，是要让「换了一个话题」这件事在扫视时读得出来。
+ * 16.dp 在信息密度上太奢侈：总览页大半屏被空白吃掉，一屏只看得到
+ * 一门课加两条待办。10.dp 仍能把两块内容分开，但一屏能多滚出一整条待办。
+ */
+val CardBlockGap = 10.dp
 
 /**
  * 页面底层：纯白 + 内容。
@@ -251,6 +547,9 @@ fun AppBackgroundLayer(
  *   的稳定程度自己拿捏。
  * @param hazeFloor 亮度地板强度，0 = 不要。见 [HazeFloorColor]：这是**限定突变范围**
  *   的手段，和 [hazeWash]「整体压暗度」是两种思路，别混着用。
+ * @param hazeState 覆盖要用的 haze 状态，默认取 [LocalGlassHazeState]。
+ *   **弹层必须显式传 [OverlayHazeState]**：它们在独立窗口里，拿不到 MainActivity
+ *   挂的那个 Local，不传就会退化成平涂（功能不崩，只是没有模糊）。
  */
 @Composable
 fun Modifier.glassSurface(
@@ -263,8 +562,9 @@ fun Modifier.glassSurface(
     hazeWash: Float = 0f,
     noiseFactor: Float = GlassGrain,
     hazeFloor: Float = 0f,
+    hazeState: HazeState? = LocalGlassHazeState.current,
+    showBorder: Boolean = true,
 ): Modifier {
-    val hazeState = LocalGlassHazeState.current
     val useHaze = blurRadius > 0.dp && hazeState != null
     // 鲜艳度是往 HSL 里推的，只有二元开关时才付这次计算
     val faceColor = if (vividness > 0f) vivid(tint) else tint
@@ -294,7 +594,13 @@ fun Modifier.glassSurface(
         // C. 边缘折射高光：玻璃的边会聚光，比面本身亮一线。
         // 这是**白**描边不是深色描边——深色描边是「画了个框」，白色内线是材质本身，
         // 和之前「取消描边」那条不冲突，也是玻璃感最省力的一条线索。
-        .border(GlassRimWidth, Color.White.copy(alpha = GlassRimAlpha), shape)
+        .then(
+            if (showBorder) {
+                Modifier.border(GlassRimWidth, Color.White.copy(alpha = GlassRimAlpha), shape)
+            } else {
+                Modifier
+            }
+        )
 }
 
 /**

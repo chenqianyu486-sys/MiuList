@@ -12,13 +12,17 @@ import com.example.data.local.TaskEntity
 import com.example.data.model.CategoryRule
 import com.example.data.model.CustomTaskType
 import com.example.data.model.TaskType
+import com.example.data.source.zju.ZjuFailureKind
+import com.example.data.sync.SyncFailure
 import com.example.data.timetable.PeriodTable
 import com.example.data.transfer.ImportPreview
 import com.example.data.transfer.ImportReport
 import com.example.data.transfer.ImportStrategy
 import com.example.data.validate.ImportIssue
 
-// 底部浮岛只有四个入口，标签一律两字：含义交给图标，文案不再抢位置
+// 底部浮岛只有三个入口，标签一律两字：含义交给图标，文案不再抢位置。
+// 设置**不在这个枚举的浮岛里**：它由顶栏展开出来的抽屉进入，
+// 枚举值本身保留——抽屉点「设置」仍然要把 currentTab 切到这一项。
 enum class NavigationTab(val title: String) {
     DASHBOARD("总览"),
     SCHEDULE("课表"),
@@ -146,6 +150,14 @@ data class MainUiState(
     val editingCourseWithSlots: CourseWithSlots? = null,
 
     val inspectingCourse: CourseWithSlots? = null, // for detailed course + slots + linked tasks sheet
+
+    /**
+     * 删除课程前的二次确认对象；null = 没在确认。
+     *
+     * 删课是不可逆的，而入口有两处（课程详情弹层、更多抽屉的课程行），两处都得先落到这里，
+     * 所以把「正在确认哪门课」放进状态，而不是让两处各自记一个局部 flag。
+     */
+    val deletingCourse: CourseWithSlots? = null,
     val candidateTasksForPreview: List<TaskEntity> = emptyList(),
     val isQuickGenerateDialogOpen: Boolean = false,
 
@@ -174,6 +186,30 @@ data class MainUiState(
 
     // 学期校历设置
     val isAcademicCalendarDialogOpen: Boolean = false,
+
+    // 云端同步与账号状态
+    val isSyncing: Boolean = false,
+    val lastSyncTimestamp: Long? = null,
+
+    /**
+     * 当前要展示的同步失败详情。
+     *
+     * 与 [userMessage] 的分工：Snackbar 一闪就没、还会被弹层盖住，
+     * 而用户面对「同步没成功」需要的是**能停下来照着做**的提示，
+     * 所以失败详情走弹层里那张卡，Snackbar 只带一句摘要。
+     */
+    val syncFailure: SyncFailure? = null,
+
+    /** 上一次尝试（不论成败）的时间，用来如实表述同步历史。 */
+    val lastSyncAttemptTime: Long? = null,
+
+    /** 上一次失败的类别。成功过一次之后为 null。 */
+    val lastSyncFailureKind: ZjuFailureKind? = null,
+
+    val boundStudentId: String? = null,
+    val isRememberCredentials: Boolean = false,
+    val isDemoMode: Boolean = false,
+    val isCloudAccountDialogOpen: Boolean = false,
 
     val userMessage: String? = null
 )

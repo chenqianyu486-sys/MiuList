@@ -62,6 +62,8 @@ import com.example.data.local.CourseSlotEntity
 import com.example.data.local.CourseWithSlots
 import com.example.data.model.COURSE_CATEGORIES
 import com.example.data.model.COURSE_PALETTE
+import com.example.data.model.CourseCategory
+import com.example.data.model.DEFAULT_CATEGORY
 import com.example.data.model.SlotWithWeeks
 import com.example.data.timetable.PeriodTable
 import com.example.data.timetable.WeekSet
@@ -109,7 +111,7 @@ fun CourseEditDialog(
     val initialSlots = initialCourseWithSlots?.slots ?: emptyList()
 
     var name by remember { mutableStateOf(initialCourse?.name ?: "") }
-    var category by remember { mutableStateOf(initialCourse?.category ?: "专业必修") }
+    var category by remember { mutableStateOf(initialCourse?.category ?: DEFAULT_CATEGORY) }
     var teacher by remember { mutableStateOf(initialCourse?.teacher ?: "") }
     var classroom by remember { mutableStateOf(initialCourse?.classroom ?: "") }
     var colorHex by remember { mutableStateOf(initialCourse?.colorHex ?: "#93C5FD") }
@@ -146,8 +148,6 @@ fun CourseEditDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         title = {
             Text(
                 text = if (initialCourse == null) "添加课程" else "编辑课程",
@@ -191,7 +191,7 @@ fun CourseEditDialog(
                             selected = category == cat,
                             onClick = {
                                 category = cat
-                                if (cat == "实验实践") autoLabReport = true
+                                if (cat == CourseCategory.LAB) autoLabReport = true
                             },
                             label = { Text(cat, fontSize = 11.sp) },
                             shape = RoundedCornerShape(10.dp),
@@ -623,6 +623,79 @@ fun CourseEditDialog(
             TextButton(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    )
+}
+
+/**
+ * 删除课程的二次确认（形状照 [DeleteTaskTypeConfirmDialog] 那一套）。
+ *
+ * 删课是不可逆的，而入口有两条：课表格子底部的「删除课程」，以及更多抽屉里
+ * 课程行上的删除图标 —— 尤其后者，手指在密集列表上滑过去就点了，没有回旋余地。
+ *
+ * 弹层**只确认、不预演后果**：确认之后才是真正落库，[MainViewModel.deleteCourse]
+ * 才会把待办移入「未关联课程」。这里要替用户回答的是「待办会不会跟着没了」，
+ * 答案是不没了 —— 但答案必须由界面主动给，光问「确定吗」等于把判断推回给用户。
+ *
+ * 挂在课程详情弹层/抽屉**之上**：取消后退回原来那一层，接着还能点下一门课。
+ */
+@Composable
+fun DeleteCourseConfirmDialog(
+    courseName: String,
+    slotCount: Int,
+    linkedTaskCount: Int,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "删除课程「$courseName」？",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = buildString {
+                        append("课程和 ")
+                        append(slotCount)
+                        append(" 个上课时段会被删除，这个操作不能撤销。")
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = if (linkedTaskCount > 0) {
+                        "$linkedTaskCount 条关联待办不会被删除，会移入「未关联课程」。"
+                    } else {
+                        "这门课没有关联待办。"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.testTag("delete_course_confirm_button")
+            ) {
+                Text("删除", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.testTag("delete_course_cancel_button")
             ) {
                 Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

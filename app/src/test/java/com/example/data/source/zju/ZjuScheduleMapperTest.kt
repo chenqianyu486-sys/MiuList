@@ -12,11 +12,12 @@ import org.junit.Test
  * `https://zdbk.zju.edu.cn/jwglxt/kbcx/xskbcx_cxXsKb.html` 的实抓响应，
  * 但课程名/教师/教室一律换成虚构值 —— 测试夹具里不放真实学生的课表。
  *
- * 这里钉住的是三处最容易写错、而且**错了只会安静地少课或排错课**的规则：
+ * 这里钉住的是四处最容易写错、而且**错了只会安静地少课或排错课**的规则：
  *
  * 1. `kcb` 必须**先按 `zwf` 切、再按 `<br>` 切**，否则教室名后面会粘上调课说明；
- * 2. 周次是 `kcb` 里「第1-8周」与 `dsz` 单双周的**交集**，只看一层都会让课多出或少掉；
- * 3. `dsz == "0"` 是**单周**、`"1"` 是**双周**（不是直觉上的 0=每周）。
+ * 2. `kcb` 里的「第1-8周」是**子学期**口径，要按 `xxq` 平移成学期坐标；
+ * 3. 平移之后，周次仍是 `kcb` 的区间与 `dsz` 单双周的**交集**，只看一层都会让课多出或少掉；
+ * 4. `dsz == "0"` 是**单周**、`"1"` 是**双周**（不是直觉上的 0=每周）。
  */
 class ZjuScheduleMapperTest {
 
@@ -82,23 +83,54 @@ class ZjuScheduleMapperTest {
     // ---------------------------------------------------------------- 周次
 
     @Test
-    fun `a week range becomes the full span`() {
+    fun `秋冬两周期的课铺满 1-16 周 而不是 1-8 周`() {
+        // 本次修掉的错：实抓响应里秋冬课也一律写「第1-8周」，
+        // 照字面取 1..8 会让它们在第 9 周集体消失，界面上却看不出任何异常。
         val out = ZjuScheduleMapper.toCourses(
             listOf(row(weeks = "第1-8周")), totalWeeks = 16, termCode = 0
+        )
+        val weeks = out.courses.first().slots.first().weeks
+        assertEquals((1..16).toList(), (weeks as List<*>).map { (it as Number).toInt() })
+    }
+
+    @Test
+    fun `秋学期的课只占前半学期`() {
+        // 1–8 周就是秋，**不该**被拉长成 16 周。
+        val out = ZjuScheduleMapper.toCourses(
+            listOf(row(weeks = "第1-8周", term = "秋")), totalWeeks = 16, termCode = 0
         )
         val weeks = out.courses.first().slots.first().weeks
         assertEquals((1..8).toList(), (weeks as List<*>).map { (it as Number).toInt() })
     }
 
     @Test
+    fun `冬学期的课落在第 9 到 16 周`() {
+        // 子学期口径的「第1-8周」要整体 +8，不能直接当学期周次用。
+        val out = ZjuScheduleMapper.toCourses(
+            listOf(row(weeks = "第1-8周", term = "冬")), totalWeeks = 16, termCode = 1
+        )
+        val weeks = out.courses.first().slots.first().weeks
+        assertEquals((9..16).toList(), (weeks as List<*>).map { (it as Number).toInt() })
+    }
+
+    @Test
+    fun `春夏两周期的课同样铺满 1-16 周`() {
+        val out = ZjuScheduleMapper.toCourses(
+            listOf(row(weeks = "第1-8周", term = "春夏")), totalWeeks = 16, termCode = 4
+        )
+        val weeks = out.courses.first().slots.first().weeks
+        assertEquals((1..16).toList(), (weeks as List<*>).map { (it as Number).toInt() })
+    }
+
+    @Test
     fun `odd weeks win over the declared range and are intersected with it`() {
-        // 第1-8周 且 单周 → 1,3,5,7。**不是** 1..8 里的奇数对全学期展开，
-        // 也不是「第1-8周就全都要」。两层不取交集就会出现第 9 周之后还在上的课。
+        // 第1-8周 且 单周 → 秋冬学期的 1,3,5,7 与 9,11,13,15。
+        // 平移量 8 是偶数，单双周口径跨子学期不变。
         val out = ZjuScheduleMapper.toCourses(
             listOf(row(weeks = "第1-8周", dsz = "0")), totalWeeks = 16, termCode = 0
         )
         val weeks = out.courses.first().slots.first().weeks
-        assertEquals(listOf(1, 3, 5, 7), (weeks as List<*>).map { (it as Number).toInt() })
+        assertEquals(listOf(1, 3, 5, 7, 9, 11, 13, 15), (weeks as List<*>).map { (it as Number).toInt() })
     }
 
     @Test
@@ -107,7 +139,32 @@ class ZjuScheduleMapperTest {
             listOf(row(weeks = "第1-8周", dsz = "1")), totalWeeks = 16, termCode = 0
         )
         val weeks = out.courses.first().slots.first().weeks
-        assertEquals(listOf(2, 4, 6, 8), (weeks as List<*>).map { (it as Number).toInt() })
+        assertEquals(
+            listOf(2, 4, 6, 8, 10, 12, 14, 16),
+            (weeks as List<*>).map { (it as Number).toInt() }
+        )
+    }
+
+    @Test
+    fun `只有单双周没有周次说明时 也要按子学期铺开`() {
+        // 没有「第1-8周」可依时，秋学期的单周课只能铺前半学期，
+        // 不能因为手里有 16 周就铺满整个学期。
+        val out = ZjuScheduleMapper.toCourses(
+            listOf(row(weeks = "无", term = "秋", dsz = "0")), totalWeeks = 16, termCode = 0
+        )
+        val weeks = out.courses.first().slots.first().weeks
+        assertEquals(listOf(1, 3, 5, 7), (weeks as List<*>).map { (it as Number).toInt() })
+    }
+
+    @Test
+    fun `学期本身只有 8 周时不平移`() {
+        // 上游 config.json 把春夏拆成两段时会出现 8 周的学期配置。
+        // 这种情况下导入的这一期**就是**那个子学期，再 +8 会把课全推到学期外。
+        val out = ZjuScheduleMapper.toCourses(
+            listOf(row(weeks = "第1-8周", term = "夏")), totalWeeks = 8, termCode = 5
+        )
+        val weeks = out.courses.first().slots.first().weeks
+        assertEquals((1..8).toList(), (weeks as List<*>).map { (it as Number).toInt() })
     }
 
     @Test
@@ -116,7 +173,10 @@ class ZjuScheduleMapperTest {
             listOf(row(weeks = "第1,3,5,7周")), totalWeeks = 16, termCode = 0
         )
         val weeks = out.courses.first().slots.first().weeks
-        assertEquals(listOf(1, 3, 5, 7), (weeks as List<*>).map { (it as Number).toInt() })
+        assertEquals(
+            listOf(1, 3, 5, 7, 9, 11, 13, 15),
+            (weeks as List<*>).map { (it as Number).toInt() }
+        )
     }
 
     @Test
@@ -296,6 +356,43 @@ class ZjuScheduleMapperTest {
         assertTrue(out.courses.isEmpty())
         assertEquals(0, out.skipped)
         assertNull(out.skipReason)
+    }
+
+    // ---------------------------------------------------------------- 类别判定
+
+    @Test
+    fun `新导入的课默认落公共基础`() {
+        // 教务网不给类别，默认值不该替用户断言「这是专业课」。
+        val out = ZjuScheduleMapper.toCourses(listOf(row(name = "高等数学")), totalWeeks = 16, termCode = 0)
+        assertEquals("公共基础", out.courses.first().category)
+    }
+
+    @Test
+    fun `名字带实验的课归入实验实践`() {
+        val out = ZjuScheduleMapper.toCourses(
+            listOf(row(name = "大学物理实验")), totalWeeks = 16, termCode = 0
+        )
+        assertEquals("实验实践", out.courses.first().category)
+    }
+
+    @Test
+    fun `实训 实践 实习 同样归入实验实践`() {
+        listOf("程序设计实训", "工程实践", "生产实习").forEach { name ->
+            val out = ZjuScheduleMapper.toCourses(listOf(row(name = name)), totalWeeks = 16, termCode = 0)
+            assertEquals("$name 应该进实验实践", "实验实践", out.courses.first().category)
+        }
+    }
+
+    @Test
+    fun `解析层只改类别 不替用户打开实验报告开关`() {
+        // 实验报告由「实验实践」的类别规则兜底。解析层写死 true 等于凭空
+        // 决定这门课要产出多少条待办 —— 同名带「实验」的课未必真交实验报告。
+        val out = ZjuScheduleMapper.toCourses(
+            listOf(row(name = "大学物理实验")), totalWeeks = 16, termCode = 0
+        )
+        val c = out.courses.first()
+        assertEquals("实验实践", c.category)
+        assertEquals(false, c.automation?.labReport)
     }
 
     // ---------------------------------------------------------------- 学期查询串

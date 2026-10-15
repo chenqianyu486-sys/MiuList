@@ -245,3 +245,114 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
         db.execSQL("DELETE FROM task_generation_rules WHERE taskType IN ('REVIEW', 'CUSTOM')")
     }
 }
+
+/**
+ * v6 → v7。
+ *
+ * 浙大作息实际是 13 节，此前内置的 `PeriodTable.ZJU_PERIODS` 却有 15 节 ——
+ * 多出的第 14、15 节（21:20–22:05 / 22:10–22:55）是当初照抄第三方库 zju-ical
+ * 的 Go 常量带进来的，浙大并没有这两节。
+ *
+ * 只改常量是不够的：全新安装靠 `ensureDefaultPeriods` 播种，能拿到新值；
+ * 但**已经装过、且库里的作息表还是那份 15 行种子的用户，升级后依然会画到 15 行**，
+ * 底部两行永远是空的。所以这次迁移把已经落库的那两行删掉。
+ *
+ * **只删与当初种子逐值相同的行**：作息表是可以自定义的（设置页能填到
+ * `MAX_PERIODS_PER_DAY` = 20 节），一刀 `period > 13` 会连带删掉用户自己配的
+ * 14/15 节 —— 那是替用户做决定，而且删掉的是他真的在上的课。判据取
+ * (period, startMinute, endMinute, section) 四项全等：真有人手动把第 14 节
+ * 设成 21:20–22:05 的概率可以忽略，而这正是我们自己写进去的那一行。
+ * 用户自己配的 14/15 节留着不动，浙大真要上到那么晚，本来就是他的选择。
+ *
+ * `course_slots` 没有指向 `timetable_periods` 的外键（它只 FK 到 `courses`），
+ * 所以删行不会级联删课程时段。万一有残留的 14/15 节引用，栅格会用
+ * `coerceIn(1, periodsPerDay)` 夹回范围内显示（见 ScheduleScreen）；
+ * 浙大教务网本身也不会返回这两节，导入路径造不出这种数据。
+ */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            DELETE FROM `timetable_periods`
+            WHERE (`period` = 14 AND `startMinute` = 1280 AND `endMinute` = 1325 AND `section` = '晚上')
+               OR (`period` = 15 AND `startMinute` = 1330 AND `endMinute` = 1375 AND `section` = '晚上')
+            """.trimIndent()
+        )
+    }
+}
+
+/**
+ * v7 → v8。
+ *
+ * 内置类别规则的三个开关改了取值（用户 2026-10-14 定，见 `AppContainer.DEFAULT_CATEGORY_RULES`）：
+ * 公共基础 / 专业必修 / 专业选修 从「预习 + 作业」变成「只作业」，通识公共三个全关，
+ * 实验实践本来就是「预习 + 实验报告」，不变。
+ *
+ * 只改常量不够，和 v6 → v7 同一个道理：`ensureDefaultRules` 只在 `category_rules`
+ * 空表时才播种，已经装过的用户库里有当初那份种子行，升级后设置页显示的仍是旧值。
+ *
+ * **必须连课程一起写穿**：三个开关的真相源在 `courses.auto*`（`GenerationRuleResolver.isEnabled`
+ * 只读它）。只改类别规则行，类别说「关」而课还是「开」，联动方向直接反了 —— 这就是
+ * 差量写法特有的漂移，而规则表本来就是批量设置、对下面所有课程有权威。
+ *
+ * **判据是「值仍逐位等于旧种子」**：用户在设置页把某一门课的开关单独改过，
+ * 那门课不该被这次升级顺手按回去（他调过的值与旧种子不同，天然被排除）；
+ * 类别规则那一侧同理，只改写仍等于旧种子三件套的行。两个方向各留一个对照组用例。
+ *
+ * 已有联动的用户不受影响：他的规则行早就被改成自己的值，不等于旧种子，
+ * 迁移对它就是空操作。
+ */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        for (rule in LEGACY_CATEGORY_SWITCHES) {
+            db.execSQL(
+                """
+                UPDATE `category_rules`
+                SET `preStudy` = ?, `postHomework` = ?, `labReport` = ?
+                WHERE `category` = ?
+                  AND `preStudy` = ? AND `postHomework` = ? AND `labReport` = ?
+                """.trimIndent(),
+                arrayOf(
+                    rule.newPre, rule.newPost, rule.newLab,
+                    rule.category, rule.oldPre, rule.oldPost, rule.oldLab
+                )
+            )
+            db.execSQL(
+                """
+                UPDATE `courses`
+                SET `autoPreStudy` = ?, `autoPostHomework` = ?, `autoLabReport` = ?
+                WHERE `category` = ?
+                  AND `autoPreStudy` = ? AND `autoPostHomework` = ? AND `autoLabReport` = ?
+                """.trimIndent(),
+                arrayOf(
+                    rule.newPre, rule.newPost, rule.newLab,
+                    rule.category, rule.oldPre, rule.oldPost, rule.oldLab
+                )
+            )
+        }
+    }
+}
+
+/**
+ * v7 里那 5 条类别规则里**取值发生变化**的那些，以及它们各自的新旧三件套。
+ *
+ * 「实验实践」不在表里：它的 (预习开, 作业关, 实验开) 新旧一致，写不写都一样的 SQL，
+ * 列进来只是让读代码的人多找一行。整数而不是 Boolean：SQLite 没有布尔类型，
+ * Room 的 Boolean 列就是 0/1，绑 Boolean 会依赖驱动是否替你转换，不值得赌。
+ */
+private val LEGACY_CATEGORY_SWITCHES = listOf(
+    LegacySwitches("公共基础", oldPre = 1, oldPost = 1, oldLab = 0, newPre = 0, newPost = 1, newLab = 0),
+    LegacySwitches("专业必修", oldPre = 1, oldPost = 1, oldLab = 0, newPre = 0, newPost = 1, newLab = 0),
+    LegacySwitches("专业选修", oldPre = 1, oldPost = 1, oldLab = 0, newPre = 0, newPost = 1, newLab = 0),
+    LegacySwitches("通识公共", oldPre = 1, oldPost = 1, oldLab = 0, newPre = 0, newPost = 0, newLab = 0)
+)
+
+private data class LegacySwitches(
+    val category: String,
+    val oldPre: Int,
+    val oldPost: Int,
+    val oldLab: Int,
+    val newPre: Int,
+    val newPost: Int,
+    val newLab: Int
+)

@@ -59,7 +59,6 @@ fun TaskDetailSheet(
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val courseColor = parseColor(task.courseColorHex)
     val hasDue = TaskEntity.hasDue(task)
     val isOverdue = !task.isCompleted && hasDue && task.dueDateTimestamp < System.currentTimeMillis()
@@ -72,16 +71,8 @@ fun TaskDetailSheet(
     // 删除是破坏性的，先切成二次确认，别让一次误点就没了
     var confirmDelete by remember(task.id) { mutableStateOf(false) }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp)
-        ) {
+    GlassBottomSheetHost(onDismissRequest = onDismiss) {
+        SheetContent {
             Text(
                 text = task.title,
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
