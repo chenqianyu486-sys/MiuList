@@ -1,5 +1,6 @@
 package com.example.data.validate
 
+import com.example.data.calendar.TweakKind
 import com.example.data.codec.AutomationBundle
 import com.example.data.codec.CalendarBundle
 import com.example.data.codec.CourseBundle
@@ -116,23 +117,52 @@ class ScheduleBundleValidatorTest {
         assertTrue(msg.contains("学期"))
     }
 
+    /**
+     * termRef 指向哪一半都行，落地的学期都是**那个学年学期**。
+     *
+     * 浙大一个学期是 16 周，由秋(1–8 周)与冬(9–16 周)两条 `termConfigs` 拼成。
+     * 之前按被选中的那一条算，学期只剩 8 周，冬那 8 周的日期全部越界，
+     * 课程周号已经按 16 周平移过，两端口径对不上，后半学期整段没课。
+     *
+     * 这里的 termConfigs 按真实形态摆：秋冬用 Term 0/1，春夏用 Term 4/5，
+     * 同一个 Year "2026-2027" 下挂两个学年学期。
+     */
     @Test
-    fun `a termRef that matches picks that exact term`() {
+    fun `termRef 指向任意一半都展开成整个学年学期`() {
         val cal = CalendarBundle(
             termConfigs = listOf(
-                TermConfigBundle("2026-2027", 0, 20260907, 20270124, 1),
-                TermConfigBundle("2026-2027", 1, 20270222, 20270704, 1)
+                TermConfigBundle("2026-2027", 0, 20260914, 20261108, 1),
+                TermConfigBundle("2026-2027", 1, 20261109, 20270103, 1),
+                TermConfigBundle("2026-2027", 4, 20270222, 20270418, 1),
+                TermConfigBundle("2026-2027", 5, 20270419, 20270613, 1)
             )
         )
-        val b = valid(
-            ScheduleBundle(
-                calendar = cal,
-                timetable = timetable(course(), ref = TermRefBundle("2026-2027", 1))
-            )
-        )
-        assertNotNull(b.semester)
-        // Term=1 是冬学期（zju-ical 的枚举：0 秋 / 1 冬 / 4 春 / 5 夏）
-        assertEquals("冬学期", b.semester!!.term)
+
+        val autumn = valid(
+            ScheduleBundle(calendar = cal, timetable = timetable(course(), ref = TermRefBundle("2026-2027", 0)))
+        ).semester!!
+        val byWinter = valid(
+            ScheduleBundle(calendar = cal, timetable = timetable(course(), ref = TermRefBundle("2026-2027", 1)))
+        ).semester!!
+        val spring = valid(
+            ScheduleBundle(calendar = cal, timetable = timetable(course(), ref = TermRefBundle("2026-2027", 4)))
+        ).semester!!
+
+        assertEquals("2026-2027学年 秋冬 学期", autumn.name)
+        assertEquals("秋冬", autumn.term)
+        // 秋 8 周 + 冬 8 周 = 16 周，而不是只按秋那一条算出来的 8 周
+        assertEquals(16, autumn.totalWeeks)
+        assertEquals(day(20260914), autumn.firstMondayEpochDay)
+        assertEquals(day(20270103), autumn.endEpochDay)
+        // 指秋与指冬得到同一个学期
+        assertEquals(autumn.name, byWinter.name)
+        assertEquals(autumn.totalWeeks, byWinter.totalWeeks)
+        assertEquals(autumn.endEpochDay, byWinter.endEpochDay)
+
+        // 春夏是另一个学年学期，不能与秋冬混成一条
+        assertEquals("2026-2027学年 春夏 学期", spring.name)
+        assertEquals(day(20270222), spring.firstMondayEpochDay)
+        assertEquals(day(20270613), spring.endEpochDay)
     }
 
     @Test
@@ -256,12 +286,12 @@ class ScheduleBundleValidatorTest {
     // ---------------------------------------------------------------- 调休展开
 
     @Test
-    fun `tweak type zero clears every day in its range`() {
+    fun `clear wipes every day in its range`() {
         val b = valid(
             ScheduleBundle(
                 calendar = CalendarBundle(
                     termConfigs = listOf(TermConfigBundle("2026-2027", 0, 20260907, 20270124, 1)),
-                    tweaks = listOf(TweakBundle(0, "国庆", 20261001, 20261007))
+                    tweaks = listOf(TweakBundle(TweakKind.CLEAR, "国庆", 20261001, 20261007))
                 ),
                 timetable = timetable(course(), ref = null)
             )
@@ -270,31 +300,38 @@ class ScheduleBundleValidatorTest {
         assertTrue(b.noClassDays.all { it.note == "国庆" })
     }
 
+    /**
+     * `Move` 搬走 From 那天的课，From 必须**让出课**；但不额外写一条停课日。
+     *
+     * 「让出」由 `makeupDays[To].sourceEpochDay` 完整表达（见
+     * `AcademicCalendar.isVacatedForShift`）。再抄一份进 `noClassDays` 就是同一事实
+     * 存两处：导出会合成一条 CLEAR 加一条 MOVE，导回来凭空多一个停课日。
+     */
     @Test
-    fun `tweak type one copies the from-day classes onto the to-day`() {
+    fun `move vacates the from-day without duplicating a no-class row`() {
         val b = valid(
             ScheduleBundle(
                 calendar = CalendarBundle(
                     termConfigs = listOf(TermConfigBundle("2026-2027", 0, 20260907, 20270124, 1)),
-                    tweaks = listOf(TweakBundle(1, "补周一", 20260907, 20261010))
+                    tweaks = listOf(TweakBundle(TweakKind.MOVE, "补周五", 20261002, 20261017))
                 ),
                 timetable = timetable(course(), ref = null)
             )
         )
-        assertEquals(1, b.makeupDays.size)
-        val makeup = b.makeupDays.first()
-        // tweak 里存的是 YYYYMMDD，落库的是 epochDay —— 断言必须换算，不能直接比
-        assertEquals(day(20261010), makeup.epochDay)
-        assertEquals("To 那天上 From 那天的课 = 周一的课", 1, makeup.makeupForDayOfWeek)
+        assertEquals("不额外写停课日", emptyList<Long>(), b.noClassDays.map { it.epochDay })
+        val makeup = b.makeupDays.single()
+        assertEquals(day(20261017), makeup.epochDay)
+        assertEquals("To 那天上 From 那天的课 = 周五的课", 5, makeup.makeupForDayOfWeek)
+        assertEquals("来源日要一并记下，排课才知道算第几周", day(20261002), makeup.sourceEpochDay)
     }
 
     @Test
-    fun `tweak type two exchanges both days`() {
+    fun `exchange swaps both days`() {
         val b = valid(
             ScheduleBundle(
                 calendar = CalendarBundle(
                     termConfigs = listOf(TermConfigBundle("2026-2027", 0, 20260907, 20270124, 1)),
-                    tweaks = listOf(TweakBundle(2, "对调", 20260907, 20260910))
+                    tweaks = listOf(TweakBundle(TweakKind.EXCHANGE, "对调", 20260907, 20260910))
                 ),
                 timetable = timetable(course(), ref = null)
             )
@@ -303,6 +340,10 @@ class ScheduleBundleValidatorTest {
         // 09-10 是周四，周四上 09-07（周一）的课；09-07 上 09-10（周四）的课
         assertEquals(day(20260910) to 1, b.makeupDays.first().epochDay to b.makeupDays.first().makeupForDayOfWeek)
         assertEquals(day(20260907) to 4, b.makeupDays[1].epochDay to b.makeupDays[1].makeupForDayOfWeek)
+        // 两侧各自记下来源日：09-10 那场来自 09-07（第 1 周），09-07 那场来自 09-10（第 1 周）
+        assertEquals(day(20260907), b.makeupDays.first().sourceEpochDay)
+        assertEquals(day(20260910), b.makeupDays[1].sourceEpochDay)
+        assertTrue("对调不是停课", b.noClassDays.isEmpty())
     }
 
     @Test
@@ -312,7 +353,7 @@ class ScheduleBundleValidatorTest {
                 calendar = CalendarBundle(
                     termConfigs = listOf(TermConfigBundle("2026-2027", 0, 20260907, 20270124, 1)),
                     // 整段落在学期结束之后（寒假）
-                    tweaks = listOf(TweakBundle(0, "寒假", 20270125, 20270201))
+                    tweaks = listOf(TweakBundle(TweakKind.CLEAR, "寒假", 20270125, 20270201))
                 ),
                 timetable = timetable(course(), ref = null)
             )
@@ -321,13 +362,18 @@ class ScheduleBundleValidatorTest {
         assertTrue(b.issues.any { it.detail.contains("不在学期区间内") })
     }
 
+    /**
+     * 认不出来的类型必须**报出来并整条忽略**，不能默认成停课。
+     *
+     * 默认成 CLEAR 会把一条看不懂的规则变成「这周有几天没课」，用户完全不知道。
+     */
     @Test
     fun `an unrecognised tweak type is reported rather than silently applied`() {
         val b = valid(
             ScheduleBundle(
                 calendar = CalendarBundle(
                     termConfigs = listOf(TermConfigBundle("2026-2027", 0, 20260907, 20270124, 1)),
-                    tweaks = listOf(TweakBundle(9, "?", 20261001, 20261002))
+                    tweaks = listOf(TweakBundle(null, "?", 20261001, 20261002))
                 ),
                 timetable = timetable(course(), ref = null)
             )
@@ -618,8 +664,8 @@ class ScheduleBundleValidatorTest {
                 calendar = CalendarBundle(
                     termConfigs = listOf(TermConfigBundle("2026-2027", 0, 20260907, 20270124, 1)),
                     tweaks = listOf(
-                        TweakBundle(0, "国庆", 20261001, 20261007),
-                        TweakBundle(1, "补周一", 20260907, 20261010)
+                        TweakBundle(TweakKind.CLEAR, "国庆", 20261001, 20261007),
+                        TweakBundle(TweakKind.MOVE, "补周一", 20260907, 20261010)
                     ),
                     periods = (1..13).map { PeriodBundle(it, "08:00", "08:45", "上午") }
                 ),
@@ -636,6 +682,7 @@ class ScheduleBundleValidatorTest {
         )
         assertNotNull(b.semester)
         assertEquals(13, b.timetable!!.size)
+        // 国庆 7 天。Move 的 From（09-07）不额外记停课日，它由 sourceEpochDay 表达
         assertEquals(7, b.noClassDays.size)
         assertEquals(1, b.makeupDays.size)
         assertEquals(1, b.courses.size)

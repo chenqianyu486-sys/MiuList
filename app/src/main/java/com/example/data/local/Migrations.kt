@@ -356,3 +356,24 @@ private data class LegacySwitches(
     val newPost: Int,
     val newLab: Int
 )
+
+/**
+ * v8 → v9。
+ *
+ * 给 `makeup_days` 补一列 `sourceEpochDay`：补课的**来源日**（那份课原本属于哪一天）。
+ *
+ * 之前只存了 `makeupForDayOfWeek`（补星期几的课）。那是**有损**的：调休的两端可以
+ * 隔两周以上，2026 国庆就是把 10-02（周五，第 3 周）的课补到 10-17（周六，第 5 周），
+ * 只记周几就丢掉了「这是哪一周的课」，排课时会拿第 5 周去筛，结果要么凭空多出一次课、
+ * 要么一次都不出，而界面上看不出哪里不对。
+ *
+ * **已有行统一补 0**，表示「来源日未知」——这是刻意的：0 的含义是退回按补课当天算周次，
+ * 与升级前逐字节一致。反推来源日（拿 `makeupForDayOfWeek` 去同周里找一个同周几的日子）
+ * 看似能填上，但补上去的是**一个猜测值**，会把「本来就不知道」伪装成「知道」，
+ * 于是周次可能悄悄判错。宁可明确地退回旧行为。
+ */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE makeup_days ADD COLUMN sourceEpochDay INTEGER NOT NULL DEFAULT 0")
+    }
+}

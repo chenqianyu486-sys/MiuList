@@ -3,6 +3,7 @@ package com.example.data.repository
 import androidx.room.withTransaction
 import com.example.data.calendar.AcademicCalendar
 import com.example.data.calendar.EpochDays
+import com.example.data.calendar.MakeupShift
 import com.example.data.calendar.Semester
 import com.example.data.local.AppDatabase
 import com.example.data.local.CalendarDao
@@ -38,7 +39,9 @@ class AcademicCalendarRepository(
                 calendar = AcademicCalendar(
                     semester = sem?.toDomain(),
                     noClassDays = noClass.map { it.epochDay }.toSet(),
-                    makeupDays = makeup.associate { it.epochDay to it.makeupForDayOfWeek }
+                    makeupDays = makeup.associate {
+                        it.epochDay to MakeupShift(it.makeupForDayOfWeek, it.sourceEpochDay)
+                    }
                 ),
                 periodTable = PeriodTable.from(
                     periods.map { PeriodSlot(it.period, it.startMinute, it.endMinute, it.section) }
@@ -113,12 +116,24 @@ class AcademicCalendarRepository(
     )
 
     companion object {
-        /** 学期名兜底：按 `20xx-20xx学年 春季/秋季学期` 约定生成。 */
+        /**
+         * 学期名兜底：`20xx-20xx学年 秋冬学期` / `春夏学期`。
+         *
+         * 浙大的学期单位是**学年学期**（秋冬 / 春夏，各 16 周，下设秋(春)1–8 周、
+         * 冬(夏)9–16 周），不是「秋季学期 / 春季学期」——后者会把 16 周的学期
+         * 说成 8 周的那一半。
+         *
+         * 学年以**秋天**为界：8–12 月与次年 1 月都算同一个学年的秋冬学期。
+         */
         fun defaultName(nowEpochDay: Long = EpochDays.today()): String {
             val date = java.time.LocalDate.ofEpochDay(nowEpochDay)
-            val startYear = if (date.monthValue >= 8) date.year else date.year - 1
-            val term = if (date.monthValue in 1..7) "春季" else "秋季"
-            return "$startYear-${startYear + 1}学年 $term 学期"
+            val startYear = when {
+                date.monthValue >= 8 -> date.year      // 8–12 月：学年刚开始
+                date.monthValue == 1 -> date.year - 1  // 次年 1 月：仍是上一个学年
+                else -> date.year - 1                  // 2–7 月：学年过半
+            }
+            val season = if (date.monthValue >= 8 || date.monthValue == 1) "秋冬" else "春夏"
+            return "$startYear-${startYear + 1}学年 $season 学期"
         }
 
         fun toEntity(s: Semester): SemesterEntity = SemesterEntity(

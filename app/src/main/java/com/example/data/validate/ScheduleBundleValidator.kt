@@ -1,6 +1,7 @@
 package com.example.data.validate
 
 import com.example.data.calendar.EpochDays
+import com.example.data.calendar.TweakKind
 import com.example.data.calendar.ZjuCalendarAdapter
 import com.example.data.codec.AutomationBundle
 import com.example.data.codec.CalendarBundle
@@ -10,6 +11,7 @@ import com.example.data.codec.ScheduleBundle
 import com.example.data.codec.TermConfigBundle
 import com.example.data.codec.TermRefBundle
 import com.example.data.codec.SlotBundle
+import com.example.data.codec.academicTermOf
 import com.example.data.local.MakeupDayEntity
 import com.example.data.local.NoClassDayEntity
 import com.example.data.local.SemesterEntity
@@ -110,7 +112,7 @@ class ScheduleBundleValidator {
             )
         }
 
-        val rawSemester = selectedTerm?.let { validatedSemesterOrNull(it) }
+        val rawSemester = selectedTerm?.let { validatedSemesterOrNull(it, calendar?.termConfigs.orEmpty()) }
         if (rawSemester == null && selectedTerm != null) {
             issues += ImportIssue("校历", "学期起止日期无法解析，已按未配置学期处理")
         }
@@ -125,7 +127,9 @@ class ScheduleBundleValidator {
         val semester = rawSemester?.copy(periodsPerDay = periodsPerDay)
 
         // ---- 停课 / 补课：tweaks 是 v2 的规范形态，legacy 两段是 v1 兼容 ----
-        val (noClass, makeup) = expandCalendarDays(calendar, selectedTerm, issues)
+        // 区间判定用整个学年学期（rawSemester），不是选中那一条半学期 ——
+        // 否则冬那半学期的元旦停课会落在秋的 End 之后被丢掉
+        val (noClass, makeup) = expandCalendarDays(calendar, rawSemester, issues)
 
         // ---- 课程 ----
         val courses = validateCourses(raw.timetable?.courses.orEmpty(), periodsPerDay, totalWeeks, issues)
@@ -219,7 +223,38 @@ class ScheduleBundleValidator {
         }
     }
 
-    private fun validatedSemesterOrNull(raw: TermConfigBundle): ValidatedSemester? {
+    /**
+     * 由被选中的那一半学期，构造**整个学年学期**。
+     *
+     * [siblings] 是这份文件里的全部 `termConfigs`。秋(1–8 周)与冬(9–16 周)
+     * 合起来才是浙大说的「一个学期」，所以这里要跨到同年的另一半：
+     * 只按选中那一条算，学期就成了 8 周，而后半学期的课整段不出现。
+     *
+     * 同年没有另一半时（例如上游只给了秋）退回单半学期的口径 ——
+     * 那时文件里确实只有 8 周的信息，不能凭空补出 8 周来。
+     */
+    private fun validatedSemesterOrNull(
+        raw: TermConfigBundle,
+        siblings: List<TermConfigBundle>
+    ): ValidatedSemester? {
+        val year = raw.year ?: return null
+        val term = raw.term ?: return null
+
+        val academic = siblings.academicTermOf(year, term)
+        if (academic != null) {
+            return ValidatedSemester(
+                name = academic.label,
+                yearSpan = academic.yearSpan,
+                term = academic.season ?: academic.halves.first().label,
+                startEpochDay = academic.startEpochDay,
+                firstMondayEpochDay = academic.firstMondayEpochDay,
+                endEpochDay = academic.endEpochDay,
+                totalWeeks = academic.totalWeeks,
+                periodsPerDay = 0 // 由调用方按实际作息回填
+            )
+        }
+
+        // 没有同年的另一半（或日期坏了）：退回按这一条自己算，口径与改造前一致
         val start = ZjuCalendarAdapter.yyyymmddToEpochDay(raw.begin) ?: return null
         val end = ZjuCalendarAdapter.yyyymmddToEpochDay(raw.end) ?: return null
         if (start > end) return null
@@ -295,38 +330,62 @@ class ScheduleBundleValidator {
     /**
      * 把校历块展开成「停课日」与「补课日」两张表。
      *
-     * v2 的规范形态是 `tweaks`（与 zju-ical 同构），三条语义照抄上游
-     * `ClassToVEvents` 里的 `shadowDates` 处理：
+     * v2 的规范形态是 `tweaks`（与 zju-ical 同构），三种语义见 [TweakKind]。
+     * **每条规则的两端都是具体的某一天**，所以 `MOVE` / `EXCHANGE` 落库时
+     * 既记周几（出哪门课）也记来源日（算第几周）：
      *
-     * | TweakType | 上游动作                          | 本项目落到            |
-     * |-----------|-----------------------------------|-----------------------|
-     * | 0 Clear   | 删除 From..To 这几天的全部课        | `noClassDays`        |
-     * | 1 Copy    | `To 那天的课 = From 那天的课`       | `makeupDays(To, From 的周几)` |
-     * | 2 Exchange| From 与 To 两天互换                 | 两条 `makeupDays`   |
+     * | TweakKind | From 那天的课 | To 那天的课 | 落库 |
+     * |-----------|---------------|-------------|------|
+     * | Clear     | 没有课         | 不变         | `noClassDays` 展开 From..To |
+     * | Move      | **让出课**     | 上 From 的课  | `makeupDays(To)` |
+     * | Exchange  | 上 To 的课     | 上 From 的课  | `makeupDays` 两条 |
      *
-     * `From` / `To` 整段落在学期区间外的直接忽略 —— 上游也是这么处理的
-     * （`if tweak.To.Before(begin) || tweak.To.After(end) { continue }`）。
+     * `Move` 的 From 那天要让出课，**但不在这里写进 `noClassDays`**：
+     * 「这份课被搬到哪一天」已经完整记在 `makeupDays[To].sourceEpochDay` 里，
+     * 再抄一份进 `noClassDays` 就是同一事实存两处 —— 导出时会被合成一条
+     * CLEAR + 一条 MOVE，导回来多出一个停课日，round-trip 不再稳定。
+     * 「让出」这件事由 [AcademicCalendar.isVacatedForShift] 从 makeup 推导。
+     *
+     * 区间外判定用的是**整个学年学期**的范围，不是选中那一条半学期的：
+     * 冬那半学期的元旦停课、12-31 补课都落在秋的 `End` 之后，
+     * 按单半学期裁会把后半学期的调休整段丢掉。
      *
      * v1 旧文档的 `legacyNoClassRanges` / `legacyMakeupDays` 也在这里并进来，
      * 所以两条兼容路径共用同一份展开逻辑。
      */
     private fun expandCalendarDays(
         calendar: CalendarBundle?,
-        term: TermConfigBundle?,
+        term: ValidatedSemester?,
         issues: MutableList<ImportIssue>
     ): Pair<List<NoClassDayEntity>, List<MakeupDayEntity>> {
         val noClass = mutableListOf<NoClassDayEntity>()
         val makeup = mutableListOf<MakeupDayEntity>()
         if (calendar == null) return noClass to makeup
 
-        val begin = ZjuCalendarAdapter.yyyymmddToEpochDay(term?.begin)
-        val end = ZjuCalendarAdapter.yyyymmddToEpochDay(term?.end)
+        val begin = term?.startEpochDay
+        val end = term?.endEpochDay
 
         calendar.tweaks.forEachIndexed { index, tw ->
             val from = ZjuCalendarAdapter.yyyymmddToEpochDay(tw.from)
             val to = ZjuCalendarAdapter.yyyymmddToEpochDay(tw.to)
-            if (from == null || to == null || to < from) {
+            if (from == null || to == null) {
                 issues += ImportIssue("调休第 ${index + 1} 项", "日期无法解析，已忽略")
+                return@forEachIndexed
+            }
+            val kind = tw.tweakType
+            if (kind == null) {
+                issues += ImportIssue(
+                    "调休第 ${index + 1} 项",
+                    "TweakType 无法识别（${tw.tweakType}），已忽略"
+                )
+                return@forEachIndexed
+            }
+            // **只有停课是「区间」，方向才有意义。**
+            // 对调的两端是对称的，真实配置里就出现过倒的：
+            // 「10月6日与9月20日的课对调」From=20261006 / To=20260920。
+            // 早先对所有类型都查 `to < from`，这一条调休被当成「日期无法解析」整条丢掉。
+            if (kind == TweakKind.CLEAR && to < from) {
+                issues += ImportIssue("调休第 ${index + 1} 项", "停课区间结束早于开始，已忽略")
                 return@forEachIndexed
             }
             if (begin != null && end != null && (to < begin || from > end)) {
@@ -334,20 +393,17 @@ class ScheduleBundleValidator {
                 return@forEachIndexed
             }
             val note = tw.description.orEmpty()
-            when (tw.tweakType) {
-                0 -> EpochDays.expandRange(from, to).forEach { noClass += NoClassDayEntity(it, note) }
+            when (kind) {
+                TweakKind.CLEAR ->
+                    EpochDays.expandRange(from, to).forEach { noClass += NoClassDayEntity(it, note) }
 
-                1 -> makeup += MakeupDayEntity(to, EpochDays.dayOfWeek1To7(from), note)
+                TweakKind.MOVE ->
+                    makeup += MakeupDayEntity(to, EpochDays.dayOfWeek1To7(from), note, from)
 
-                2 -> {
-                    makeup += MakeupDayEntity(to, EpochDays.dayOfWeek1To7(from), note)
-                    makeup += MakeupDayEntity(from, EpochDays.dayOfWeek1To7(to), note)
+                TweakKind.EXCHANGE -> {
+                    makeup += MakeupDayEntity(to, EpochDays.dayOfWeek1To7(from), note, from)
+                    makeup += MakeupDayEntity(from, EpochDays.dayOfWeek1To7(to), note, to)
                 }
-
-                else -> issues += ImportIssue(
-                    "调休第 ${index + 1} 项",
-                    "TweakType ${tw.tweakType} 无法识别，已忽略"
-                )
             }
         }
 
@@ -374,7 +430,10 @@ class ScheduleBundleValidator {
                 issues += ImportIssue("补课 ${m.date ?: "?"}", "补周几必须是 1–7，已忽略该条")
                 return@forEachIndexed
             }
-            makeup += MakeupDayEntity(day, dow, m.note.orEmpty())
+            // fromDate 是后加的：v1 老文档没有它，留 0 表示「来源日未知」，
+            // 周次退回按补课当天算 —— 与升级前一致
+            val source = m.fromDate?.let { EpochDays.parse(it) } ?: 0L
+            makeup += MakeupDayEntity(day, dow, m.note.orEmpty(), source)
         }
 
         return noClass.distinctBy { it.epochDay } to makeup.distinctBy { it.epochDay }

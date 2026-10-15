@@ -30,6 +30,39 @@ object ZjuCalendarAdapter {
     fun termLabel(term: Int?): String =
         if (term != null && term in TERM_LABELS.indices) TERM_LABELS[term] else ""
 
+    /**
+     * `Term` 的原始值 → 学期代码。
+     *
+     * 上游 `configs/config.json` 把它写成**中文**：`"Term": "秋"`。
+     * 声明成 `Int?` 时 Moshi 遇到字符串直接抛 `JsonDataException`，
+     * 而 [ZjuCalendarSource.parse] 把整个反序列化包在 `runCatching` 里 ——
+     * 于是**整份校历配置解析失败**：学期起止日期与调休一起消失，
+     * 界面上只剩一句「校历配置拉取失败」。
+     *
+     * 数字（`0`–`6`，历史版本与 v1/v2 老文档的写法）也照收。
+     * 「秋冬」这种合称落在**前半**的 0：校历里秋冬是两条 8 周的子学期，
+     * 前半的代码就是秋。
+     */
+    fun termCodeOf(raw: Any?): Int? = when (raw) {
+        null -> null
+        is Number -> raw.toInt().takeIf { it in TERM_LABELS.indices }
+        is String -> TERM_ALIASES[raw.trim()]
+        else -> null
+    }
+
+    /** 中文/英文别名 → 学期代码。键一律小写无空格。 */
+    private val TERM_ALIASES = buildMap {
+        put("0", 0); put("1", 1); put("2", 2)
+        put("3", 3); put("4", 4); put("5", 5); put("6", 6)
+        put("秋", 0); put("秋冬", 0); put("秋学期", 0); put("autumn", 0); put("fall", 0)
+        put("冬", 1); put("冬学期", 1); put("winter", 1)
+        put("短", 2); put("短a", 2); put("短学期a", 2)
+        put("暑", 3); put("暑学期", 3); put("小学期", 3); put("summer1", 3)
+        put("春", 4); put("春夏", 4); put("春学期", 4); put("spring", 4)
+        put("夏", 5); put("夏学期", 5); put("summer", 5)
+        put("短b", 6); put("短学期b", 6)
+    }
+
     /** `YYYYMMDD` 整数 → epochDay。解析不了返回 null。 */
     fun yyyymmddToEpochDay(value: Int?): Long? {
         if (value == null) return null

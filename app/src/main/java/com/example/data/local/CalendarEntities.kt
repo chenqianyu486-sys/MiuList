@@ -47,11 +47,22 @@ data class NoClassDayEntity(
 
 /**
  * 补课日。[makeupForDayOfWeek] 表示「这天要上星期几的课」——
- * 10 月 10 日（周六）补周一，记 `makeupForDayOfWeek = 1`。
+ * 10 月 17 日（周六）补周五 的课，记 `makeupForDayOfWeek = 5`。
+ *
+ * [sourceEpochDay] 记「那份课原本属于哪一天」（10 月 2 日）。
+ *
+ * **两者回答的不是同一个问题，不能只留前者。** 界面上出哪门课由周几决定，
+ * 而**它算第几周**由来源日决定：2026 国庆把 10-02 的周五课补到 10-17，
+ * 10-02 在第 3 周、10-17 在第 5 周，按补课当天的日期算周次的话，
+ * 这一场补上来的课会被当成第 5 周的课，单双周课就集体判错。
+ *
+ * 0 表示「来源日未知」（v1 旧文档、以及校历弹层里手工填的行），
+ * 此时退回按补课当天算周次 —— 这是仅存的兼容路径。
  */
 @Entity(tableName = "makeup_days")
 data class MakeupDayEntity(
     @PrimaryKey val epochDay: Long,
     val makeupForDayOfWeek: Int,
-    val note: String = ""
+    val note: String = "",
+    val sourceEpochDay: Long = 0L
 )

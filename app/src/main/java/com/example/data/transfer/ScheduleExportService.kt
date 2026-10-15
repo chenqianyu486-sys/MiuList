@@ -1,6 +1,7 @@
 package com.example.data.transfer
 
 import com.example.data.calendar.EpochDays
+import com.example.data.calendar.TweakKind
 import com.example.data.calendar.ZjuCalendarAdapter
 import com.example.data.codec.AutomationBundle
 import com.example.data.codec.CalendarBundle
@@ -27,7 +28,8 @@ import java.time.format.DateTimeFormatter
  * 用户换机、重装、备份都不需要 App 之外的任何知识。
  *
  * v2 是**单文件、顶层分块**：导出的停课与补课被反写回 `calendar.tweaks`
- * （而不是 v1 的两段列表），termConfigs 只写当前这一期，termRef 指回它。
+ * （而不是 v1 的两段列表），termConfigs 写当前这个学年学期的两半，
+ * termRef 指回被查询的那一半。
  */
 class ScheduleExportService(
     private val codec: com.example.data.codec.ScheduleCodec,
@@ -35,6 +37,14 @@ class ScheduleExportService(
     private val calendarRepo: AcademicCalendarRepository,
     private val settingsRepo: ScheduleSettingsRepository
 ) {
+
+    /**
+     * 一个半学期占的周数：浙大秋冬学期的秋是第 1–8 周、冬是第 9–16 周。
+     * 与 [com.example.data.source.zju.ZjuScheduleMapper] 的 `SUBTERM_WEEKS` 同值。
+     */
+    private companion object {
+        const val HALF_WEEKS = 8
+    }
 
     suspend fun exportJson(): String {
         val courses = courseRepo.getAllCoursesOnce()
@@ -62,8 +72,8 @@ class ScheduleExportService(
                 note = "由应用内「导出课表」生成"
             ),
             calendar = CalendarBundle(
-                termConfigs = listOfNotNull(semester?.toTermConfig()),
-                classTerms = semester?.let { listOf("${it.yearSpan}:${it.termCode()}") }.orEmpty(),
+                termConfigs = semester?.toTermConfigs().orEmpty(),
+                classTerms = semester?.toTermConfigs()?.mapNotNull { it.key }.orEmpty(),
                 tweaks = toTweaks(noClass, makeup),
                 periods = periods.map {
                     PeriodBundle(
@@ -116,26 +126,52 @@ class ScheduleExportService(
     }
 
     /**
-     * 学期 → `termConfig`。
+     * 学期 → `termConfigs`：**一个学年学期拆成秋 + 冬两条**。
+     *
+     * 库里的 `Semester` 存的是整个学年学期（秋冬 16 周），而上游 `termConfigs`
+     * 一条只描述一个 8 周的半学期。导出时若只写一条，导回去就退化成一个没有季节名的
+     * 8 周（或 16 周但叫「秋学期」）的学期，「秋冬学期」这个名会丢。
+     *
+     * 切分点用 [HALF_WEEKS] 而不是按日期猜：前半 = 第 1–8 周，后半 = 第 9–16 周，
+     * 与 [com.example.data.codec.academicTermOf] 的口径一致。库里学期不足 8+8 周时
+     * 只写前半一条，不凭空造出后半段。
      *
      * `Begin` 写的是**第一周周一的日期**，而不是库里的 `startEpochDay`：
      * 上游用它反推第一周是 `Begin − (Begin 的周几 − 1) − 7×(FirstWeekNo−1)`，
      * 只有当 Begin 本身是周一时才能无损还原。这里固定 `FirstWeekNo = 1`，
      * 导进去得到的周次与库里完全一致。
      */
-    private fun com.example.data.local.SemesterEntity.toTermConfig() = TermConfigBundle(
-        year = yearSpan,
-        term = termCode(),
-        begin = ZjuCalendarAdapter.epochDayToYyyymmdd(firstMondayEpochDay),
-        end = ZjuCalendarAdapter.epochDayToYyyymmdd(endEpochDay),
-        firstWeekNo = 1
-    )
+    private fun com.example.data.local.SemesterEntity.toTermConfigs(): List<TermConfigBundle> {
+        val base = termCode()
+        val first = TermConfigBundle(
+            year = yearSpan,
+            term = base,
+            begin = ZjuCalendarAdapter.epochDayToYyyymmdd(firstMondayEpochDay),
+            end = ZjuCalendarAdapter.epochDayToYyyymmdd(firstHalfEnd()),
+            firstWeekNo = 1
+        )
+        // 学期不足 16 周：没有后半段可写，写一条即可（import 侧会按单半处理）
+        if (totalWeeks <= HALF_WEEKS) return listOf(first)
+        val second = first.copy(
+            term = base + 1, // 秋冬 0→1；春夏 4→5
+            begin = ZjuCalendarAdapter.epochDayToYyyymmdd(firstHalfEnd() + 1L),
+            end = ZjuCalendarAdapter.epochDayToYyyymmdd(endEpochDay)
+        )
+        return listOf(first, second)
+    }
+
+    /** 学期前半（第 1–8 周）的最后一天。不够 8 周时就是整个学期的最后一天。 */
+    private fun com.example.data.local.SemesterEntity.firstHalfEnd(): Long {
+        val byWeeks = firstMondayEpochDay + HALF_WEEKS * 7L - 1L
+        return minOf(byWeeks, endEpochDay)
+    }
 
     /**
-     * 库里的 `term` 文案（「秋季」「春季」）→ zju-ical 的 `Term` 整数。
+     * 库里的 `term` 文案（「秋冬」「春夏」）→ zju-ical 的 `Term` 整数的**前半**代码。
      *
-     * 只认两个常见值，其余一律当成 4（春学期）——因为文案本身是我们自己生成的，
+     * 只认「秋 / 春」两个字，其余一律当成 4（春）——文案本身是我们自己生成的，
      * 枚举不出更多情况，而猜错的后果只是学期名显示得不对，不影响周次。
+     * 「秋冬」含「秋」→ 0，「春夏」不含 → 4，正好对上。
      */
     private fun com.example.data.local.SemesterEntity.termCode(): Int =
         if (term.contains("秋")) 0 else 4
@@ -143,10 +179,14 @@ class ScheduleExportService(
     /**
      * 停课日 / 补课日 → `tweaks`。
      *
-     * - 连续的停课日合成一条 TweakType 0；不相邻的各成一条（区间里夹着上课日，
+     * - 连续的停课日合成一条 [TweakKind.CLEAR]；不相邻的各成一条（区间里夹着上课日，
      *   合成一条会把那些天也停掉）。
-     * - 补课日合成 TweakType 1：`From` 填「同一周里被补的那个周几」，
-     *   导入时 `dayOfWeek1To7(From)` 正好还原出 makeupForDayOfWeek，闭环。
+     * - 补课日合成 [TweakKind.MOVE]：`From` 写**真实的来源日**。
+     *
+     * 这里以前是反推的 —— 拿 `makeupForDayOfWeek` 去「同一周里」拼一个同周几的日子。
+     * 那个日期是编出来的：真实的 10-17 补课来自 10-02（隔了两周），反推只会得到
+     * 10-12，于是「导出 → 导入」之后这场补课的周次归属就变了。
+     * 有 `sourceEpochDay` 就用它；没有（v1 旧数据、校历弹层手工填的行）才退回反推。
      */
     private fun toTweaks(
         noClass: List<NoClassDayEntity>,
@@ -162,19 +202,25 @@ class ScheduleExportService(
                 var prev = sorted.first()
                 for (d in sorted.drop(1)) {
                     if (d != prev + 1) {
-                        // 一段连续停课结束：合成一条 TweakType 0
-                        out += TweakBundle(0, note, startOf(runStart), startOf(prev))
+                        // 一段连续停课结束：合成一条 CLEAR
+                        out += TweakBundle(TweakKind.CLEAR, note, startOf(runStart), startOf(prev))
                         runStart = d
                     }
                     prev = d
                 }
-                out += TweakBundle(0, note, startOf(runStart), startOf(prev))
+                out += TweakBundle(TweakKind.CLEAR, note, startOf(runStart), startOf(prev))
             }
 
         makeup.forEach {
-            val from = it.epochDay - (EpochDays.dayOfWeek1To7(it.epochDay) - 1L) +
-                (it.makeupForDayOfWeek - 1L)
-            out += TweakBundle(1, it.note, startOf(from), startOf(it.epochDay))
+            val from = if (it.sourceEpochDay > 0L) {
+                it.sourceEpochDay
+            } else {
+                // 来源日未知：按旧办法在同周里拼一个同周几的日子，
+                // 至少让 dayOfWeek 能还原，闭环靠它
+                it.epochDay - (EpochDays.dayOfWeek1To7(it.epochDay) - 1L) +
+                    (it.makeupForDayOfWeek - 1L)
+            }
+            out += TweakBundle(TweakKind.MOVE, it.note, startOf(from), startOf(it.epochDay))
         }
         return out
     }

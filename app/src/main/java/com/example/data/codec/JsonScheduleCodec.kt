@@ -1,5 +1,7 @@
 package com.example.data.codec
 
+import com.example.data.calendar.TweakKind
+import com.example.data.calendar.TweakKindJsonAdapter
 import com.example.data.model.CategoryRule
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
@@ -25,7 +27,12 @@ import com.squareup.moshi.adapter
  */
 class JsonScheduleCodec : ScheduleCodec {
 
-    private val moshi: Moshi = Moshi.Builder().build()
+    // TweakKind 的适配器必须显式注册：Moshi 的代码生成只对非基本类型向 Moshi 实例
+    // 查适配器，不注册的话 TweakType 会按 TweakKind 生成一个反射适配器，
+    // 遇到上游的字符串形态直接抛 JsonDataException。
+    private val moshi: Moshi = Moshi.Builder()
+        .add(TweakKind::class.java, TweakKindJsonAdapter())
+        .build()
 
     private val adapter by lazy { moshi.adapter(ScheduleDocumentDto::class.java) }
 
@@ -75,7 +82,7 @@ class JsonScheduleCodec : ScheduleCodec {
                 NoClassRangeBundle(it.startDate, it.endDate, it.note)
             },
             legacyMakeupDays = legacy.makeupDays.orEmpty().map {
-                MakeupDayBundle(it.date, it.makeupForDayOfWeek, it.note)
+                MakeupDayBundle(it.date, it.makeupForDayOfWeek, it.fromDate, it.note)
             },
             termConfigs = listOf(
                 TermConfigBundle(
@@ -142,14 +149,16 @@ class JsonScheduleCodec : ScheduleCodec {
         classTerms = classTerms.orEmpty(),
         examTerms = examTerms.orEmpty(),
         tweaks = tweaks.orEmpty().map {
-            TweakBundle(it.tweakType ?: 0, it.description, it.from, it.to)
+            // 认不出来的 TweakType 原样留 null，交给校验期报 issue 并忽略整条；
+            // 在这里默认成 CLEAR 会把一条看不懂的规则直接执行成停课。
+            TweakBundle(it.tweakType, it.description, it.from, it.to)
         },
         periods = periods.orEmpty().map { PeriodBundle(it.period, it.startTime, it.endTime, it.section) },
         legacyNoClassRanges = noClassRanges.orEmpty().map {
             NoClassRangeBundle(it.startDate, it.endDate, it.note)
         },
         legacyMakeupDays = makeupDays.orEmpty().map {
-            MakeupDayBundle(it.date, it.makeupForDayOfWeek, it.note)
+            MakeupDayBundle(it.date, it.makeupForDayOfWeek, it.fromDate, it.note)
         }
     )
 

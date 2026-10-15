@@ -1,5 +1,6 @@
 package com.example.data.codec
 
+import com.example.data.calendar.TweakKind
 import com.example.data.model.CategoryRule
 
 /**
@@ -64,13 +65,18 @@ data class TermConfigBundle(
 }
 
 /**
- * 调休规则。
+ * 调休规则。语义见 [TweakKind]。
  *
- * 0 = 停课（清除 From..To 的课）、1 = 补课（To 那天上 From 的课）、
- * 2 = 对调（From 与 To 互换）。
+ * [from] / [to] 是 `YYYYMMDD` 整数（上游原格式），**两端都是具体的某一天**，
+ * 不是「星期几」。这是调休唯一正确的粒度：同一条规则里 From 与 To 可以相隔
+ * 两周以上，只记周几就丢掉了「这是哪一周的课」这一半信息。
+ *
+ * [tweakType] 可空：认不出来的类型**不能默认成 [TweakKind.CLEAR]**——
+ * 那等于把一条看不懂的规则当成停课执行，用户会莫名其妙少一天的课。
+ * 保留成 null 交给校验期报 issue、整条忽略。
  */
 data class TweakBundle(
-    val tweakType: Int,
+    val tweakType: TweakKind?,
     val description: String?,
     val from: Int?,
     val to: Int?
@@ -89,10 +95,23 @@ data class NoClassRangeBundle(
     val note: String?
 )
 
+/**
+ * v1 形态的补课日。
+ *
+ * [makeupForDayOfWeek] 是「这天上星期几的课」，[fromDate] 是「课原本属于哪一天」。
+ * 两者回答的不是同一个问题：前者决定界面上出哪门课，后者决定它算第几周。
+ *
+ * 补课时 From 与 To 常常差两周以上（2026 国庆：10-02 的周五课补到 10-17），
+ * 只留 [makeupForDayOfWeek] 会把补上的课算进补课当天的周次，单双周课就集体判错。
+ * [fromDate] 为 null 表示「来源日未知」（v1 文档没有这个字段），
+ * 此时退回按补课当天的日期算周次——这是旧有的、也是仅有的兼容路径。
+ */
 data class MakeupDayBundle(
     val date: String?,
     val makeupForDayOfWeek: Int?,
-    val note: String?
+    /** `YYYY-MM-DD`；null = 未知。 */
+    val fromDate: String? = null,
+    val note: String? = null
 )
 
 data class TimetableBlockBundle(

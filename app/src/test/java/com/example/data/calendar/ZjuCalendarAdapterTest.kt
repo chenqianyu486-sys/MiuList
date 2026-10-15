@@ -90,14 +90,14 @@ class ZjuCalendarAdapterTest {
         val begin = ZjuCalendarAdapter.yyyymmddToEpochDay(20250414)!!
         val end = ZjuCalendarAdapter.yyyymmddToEpochDay(20250608)!!
 
-        val springBreak = TweakBundle(0, "劳动节", 20250502, 20250505)
+        val springBreak = TweakBundle(TweakKind.CLEAR, "劳动节", 20250502, 20250505)
         val breakTo = ZjuCalendarAdapter.yyyymmddToEpochDay(springBreak.to!!)!!
         assertTrue(
             "学期内的停课区间换算后应当落在学期内",
             breakTo >= begin && breakTo <= end
         )
 
-        val nationalDay = TweakBundle(0, "国庆", 20251001, 20251007)
+        val nationalDay = TweakBundle(TweakKind.CLEAR, "国庆", 20251001, 20251007)
         assertTrue(
             "学期外的停课区间换算后应当落在学期之后，由展开阶段忽略",
             ZjuCalendarAdapter.yyyymmddToEpochDay(nationalDay.to!!)!! > end

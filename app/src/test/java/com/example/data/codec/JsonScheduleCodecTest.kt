@@ -1,5 +1,6 @@
 package com.example.data.codec
 
+import com.example.data.calendar.TweakKind
 import com.example.data.model.CategoryRule
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -169,9 +170,42 @@ class JsonScheduleCodecTest {
         assertEquals(20250608, tc.end)
         assertEquals(1, tc.firstWeekNo)
         assertEquals(listOf("2024-2025:4"), cal.classTerms)
-        assertEquals(0, cal.tweaks.first().tweakType)
+        // 老文档写的是数字 0，归一后是 CLEAR —— 与上游的 "Clear" 是同一个类型
+        assertEquals(TweakKind.CLEAR, cal.tweaks.first().tweakType)
         assertEquals("劳动节", cal.tweaks.first().description)
         assertEquals(20250502, cal.tweaks.first().from)
+    }
+
+    /**
+     * 上游 config.json 原样就能当一份「只有校历的 v2 文档」导进来。
+     *
+     * 这正是 `ZjuCalendarSource` 说的那份文件：顶层 camelCase、元素 PascalCase、
+     * `TweakType` 写字符串。历史版本与 v1 文档写的是数字 `0/1/2`，两条路都得通。
+     */
+    @Test
+    fun `上游字符串形态的 校历配置 能原样解码`() {
+        val b = decode(
+            """
+            { "schemaVersion": 2, "calendar": {
+                "termConfigs": [
+                  { "Year": "2026-2027", "Term": 0, "Begin": 20260914, "End": 20261108, "FirstWeekNo": 1 },
+                  { "Year": "2026-2027", "Term": 1, "Begin": 20261109, "End": 20270103, "FirstWeekNo": 1 }
+                ],
+                "tweaks": [
+                  { "TweakType": "Clear", "Description": "国庆停课", "From": 20261001, "To": 20261007 },
+                  { "TweakType": "Move", "Description": "10月2日停课，补到10月17日", "From": 20261002, "To": 20261017 },
+                  { "TweakType": "Exchange", "Description": "10月6日与9月20日对调", "From": 20261006, "To": 20260920 }
+                ]
+            } }
+            """.trimIndent()
+        )
+        val cal = b.calendar!!
+        assertEquals(
+            listOf(TweakKind.CLEAR, TweakKind.MOVE, TweakKind.EXCHANGE),
+            cal.tweaks.map { it.tweakType }
+        )
+        // 两半折起来是 16 周的学年学期
+        assertEquals(16, cal.termConfigs.academicTermOf("2026-2027", 0)!!.totalWeeks)
     }
 
     @Test
@@ -243,8 +277,8 @@ class JsonScheduleCodecTest {
                 ),
                 classTerms = listOf("2026-2027:0"),
                 tweaks = listOf(
-                    TweakBundle(0, "国庆", 20261001, 20261003),
-                    TweakBundle(1, "补周一", 20261005, 20261010)
+                    TweakBundle(TweakKind.CLEAR, "国庆", 20261001, 20261003),
+                    TweakBundle(TweakKind.MOVE, "补周一", 20261005, 20261010)
                 ),
                 periods = listOf(
                     PeriodBundle(1, "08:00", "08:45", "上午"),

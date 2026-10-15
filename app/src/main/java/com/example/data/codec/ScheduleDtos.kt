@@ -1,5 +1,7 @@
 package com.example.data.codec
 
+import com.example.data.calendar.TweakKind
+import com.example.data.calendar.TweakKindJsonAdapter
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 
@@ -72,16 +74,17 @@ data class TermConfigDto(
 )
 
 /**
- * 调休规则。上游 `TweakType`：0 = 无条件清除 From..To 的课（停课），
- * 1 = 把 From 那天的课复制到 To（补课），2 = From 与 To 两天课对调。
+ * 调休规则。[tweakType] 收字符串（`"Clear"` / `"Move"` / `"Exchange"`）也收数字（`0/1/2`），
+ * 写出时统一用字符串——上游 zju-ical `configs/config.json` 就是这个形态，
+ * 导出文件拿回上游或别的工具能直接用。适配见 [TweakKindJsonAdapter]。
  */
 @JsonClass(generateAdapter = true)
 data class TweakDto(
-    @Json(name = "TweakType") val tweakType: Int? = null,
+    @Json(name = "TweakType") val tweakType: TweakKind? = null,
     @Json(name = "Description") val description: String? = null,
-    /** YYYYMMDD */
+    /** YYYYMMDD，具体某一天 */
     @Json(name = "From") val from: Int? = null,
-    /** YYYYMMDD */
+    /** YYYYMMDD，具体某一天 */
     @Json(name = "To") val to: Int? = null
 )
 
@@ -92,10 +95,14 @@ data class NoClassRangeDto(
     val note: String? = null
 )
 
+/**
+ * v1 形态的补课日。[fromDate] 是「课原本属于哪一天」，v1 老文档里没有这个字段。
+ */
 @JsonClass(generateAdapter = true)
 data class MakeupDayDto(
     val date: String? = null,
     val makeupForDayOfWeek: Int? = null,
+    val fromDate: String? = null,
     val note: String? = null
 )
 

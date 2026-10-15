@@ -22,6 +22,9 @@ class ScheduleResolver(val calendar: AcademicCalendar) {
 
     /**
      * 这天的课。空时段列表由调用方自行跳过成组（列表页要靠这个判断是否出分组）。
+     *
+     * 筛开课周次时用 [AcademicCalendar.teachingWeekOf] 而不是 [AcademicCalendar.weekOf]：
+     * 补课日归属**来源日**那一周，10-17 补的 10-02 的课要按第 3 周去匹配。
      */
     fun slotsOn(
         epochDay: Long,
@@ -35,7 +38,7 @@ class ScheduleResolver(val calendar: AcademicCalendar) {
             // 未配置学期 → 忽略开课周次，行为与改造前完全一致
             return candidates.sortedBy { it.startPeriod }
         }
-        val week = calendar.weekOf(epochDay)
+        val week = calendar.teachingWeekOf(epochDay)
         return candidates.filter { occursInWeek(it.id, week, weeksBySlotId) }
             .sortedBy { it.startPeriod }
     }

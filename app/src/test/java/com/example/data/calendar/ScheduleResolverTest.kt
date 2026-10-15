@@ -18,9 +18,9 @@ class ScheduleResolverTest {
     private val firstMonday = EpochDays.parse("2026-09-07")!!
 
     private fun semester(totalWeeks: Int = 20) = Semester(
-        name = "2026-2027学年 秋季学期",
+        name = "2026-2027学年 秋冬学期",
         yearSpan = "2026-2027",
-        term = "秋季",
+        term = "秋冬",
         startEpochDay = firstMonday,
         firstMondayEpochDay = firstMonday,
         endEpochDay = firstMonday + (totalWeeks - 1) * 7L + 6,
@@ -100,7 +100,7 @@ class ScheduleResolverTest {
     @Test
     fun `a makeup day pulls in the classes of the day it substitutes for`() {
         val saturday = firstMonday + 5      // 周六
-        val cal = AcademicCalendar(semester(), makeupDays = mapOf(saturday to 1))
+        val cal = AcademicCalendar(semester(), makeupDays = mapOf(saturday to MakeupShift(1)))
         val resolver = ScheduleResolver(cal)
         val monday = slot(1, 1, 1)
         val saturdaySlot = slot(2, 6, 1)
@@ -115,7 +115,7 @@ class ScheduleResolverTest {
     fun `a makeup day on a weekday overrides that weekday`() {
         // 周三补周五的课：当天出周五的课，不出周三自己的课
         val wednesday = firstMonday + 2
-        val cal = AcademicCalendar(semester(), makeupDays = mapOf(wednesday to 5))
+        val cal = AcademicCalendar(semester(), makeupDays = mapOf(wednesday to MakeupShift(5)))
         val resolver = ScheduleResolver(cal)
         val wed = slot(1, 3, 1)
         val fri = slot(2, 5, 1)
@@ -127,7 +127,7 @@ class ScheduleResolverTest {
     @Test
     fun `a makeup day still respects the opening weeks of the substituted day`() {
         val saturday = firstMonday + 5      // 第 1 周的周六
-        val cal = AcademicCalendar(semester(), makeupDays = mapOf(saturday to 1))
+        val cal = AcademicCalendar(semester(), makeupDays = mapOf(saturday to MakeupShift(1)))
         val resolver = ScheduleResolver(cal)
         val oddOnly = slot(1, 1, 1)
         // 第 1 周是单周 → 开课；补课日不豁免开课周次判定
@@ -135,12 +135,40 @@ class ScheduleResolverTest {
         assertEquals(0, resolver.slotsOn(saturday, listOf(oddOnly), mapOf(1L to setOf(2, 4))).size)
     }
 
+    /**
+     * 补课日按**来源日**的开课周次筛课，不按补课当天。
+     *
+     * 这就是「调休是具体到哪一天调到哪一天」在排课上的落点：
+     * 隔了两周补上来的那份课，开课周次要拿来源日那一周去比。
+     * 学期从 [firstMonday]（2026-09-07）起算，所以来源日 10-02 落在第 4 周、
+     * 补课日 10-17 落在第 6 周；只在第 4 周开的课必须出现，只在第 6 周开的必须不出现。
+     */
+    @Test
+    fun `a makeup day filters by the source day's week, not its own`() {
+        val from = EpochDays.parse("2026-10-02")!!
+        val to = EpochDays.parse("2026-10-17")!!
+        val cal = AcademicCalendar(semester(), makeupDays = mapOf(to to MakeupShift(5, from)))
+        val resolver = ScheduleResolver(cal)
+        val friday = slot(1, 5, 1)
+
+        assertEquals(
+            "来源日在第 4 周，只在第 4 周开的课要出来",
+            1,
+            resolver.slotsOn(to, listOf(friday), mapOf(1L to setOf(4))).size
+        )
+        assertEquals(
+            "第 6 周是补课当天，不该用它的周次",
+            0,
+            resolver.slotsOn(to, listOf(friday), mapOf(1L to setOf(6))).size
+        )
+    }
+
     // ---------------------------------------------------------------- 周课表
 
     @Test
     fun `the weekly grid keeps its shape and is not affected by makeup days`() {
         val saturday = firstMonday + 5
-        val cal = AcademicCalendar(semester(), makeupDays = mapOf(saturday to 1))
+        val cal = AcademicCalendar(semester(), makeupDays = mapOf(saturday to MakeupShift(1)))
         val resolver = ScheduleResolver(cal)
         val monday = slot(1, 1, 1)
         val saturdaySlot = slot(2, 6, 2)
