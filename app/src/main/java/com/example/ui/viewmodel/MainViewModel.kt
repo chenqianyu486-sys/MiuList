@@ -5,8 +5,12 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.calendar.CalendarDiffCalculator
+import com.example.data.calendar.CalendarOrigin
+import com.example.data.calendar.CalendarSnapshot
 import com.example.data.calendar.EpochDays
 import com.example.data.calendar.ScheduleResolver
+import com.example.data.codec.AcademicTerm
 import com.example.data.di.AppContainer
 import com.example.data.generation.CourseRuleSpec
 import com.example.data.generation.WeekTaskGenerationEngine
@@ -24,6 +28,7 @@ import com.example.data.model.TaskStar
 import com.example.data.model.TaskType
 import com.example.data.repository.AcademicCalendarRepository
 import com.example.data.sample.SampleDataProvider
+import com.example.data.source.zju.CalendarUpdateService
 import com.example.data.source.zju.ZjuImportService
 import com.example.data.security.DataSourceMode
 import com.example.data.sync.SyncFailure
@@ -54,6 +59,7 @@ class MainViewModel(
     private val calendarRepo = container.calendarRepository
     private val taskTypeRepo = container.taskTypeRepository
     private val zjuImportService = container.zjuImportService
+    private val calendarUpdates = container.calendarUpdateService
     private val secureStorage = container.secureAccountStorage
     private val syncManager = container.syncManager
 
@@ -241,7 +247,17 @@ private val ruleFlow = combine(
     fun setSearchQuery(q: String) = _uiState.update { it.copy(searchQuery = q) }
     fun setSelectedTaskType(key: String?) = _uiState.update { it.copy(selectedTaskTypeKey = key) }
     fun setGroupingMode(mode: TaskGroupingMode) = _uiState.update { it.copy(groupingMode = mode) }
-    fun setStatusFilter(filter: TaskStatusFilter) = _uiState.update { it.copy(statusFilter = filter) }
+    fun setStatusFilters(filters: Set<TaskStatusFilter>) = _uiState.update { it.copy(statusFilters = filters) }
+    fun toggleStatusFilter(filter: TaskStatusFilter) = _uiState.update { current ->
+        val currentFilters = current.statusFilters
+        val nextFilters = if (filter in currentFilters) {
+            if (currentFilters.size > 1) currentFilters - filter else currentFilters
+        } else {
+            currentFilters + filter
+        }
+        current.copy(statusFilters = nextFilters)
+    }
+    fun setStatusFilter(filter: TaskStatusFilter) = toggleStatusFilter(filter)
     fun setScheduleViewMode(mode: ScheduleViewMode) = _uiState.update { it.copy(scheduleViewMode = mode) }
 
     /** 现在是「浏览第 N 周」，不再是「声明现在是第几周」——周次由校历派生。 */
@@ -333,19 +349,26 @@ private val ruleFlow = combine(
 
     fun cancelDeleteTaskType() = _uiState.update { it.copy(deletingTaskType = null) }
 
+    fun openTaskCategoryManageDialog() = _uiState.update {
+        it.copy(isTaskCategoryManageDialogOpen = true)
+    }
+
+    fun closeTaskCategoryManageDialog() = _uiState.update {
+        it.copy(isTaskCategoryManageDialogOpen = false)
+    }
+
     /**
-     * 删掉一个自定义类型。已经用了它的待办会退化成「未分类」
-     * （`CUSTOM:<id>` 变成解析不出的悬空 key，见 `TaskTypes.resolve`），
-     * 待办本身一条都不动。
+     * 删掉一个自定义类型。级联删除该分类下的所有待办。
      */
     fun deleteTaskType(type: CustomTaskType) = viewModelScope.launch {
         taskTypeRepo.delete(type.id)
-        // 正按这个类型筛着的话，把它一起撤掉，否则筛选条件会指向一个不存在的类型
+        // 正按这个类型筛着的话，把它一起撤掉，正查看的待办如果属于此分类也关闭
         _uiState.update {
             it.copy(
                 deletingTaskType = null,
                 selectedTaskTypeKey = it.selectedTaskTypeKey?.takeIf { key -> key != type.key },
-                userMessage = "已删除「${type.label}」"
+                inspectingTask = it.inspectingTask?.takeIf { task -> task.taskType != type.key },
+                userMessage = "已删除「${type.label}」及该分类下的待办"
             )
         }
     }
@@ -931,9 +954,9 @@ private val ruleFlow = combine(
     /**
      * 打开弹层。
      *
-     * 「开弹层」与「开始读预置校历」必须落在**同一次 update** 里：分成两次的话，
+     * 「开弹层」与「开始读官方校历」必须落在**同一次 update** 里：分成两次的话，
      * 中间那一帧弹层看到的是 `preset = null && loading = false`，
-     * 于是先闪一句「读不到内置的官方校历」再变成「正在读取…」。
+     * 于是先闪一句「读不到官方校历」再变成「正在读取…」。
      * 读不到和没在读是两件事，不该用同一帧去表示。
      */
     fun openAcademicCalendarDialog() {
@@ -946,25 +969,208 @@ private val ruleFlow = combine(
         loadZjuPreset()
     }
 
-    fun closeAcademicCalendarDialog() = _uiState.update { it.copy(isAcademicCalendarDialogOpen = false) }
+    fun closeAcademicCalendarDialog() = _uiState.update {
+        // 差异预览是一次性动作：关掉弹层时一并收起，否则下次打开会直接顶在
+        // 上一次的确认界面上。
+        it.copy(isAcademicCalendarDialogOpen = false, isCalendarDiffOpen = false, calendarDiff = null)
+    }
 
     /**
-     * 读内置那份官方校历，给弹层单独显示。**不联网**（读 assets），秒开。
+     * 读当前可用的官方校历，给弹层单独显示。**不联网**（缓存 → 内置），秒开。
+     *
+     * 远程更新是**显式**点「检查更新」才发生的，不在开弹层这条路上 ——
+     * 否则每开一次弹层都要等最多 15s 超时，而校历是天级变更的低频动作。
      *
      * 结果与 loading 在**同一次 update** 里落：只设 `isZjuPresetLoading = false` 而漏了
      * `zjuPreset`，界面上就会一直转圈；反过来只设结果不设 loading，转圈永远不停。
-     * 成功与失败都不抛 —— 读不到内置文件是「这台机器上没这份数据」，
-     * 该由弹层显示「预置不可用」，不该让开弹层这个动作失败。
+     * 成功与失败都不抛 —— 读不到是「这台机器上没这份数据」，
+     * 该由弹层显示「官方校历不可用」，不该让开弹层这个动作失败。
      */
     private fun loadZjuPreset() = viewModelScope.launch {
         // 只按「有没有结果」判重，不按 loading：打开时已经把 loading 置 true 了，
         // 拿 loading 当「已经在读」的凭据会把这次读取自己挡在门外。
         if (_uiState.value.zjuPreset != null) return@launch
-        val preset = runCatching {
-            zjuImportService.bundledPreset(_uiState.value.semester?.yearSpan)
-        }.getOrNull()
-        _uiState.update { it.copy(isZjuPresetLoading = false, zjuPreset = preset) }
+        val loaded = runCatching { calendarUpdates.loadOffline() }.getOrNull()
+        val prefer = currentTermRef()
+        val preset = loaded?.let {
+            runCatching { zjuImportService.presetFrom(it.bundle, prefer, it.origin) }.getOrNull()
+        }
+        // 把这份配置里**所有**的学年学期一起摆出来：加新学期之后用户要能切过去，
+        // 只自动选一的话新加的那期永远不会被摆出来，看着像"检查更新没生效"。
+        val allTerms = loaded?.let {
+            runCatching { zjuImportService.academicTermsIn(it.bundle) }.getOrDefault(emptyList())
+        }.orEmpty()
+        _uiState.update {
+            it.copy(isZjuPresetLoading = false, zjuPreset = preset, zjuAvailableTerms = allTerms)
+        }
     }
+
+    /** 当前正在用的学期，作为"官方校历该摆哪一期"的偏好。 */
+    private fun currentTermRef(): ZjuImportService.PreferredTerm? {
+        val s = uiState.value.semester ?: return null
+        return ZjuImportService.PreferredTerm(s.yearSpan, s.term.takeIf { it.isNotBlank() })
+    }
+
+    /**
+     * 换一个学年学期看 —— 只影响弹层上"官方校历"那块显示哪一期，**不写库**。
+     *
+     * 加了新学期（同一学年多出春夏，或多了一个新学年）之后，用户要有个办法
+     * 把它切过去看内容。真正落库仍然走「应用到本机校历」→ 差异 → 确认。
+     */
+    fun previewZjuTerm(term: AcademicTerm) = viewModelScope.launch {
+        val loaded = runCatching { calendarUpdates.loadOffline() }.getOrNull() ?: return@launch
+        val preset = runCatching {
+            zjuImportService.presetFrom(
+                loaded.bundle,
+                ZjuImportService.PreferredTerm(term.yearSpan, term.season),
+                loaded.origin
+            )
+        }.getOrNull()
+        // 切看的动作不该把"上次检查到的待应用新版"清掉：那是另一次检查的结果。
+        _uiState.update { it.copy(zjuPreset = preset) }
+    }
+
+    /**
+     * 「检查更新」：联网拉一次远程配置，比 `lastUpdated`，可能写缓存。**不碰用户正在用的校历。**
+     *
+     * 结果与 [MainUiState.isCheckingCalendarUpdate] 必须落**同一次 update**，
+     * 否则按钮会永远停在转圈状态（沿用 [loadZjuPreset] 那条教训）。
+     *
+     * 三个分支**语义互不重叠**，别把它们揉成一句话：
+     * - [CalendarUpdateService.UpdateOutcome.Updated]：有新版 → 存进 `pendingPreset`，
+     *   界面上出现「发现新版」，等用户看差异。**这时已经把远程那份写进缓存了**，
+     *   所以下次开弹层看到的就是新版；但仍要用户确认才落到库里。
+     * - `UpToDate`：确实拉到过远程，且不比缓存新。
+     * - `Failed`：拉不到或内容坏了。**绝不显示成「已是最新」** ——
+     *   那等于骗用户，而恰恰是网络受限时最需要说实话的时候。
+     */
+    fun checkCalendarUpdate() = viewModelScope.launch {
+        _uiState.update { it.copy(isCheckingCalendarUpdate = true) }
+
+        when (val outcome = runCatching { calendarUpdates.checkForUpdate() }.getOrElse {
+            CalendarUpdateService.UpdateOutcome.Failed(it.message ?: "检查失败")
+        }) {
+            is CalendarUpdateService.UpdateOutcome.Updated -> {
+                val prefer = currentTermRef()
+                val preset = runCatching {
+                    zjuImportService.presetFrom(outcome.bundle, prefer, CalendarOrigin.REMOTE)
+                }.getOrNull()
+                val allTerms = runCatching {
+                    zjuImportService.academicTermsIn(outcome.bundle)
+                }.getOrDefault(emptyList())
+                _uiState.update {
+                    it.copy(
+                        isCheckingCalendarUpdate = false,
+                        pendingPreset = preset,
+                        zjuAvailableTerms = allTerms,
+                        userMessage = if (preset == null) {
+                            "校历已更新到缓存，但这一期解析不出来，没有可应用的内容"
+                        } else {
+                            "发现新版校历（${preset.versionLabel ?: "未知版本"}），可查看差异后应用"
+                        }
+                    )
+                }
+            }
+
+            is CalendarUpdateService.UpdateOutcome.UpToDate -> _uiState.update {
+                it.copy(
+                    isCheckingCalendarUpdate = false,
+                    userMessage = "官方校历已是最新（版本 ${outcome.version?.let(::formatVersion) ?: "未知"}）"
+                )
+            }
+
+            is CalendarUpdateService.UpdateOutcome.Failed -> _uiState.update {
+                it.copy(isCheckingCalendarUpdate = false, userMessage = "检查更新失败：${outcome.reason}")
+            }
+        }
+    }
+
+    /**
+     * 算「应用 [MainUiState.pendingPreset] 会变什么」，打开差异预览。
+     *
+     * **差异是用当前库里的值算的，不是用上一次拉到的值** —— 用户可能在
+     * 上一次预览之后又手改过校历，界面上摆的必须是此刻真会发生的变化。
+     */
+    fun previewPendingPreset() = viewModelScope.launch {
+        val pending = _uiState.value.pendingPreset
+        if (pending == null) {
+            _uiState.update { it.copy(userMessage = "没有待应用的校历") }
+            return@launch
+        }
+        val current = CalendarSnapshot.of(
+            semester = uiState.value.semester,
+            noClassDays = uiState.value.noClassDays,
+            makeupDays = uiState.value.makeupDays
+        )
+        val diff = CalendarDiffCalculator.compute(current, pending.toSnapshot())
+        _uiState.update {
+            it.copy(
+                calendarDiff = diff,
+                isCalendarDiffOpen = true,
+                userMessage = if (diff.isEmpty) "与当前校历没有差异" else null
+            )
+        }
+    }
+
+    fun dismissCalendarDiff() =
+        _uiState.update { it.copy(isCalendarDiffOpen = false, calendarDiff = null) }
+
+    /**
+     * 确认应用官方校历。
+     *
+     * 落库走的是与手动保存**同一条**路径（[saveAcademicCalendar]），
+     * 语义是全量替换停课与补课 —— 用户在差异预览里已经看过会被删掉什么了。
+     *
+     * **不动作息表**：官方配置不带作息，刻意只换学期起止与停课 / 补课。
+     * 作息由用户单独维护，官方那份的作息是硬编码在 app 里的另一份常量，
+     * 混进来会让「我明明设过 13 节」这类配置被悄悄改掉。
+     *
+     * `periods` 传空 → [AcademicCalendarRepository.saveCalendar] 的
+     * `replacePeriods` 为 false，作息表原样保留。
+     */
+    fun confirmApplyPreset() = viewModelScope.launch {
+        val pending = _uiState.value.pendingPreset ?: return@launch
+        val periods = container.calendarRepository.periodsOnce()
+
+        calendarRepo.saveCalendar(
+            semester = SemesterEntity(
+                name = pending.label,
+                yearSpan = pending.yearSpan,
+                term = AcademicCalendarRepository.seasonOf(pending.label),
+                startEpochDay = pending.startEpochDay,
+                firstMondayEpochDay = pending.firstMondayEpochDay,
+                endEpochDay = pending.endEpochDay,
+                totalWeeks = pending.totalWeeks,
+                // 节数跟着**实际保留的作息表**走，不是官方那份里带的数字。
+                periodsPerDay = periods.size
+            ),
+            periods = emptyList(),
+            noClass = pending.noClassDays,
+            makeup = pending.makeupDays,
+            replacePeriods = false,
+            replaceNoClass = true,
+            replaceMakeup = true
+        )
+        courseRepo.clampSlotWeeksTo(pending.totalWeeks)
+
+        _uiState.update {
+            it.copy(
+                // 关弹层：与手动保存那条路径保持一致。
+                // 留着的话用户会停在一个已经落库的表单前，不知道该干什么。
+                isAcademicCalendarDialogOpen = false,
+                isCalendarDiffOpen = false,
+                calendarDiff = null,
+                pendingPreset = null,
+                // 应用之后官方那块就与本机一致了，没有"待应用"这回事。
+                zjuPreset = pending.copy(origin = CalendarOrigin.CACHED),
+                userMessage = "本机校历已更新至 ${pending.versionLabel ?: "官方版本"}"
+            )
+        }
+    }
+
+    /** `20260917` → `2026-09-17`。 */
+    private fun formatVersion(v: Int): String =
+        "%04d-%02d-%02d".format(v / 10000, v / 100 % 100, v % 100)
 
     fun saveAcademicCalendar(
         semester: SemesterEntity?,

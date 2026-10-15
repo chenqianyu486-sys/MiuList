@@ -186,15 +186,14 @@ fun NewTaskTypeDialog(
 }
 
 /**
- * 删除自定义类型的二次确认。
+ * 删除自定义分类的二次确认。
  *
- * 删除是不可逆的，而它挂在一个「长按 chip」这种不显眼的入口上，
- * 所以必须先确认一次；顺带把后果说清楚——用了这个类型的待办会退回「未分类」，
- * 而不是跟着消失。
+ * 删除是不可逆的：把后果说清楚——将同时删除该分类下的所有待办。
  */
 @Composable
 fun DeleteTaskTypeConfirmDialog(
     typeLabel: String,
+    taskCount: Int = 0,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
@@ -202,22 +201,25 @@ fun DeleteTaskTypeConfirmDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "删除类型「$typeLabel」？",
+                text = "删除分类「$typeLabel」？",
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                 color = MaterialTheme.colorScheme.onSurface
             )
         },
         text = {
+            val countNotice = if (taskCount > 0) "（含 $taskCount 条待办）" else ""
             Text(
-                // 说清楚后果，别只问「确定吗」：用户担心的「待办会不会没了」
-                // 答案是不没了，但答案得由界面主动给。
-                text = "用了这个类型的待办会退回「未分类」，待办本身不会被删除。",
+                text = "将同时删除该分类下的所有待办$countNotice，操作无法恢复。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         },
         confirmButton = {
-            TextButton(onClick = onConfirm, shape = RoundedCornerShape(10.dp)) {
+            TextButton(
+                onClick = onConfirm,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.testTag("confirm_delete_task_type_button")
+            ) {
                 Text("删除", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
             }
         },

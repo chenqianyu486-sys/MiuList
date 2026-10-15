@@ -48,7 +48,6 @@ enum class ScheduleViewMode(val label: String) {
 }
 
 enum class TaskStatusFilter(val label: String) {
-    ALL("全部"),
     PENDING("待完成"),
     COMPLETED("已完成")
 }
@@ -124,14 +123,38 @@ data class MainUiState(
     val makeupDayCount: Int = 0,
 
     /**
-     * 内置的浙大官方校历，**只读**，仅供校历弹层单独显示。
+     * 官方校历，**只读**，仅供校历弹层单独显示。
      *
      * 与上面那份 [semester] / [noClassDays] / [makeupDays] 是两件事：
      * 那是用户自己的（可能改过、可能不是浙大），这是官方的（谁都没改过）。
      * 弹层里分两块摆，不混。
+     *
+     * 它自己带着 [com.example.data.source.zju.ZjuPresetSemester.origin]，
+     * 界面上把来源显示出来 —— 用户凭什么相信这一块，唯一的依据就是这个。
      */
     val zjuPreset: com.example.data.source.zju.ZjuPresetSemester? = null,
     val isZjuPresetLoading: Boolean = false,
+
+    /**
+     * 这份官方配置里**所有**的学年学期，供弹层顶部切换。
+     *
+     * 加新学期之后用户要有个办法把它切过去 —— 只按当前学期自动选一的话，
+     * 新加的那一期永远不会被摆出来，看着像「检查更新没生效」。
+     */
+    val zjuAvailableTerms: List<com.example.data.codec.AcademicTerm> = emptyList(),
+
+    /** 「检查更新」在跑。与结果必须落在**同一次 update** 里（见 MainViewModel）。 */
+    val isCheckingCalendarUpdate: Boolean = false,
+    /**
+     * 刚从远程拉到、**还没应用**的新版官方校历。
+     *
+     * 非 null 时弹层顶部出现「发现新版」+「查看差异」。
+     * 它与 [zjuPreset] 分开存：拉到新版只更新缓存，**不碰用户正在用的校历**。
+     */
+    val pendingPreset: com.example.data.source.zju.ZjuPresetSemester? = null,
+    /** 应用 [pendingPreset] 会造成的差异。null = 没在预览。 */
+    val calendarDiff: com.example.data.calendar.CalendarDiff? = null,
+    val isCalendarDiffOpen: Boolean = false,
 
     // Filter & Presentation options
     val searchQuery: String = "",
@@ -146,10 +169,9 @@ data class MainUiState(
     /**
      * 默认落在「待完成」。
      *
-     * 「全部」里一半以上是已经做完的旧待办，默认全量等于每次打开都先扫一遍噪音；
-     * 真要看已完成，点一下 chip 就行。
+     * 去掉「全部」入口；「已完成」「待完成」同时选中语义等同「全部」。
      */
-    val statusFilter: TaskStatusFilter = TaskStatusFilter.PENDING,
+    val statusFilters: Set<TaskStatusFilter> = setOf(TaskStatusFilter.PENDING),
     val selectedScheduleDay: Int = 1, // 1 = Monday ... 7 = Sunday
     val scheduleViewMode: ScheduleViewMode = ScheduleViewMode.WEEK_GRID,
 
@@ -187,6 +209,9 @@ data class MainUiState(
     // 课表导入 / 导出
     val isTransferDialogOpen: Boolean = false,
     val importStrategy: ImportStrategy = ImportStrategy.MERGE,
+
+    // 待办分类管理
+    val isTaskCategoryManageDialogOpen: Boolean = false,
 
     // 「ZJU」导入源
     /** 导入来源分段：本地文件 or 直接登录浙大教务网。 */

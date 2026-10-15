@@ -92,6 +92,7 @@ import com.example.ui.components.DeleteTaskTypeConfirmDialog
 import com.example.ui.components.NewTaskTypeDialog
 import com.example.ui.components.QuickGenerateDialog
 import com.example.ui.components.ScheduleTransferDialog
+import com.example.ui.components.TaskCategoryManageDialog
 import com.example.ui.components.TaskDetailSheet
 import com.example.ui.components.TaskEditDialog
 import com.example.ui.components.TaskRulesDialog
@@ -487,7 +488,10 @@ fun MainApp(viewModel: MainViewModel) {
         modifier = Modifier.fillMaxSize(),
         // 不铺不透明底，让 Mesh Gradient 露出来
         containerColor = Color.Transparent,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        // 刻意**不**在这里挂 snackbarHost：这一层之下还有满屏的同窗口 overlay
+        // （抽屉、各类弹层），Scaffold 里的 SnackbarHost 会被它们整个盖住。
+        // 表现是「点保存 / 点检查更新，一点反应都没有」——提示确实弹了，只是没人看见。
+        // 真正的主机挪到了 MainApp 最末尾，和所有弹层同一层的 Box 里，见文件末尾。
         topBar = {
             TopBarStrip(
                 termName = termName,
@@ -590,7 +594,7 @@ fun MainApp(viewModel: MainViewModel) {
                                     onOpenNewTypeDialog = { viewModel.openNewTaskTypeDialog() },
                                     onConfirmDeleteType = { viewModel.confirmDeleteTaskType(it) },
                                     onSelectGroupingMode = { viewModel.setGroupingMode(it) },
-                                    onSelectStatusFilter = { viewModel.setStatusFilter(it) },
+                                    onToggleStatusFilter = { viewModel.toggleStatusFilter(it) },
                                     onToggleTaskComplete = { viewModel.toggleTaskComplete(it) },
                                     onToggleTaskStar = { viewModel.toggleTaskStar(it) },
                                     onInspectTask = { viewModel.inspectTask(it) }
@@ -601,6 +605,7 @@ fun MainApp(viewModel: MainViewModel) {
                                 SettingsScreen(
                                     state = state,
                                     onOpenTransferDialog = { viewModel.openTransferDialog() },
+                                    onOpenCategoryManageDialog = { viewModel.openTaskCategoryManageDialog() },
                                     onResetDemoData = { viewModel.resetDemoData() }
                                 )
                             }
@@ -688,221 +693,258 @@ fun MainApp(viewModel: MainViewModel) {
         }
     }
 
-    // Inspect Course Linkage Sheet (课表课程详情与关联待办弹层：待办详情与编辑弹层置于其上层)
-    state.inspectingCourse?.let { courseWithSlots ->
-        val linkedTasks = state.tasks.filter { it.courseId == courseWithSlots.course.id }
-        CourseLinkageSheet(
-            courseWithSlots = courseWithSlots,
-            linkedTasks = linkedTasks,
-            customTypes = state.customTaskTypes,
-            periodTable = state.periodTable,
-            slotWeeks = state.slotWeeks,
-            totalWeeks = state.totalWeeks,
-            onDismiss = { viewModel.inspectCourse(null) },
-            onToggleTaskComplete = { viewModel.toggleTaskComplete(it) },
-            onInspectTask = { viewModel.inspectTask(it) },
-            onAddNewTaskForCourse = {
-                val cId = courseWithSlots.course.id
-                viewModel.inspectCourse(null)
-                viewModel.openAddTaskDialog(cId)
-            },
-            onEditCourse = {
-                viewModel.inspectCourse(null)
-                viewModel.openEditCourseDialog(courseWithSlots)
-            },
-            onDeleteCourse = {
-                // 只开确认弹层，不在这一层就删：课程详情弹层留在这儿当背景，
-                // 用户点「取消」还能回到这门课的关联待办接着看。
-                viewModel.confirmDeleteCourse(courseWithSlots)
+    // 所有同窗口 overlay 与 SnackbarHost 放在同一个 Box 里，SnackbarHost 排在最后：
+    // 同窗口 overlay 是靠**绘制顺序**决定谁压谁，而不是靠 zIndex。
+    // SnackbarHost 留在 Scaffold 里的话会被上面每一层满屏 overlay 整个盖住，
+    // 于是所有「在弹层里点的按钮」的结果提示都看不见 —— 保存、检查更新、删除课程全是。
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Inspect Course Linkage Sheet (课表课程详情与关联待办弹层：待办详情与编辑弹层置于其上层)
+        state.inspectingCourse?.let { courseWithSlots ->
+            val linkedTasks = state.tasks.filter { it.courseId == courseWithSlots.course.id }
+            CourseLinkageSheet(
+                courseWithSlots = courseWithSlots,
+                linkedTasks = linkedTasks,
+                customTypes = state.customTaskTypes,
+                periodTable = state.periodTable,
+                slotWeeks = state.slotWeeks,
+                totalWeeks = state.totalWeeks,
+                onDismiss = { viewModel.inspectCourse(null) },
+                onToggleTaskComplete = { viewModel.toggleTaskComplete(it) },
+                onToggleTaskStar = { viewModel.toggleTaskStar(it) },
+                onInspectTask = { viewModel.inspectTask(it) },
+                onAddNewTaskForCourse = {
+                    val cId = courseWithSlots.course.id
+                    viewModel.inspectCourse(null)
+                    viewModel.openAddTaskDialog(cId)
+                },
+                onEditCourse = {
+                    viewModel.inspectCourse(null)
+                    viewModel.openEditCourseDialog(courseWithSlots)
+                },
+                onDeleteCourse = {
+                    // 只开确认弹层，不在这一层就删：课程详情弹层留在这儿当背景，
+                    // 用户点「取消」还能回到这门课的关联待办接着看。
+                    viewModel.confirmDeleteCourse(courseWithSlots)
+                }
+            )
+        }
+
+        // 删除课程的二次确认。位置在课程详情弹层**之后**：兄弟节点里排得靠后的画在上面，
+        // 所以它同时压在课程详情弹层和（更早绘制的）更多抽屉之上，两个入口共用这一份。
+        state.deletingCourse?.let { course ->
+            DeleteCourseConfirmDialog(
+                courseName = course.course.name,
+                slotCount = course.slots.size,
+                // 待办数在这里数而不是存进状态：它是这一刻界面上已有的数据，
+                // 存一份进 state 就多一个会和真实待办漂移的副本。
+                linkedTaskCount = state.tasks.count { it.courseId == course.course.id },
+                onDismiss = { viewModel.cancelDeleteCourse() },
+                onConfirm = { viewModel.deleteCourse(course.course.id, course.course.name) }
+            )
+        }
+
+        // 单条待办详情弹层：卡片上点一下进来，编辑/删除都在这里
+        state.inspectingTask?.let { inspectingTask ->
+            val currentTask = state.tasks.find { it.id == inspectingTask.id } ?: inspectingTask
+            TaskDetailSheet(
+                task = currentTask,
+                customTypes = state.customTaskTypes,
+                onDismiss = { viewModel.closeTaskSheet() },
+                onEdit = { viewModel.editTaskFromSheet(currentTask) },
+                // 删完就把弹层收掉，否则它会停在一个已经不存在的待办上
+                onDelete = {
+                    viewModel.closeTaskSheet()
+                    viewModel.deleteTask(currentTask)
+                }
+            )
+        }
+
+        // Task Edit/Add Dialog
+        if (state.isAddTaskDialogOpen) {
+            TaskEditDialog(
+                initialTask = state.editingTask,
+                courses = state.courses,
+                customTypes = state.customTaskTypes,
+                preselectedCourseId = state.preselectedCourseIdForNewTask,
+                onDismiss = { viewModel.closeTaskDialog() },
+                onCreateTaskType = { viewModel.openNewTaskTypeDialog() },
+                onSave = { viewModel.saveTask(it) }
+            )
+        }
+
+        // 新建待办类型。放在编辑弹层**之上**：类型是在「给一条待办选类型」的
+        // 过程中被意识到缺的，所以建完必须能直接回到那一步，不该把编辑弹层一起关掉。
+        if (state.isNewTaskTypeDialogOpen) {
+            NewTaskTypeDialog(
+                onDismiss = { viewModel.closeNewTaskTypeDialog() },
+                onCreate = { label, paletteIndex -> viewModel.createTaskType(label, paletteIndex) }
+            )
+        }
+
+        if (state.isTaskCategoryManageDialogOpen) {
+            TaskCategoryManageDialog(
+                customTypes = state.customTaskTypes,
+                tasks = state.tasks,
+                onDismiss = { viewModel.closeTaskCategoryManageDialog() },
+                onDeleteCustomType = { viewModel.confirmDeleteTaskType(it) },
+                onOpenNewTypeDialog = { viewModel.openNewTaskTypeDialog() }
+            )
+        }
+
+        state.deletingTaskType?.let { type ->
+            val taskCount = remember(state.tasks, type.key) {
+                state.tasks.count { it.taskType == type.key }
             }
-        )
-    }
+            DeleteTaskTypeConfirmDialog(
+                typeLabel = type.label,
+                taskCount = taskCount,
+                onDismiss = { viewModel.cancelDeleteTaskType() },
+                onConfirm = { viewModel.deleteTaskType(type) }
+            )
+        }
 
-    // 删除课程的二次确认。位置在课程详情弹层**之后**：兄弟节点里排得靠后的画在上面，
-    // 所以它同时压在课程详情弹层和（更早绘制的）更多抽屉之上，两个入口共用这一份。
-    state.deletingCourse?.let { course ->
-        DeleteCourseConfirmDialog(
-            courseName = course.course.name,
-            slotCount = course.slots.size,
-            // 待办数在这里数而不是存进状态：它是这一刻界面上已有的数据，
-            // 存一份进 state 就多一个会和真实待办漂移的副本。
-            linkedTaskCount = state.tasks.count { it.courseId == course.course.id },
-            onDismiss = { viewModel.cancelDeleteCourse() },
-            onConfirm = { viewModel.deleteCourse(course.course.id, course.course.name) }
-        )
-    }
+        // Course Edit/Add Dialog (supports multi-slot, data-driven periods and week sets)
+        if (state.isAddCourseDialogOpen) {
+            CourseEditDialog(
+                initialCourseWithSlots = state.editingCourseWithSlots,
+                periodTable = state.periodTable,
+                initialSlotWeeks = state.editingCourseWithSlots?.slots
+                    ?.associate { it.id to (state.slotWeeks[it.id] ?: emptySet()) }
+                    ?: emptyMap(),
+                totalWeeks = state.totalWeeks,
+                onDismiss = { viewModel.closeCourseDialog() },
+                onSave = { course, slots -> viewModel.saveCourseWithSlots(course, slots) }
+            )
+        }
 
-    // 单条待办详情弹层：卡片上点一下进来，编辑/删除都在这里
-    state.inspectingTask?.let { inspectingTask ->
-        val currentTask = state.tasks.find { it.id == inspectingTask.id } ?: inspectingTask
-        TaskDetailSheet(
-            task = currentTask,
-            customTypes = state.customTaskTypes,
-            onDismiss = { viewModel.closeTaskSheet() },
-            onEdit = { viewModel.editTaskFromSheet(currentTask) },
-            // 删完就把弹层收掉，否则它会停在一个已经不存在的待办上
-            onDelete = {
-                viewModel.closeTaskSheet()
-                viewModel.deleteTask(currentTask)
-            }
-        )
-    }
+        // 课表导入 / 导出
+        if (state.isTransferDialogOpen) {
+            val contentResolver = LocalContext.current.contentResolver
+            ScheduleTransferDialog(
+                strategy = state.importStrategy,
+                importSource = state.importSource,
+                zjuTermOptions = state.zjuTermOptions,
+                zjuError = state.zjuError,
+                isZjuRunning = state.isZjuImportRunning,
+                onSourceChange = { source ->
+                    viewModel.setImportSource(source)
+                    if (source == ImportSource.ZJU) viewModel.loadZjuTerms()
+                },
+                onZjuImport = { id, pwd, option, remember -> viewModel.importFromZju(id, pwd, option, remember) },
+                preview = state.importPreview,
+                issues = state.importIssues,
+                errorMessage = state.importError,
+                isBusy = state.isImporting,
+                report = state.importReport,
+                onStrategyChange = { viewModel.setImportStrategy(it) },
+                onExport = { uri -> viewModel.exportSchedule(uri, contentResolver) },
+                onImportUri = { uri -> viewModel.importFromUri(uri, contentResolver) },
+                onCommit = { viewModel.commitImport() },
+                onDismissReport = { viewModel.dismissImportReport() },
+                onDismiss = { viewModel.closeTransferDialog() }
+            )
+        }
 
-    // Task Edit/Add Dialog
-    if (state.isAddTaskDialogOpen) {
-        TaskEditDialog(
-            initialTask = state.editingTask,
-            courses = state.courses,
-            customTypes = state.customTaskTypes,
-            preselectedCourseId = state.preselectedCourseIdForNewTask,
-            onDismiss = { viewModel.closeTaskDialog() },
-            onCreateTaskType = { viewModel.openNewTaskTypeDialog() },
-            onSave = { viewModel.saveTask(it) }
-        )
-    }
+        // 教务网账户与云端同步弹层
+        if (state.isCloudAccountDialogOpen) {
+            CloudAccountDialog(
+                boundStudentId = state.boundStudentId,
+                isRememberCredentials = state.isRememberCredentials,
+                lastSyncTimestamp = state.lastSyncTimestamp,
+                lastSyncAttemptTime = state.lastSyncAttemptTime,
+                lastSyncFailureKind = state.lastSyncFailureKind,
+                isDemoMode = state.isDemoMode,
+                isSyncing = state.isSyncing,
+                zjuTermOptions = state.zjuTermOptions,
+                syncFailure = state.syncFailure,
+                errorMessage = state.zjuError,
+                onLoadTerms = { viewModel.loadZjuTerms() },
+                onSyncWithCredentials = { id, pass, option, remember ->
+                    viewModel.syncFromCloud(id, pass, option, remember)
+                },
+                onQuickSync = { viewModel.syncWithSavedCredentials() },
+                onClearAccount = { viewModel.clearSavedAccount() },
+                onDismiss = { viewModel.closeCloudAccountDialog() }
+            )
+        }
 
-    // 新建待办类型。放在编辑弹层**之上**：类型是在「给一条待办选类型」的
-    // 过程中被意识到缺的，所以建完必须能直接回到那一步，不该把编辑弹层一起关掉。
-    if (state.isNewTaskTypeDialogOpen) {
-        NewTaskTypeDialog(
-            onDismiss = { viewModel.closeNewTaskTypeDialog() },
-            onCreate = { label, paletteIndex -> viewModel.createTaskType(label, paletteIndex) }
-        )
-    }
+        // 本学期校历
+        if (state.isAcademicCalendarDialogOpen) {
+            AcademicCalendarDialog(
+                semester = state.semester,
+                periodTable = state.periodTable,
+                existingNoClass = state.noClassDays,
+                existingMakeup = state.makeupDays,
+                // 官方那份与用户自己那份分两块摆，所以这两项与 semester 无关、各自独立。
+                preset = state.zjuPreset,
+                isPresetLoading = state.isZjuPresetLoading,
+                isCheckingUpdate = state.isCheckingCalendarUpdate,
+                pendingPreset = state.pendingPreset,
+                availableTerms = state.zjuAvailableTerms,
+                onPreviewTerm = { term -> viewModel.previewZjuTerm(term) },
+                calendarDiff = state.calendarDiff,
+                isDiffOpen = state.isCalendarDiffOpen,
+                onCheckUpdate = { viewModel.checkCalendarUpdate() },
+                onPreviewDiff = { viewModel.previewPendingPreset() },
+                onDismissDiff = { viewModel.dismissCalendarDiff() },
+                onConfirmApply = { viewModel.confirmApplyPreset() },
+                onSave = { sem, periods, noClass, makeup ->
+                    viewModel.saveAcademicCalendar(sem, periods, noClass, makeup)
+                },
+                onDismiss = { viewModel.closeAcademicCalendarDialog() }
+            )
+        }
 
-    state.deletingTaskType?.let { type ->
-        DeleteTaskTypeConfirmDialog(
-            typeLabel = type.label,
-            onDismiss = { viewModel.cancelDeleteTaskType() },
-            onConfirm = { viewModel.deleteTaskType(type) }
-        )
-    }
+        // Quick Generate Dialog
+        if (state.isQuickGenerateDialogOpen) {
+            QuickGenerateDialog(
+                candidateTasks = state.candidateTasksForPreview,
+                week = state.selectedWeek,
+                customTypes = state.customTaskTypes,
+                onDismiss = { viewModel.closeQuickGenerateDialog() },
+                onConfirm = { viewModel.confirmGenerateTasks(it) }
+            )
+        }
 
-    // Course Edit/Add Dialog (supports multi-slot, data-driven periods and week sets)
-    if (state.isAddCourseDialogOpen) {
-        CourseEditDialog(
-            initialCourseWithSlots = state.editingCourseWithSlots,
-            periodTable = state.periodTable,
-            initialSlotWeeks = state.editingCourseWithSlots?.slots
-                ?.associate { it.id to (state.slotWeeks[it.id] ?: emptySet()) }
-                ?: emptyMap(),
-            totalWeeks = state.totalWeeks,
-            onDismiss = { viewModel.closeCourseDialog() },
-            onSave = { course, slots -> viewModel.saveCourseWithSlots(course, slots) }
-        )
-    }
+        // Category Rules Configuration Dialog
+        if (state.isCategoryRulesDialogOpen) {
+            CategoryRulesDialog(
+                rules = state.categoryRules,
+                // 批量设置的波及范围要显式告诉用户：改的不是这一行，而是这一类下的每一门课。
+                courseCountByCategory = state.courses.groupingBy { it.category }.eachCount(),
+                onDismiss = { viewModel.closeCategoryRulesDialog() },
+                onApply = { viewModel.applyCategoryRules(it) }
+            )
+        }
 
-    // 课表导入 / 导出
-    if (state.isTransferDialogOpen) {
-        val contentResolver = LocalContext.current.contentResolver
-        ScheduleTransferDialog(
-            strategy = state.importStrategy,
-            importSource = state.importSource,
-            zjuTermOptions = state.zjuTermOptions,
-            zjuError = state.zjuError,
-            isZjuRunning = state.isZjuImportRunning,
-            onSourceChange = { source ->
-                viewModel.setImportSource(source)
-                if (source == ImportSource.ZJU) viewModel.loadZjuTerms()
-            },
-            onZjuImport = { id, pwd, option, remember -> viewModel.importFromZju(id, pwd, option, remember) },
-            preview = state.importPreview,
-            issues = state.importIssues,
-            errorMessage = state.importError,
-            isBusy = state.isImporting,
-            report = state.importReport,
-            onStrategyChange = { viewModel.setImportStrategy(it) },
-            onExport = { uri -> viewModel.exportSchedule(uri, contentResolver) },
-            onImportUri = { uri -> viewModel.importFromUri(uri, contentResolver) },
-            onCommit = { viewModel.commitImport() },
-            onDismissReport = { viewModel.dismissImportReport() },
-            onDismiss = { viewModel.closeTransferDialog() }
-        )
-    }
+        // 课程 × 类型的生成规则
+        if (state.isTaskRulesDialogOpen) {
+            TaskRulesDialog(
+                courses = state.courses,
+                taskRules = state.taskRules,
+                onDismiss = { viewModel.closeTaskRulesDialog() },
+                onSaveRule = { courseId, type, spec ->
+                    viewModel.saveTaskRule(courseId, type, spec)
+                },
+                onToggleEnabled = { courseId, type, enabled ->
+                    viewModel.setCourseTaskEnabled(courseId, type, enabled)
+                }
+            )
+        }
 
-    // 教务网账户与云端同步弹层
-    if (state.isCloudAccountDialogOpen) {
-        CloudAccountDialog(
-            boundStudentId = state.boundStudentId,
-            isRememberCredentials = state.isRememberCredentials,
-            lastSyncTimestamp = state.lastSyncTimestamp,
-            lastSyncAttemptTime = state.lastSyncAttemptTime,
-            lastSyncFailureKind = state.lastSyncFailureKind,
-            isDemoMode = state.isDemoMode,
-            isSyncing = state.isSyncing,
-            zjuTermOptions = state.zjuTermOptions,
-            syncFailure = state.syncFailure,
-            errorMessage = state.zjuError,
-            onLoadTerms = { viewModel.loadZjuTerms() },
-            onSyncWithCredentials = { id, pass, option, remember ->
-                viewModel.syncFromCloud(id, pass, option, remember)
-            },
-            onQuickSync = { viewModel.syncWithSavedCredentials() },
-            onClearAccount = { viewModel.clearSavedAccount() },
-            onDismiss = { viewModel.closeCloudAccountDialog() }
-        )
-    }
+        // Week Picker Dialog
+        if (state.isWeekPickerDialogOpen) {
+            WeekPickerDialog(
+                currentWeek = state.currentWeek,
+                onDismiss = { viewModel.closeWeekPicker() },
+                onSelectWeek = { viewModel.selectWeek(it) }
+            )
+        }
 
-    // 本学期校历
-    if (state.isAcademicCalendarDialogOpen) {
-        AcademicCalendarDialog(
-            semester = state.semester,
-            periodTable = state.periodTable,
-            existingNoClass = state.noClassDays,
-            existingMakeup = state.makeupDays,
-            // 官方那份与用户自己那份分两块摆，所以这两项与 semester 无关、各自独立。
-            preset = state.zjuPreset,
-            isPresetLoading = state.isZjuPresetLoading,
-            onSave = { sem, periods, noClass, makeup ->
-                viewModel.saveAcademicCalendar(sem, periods, noClass, makeup)
-            },
-            onDismiss = { viewModel.closeAcademicCalendarDialog() }
-        )
-    }
-
-    // Quick Generate Dialog
-    if (state.isQuickGenerateDialogOpen) {
-        QuickGenerateDialog(
-            candidateTasks = state.candidateTasksForPreview,
-            week = state.selectedWeek,
-            customTypes = state.customTaskTypes,
-            onDismiss = { viewModel.closeQuickGenerateDialog() },
-            onConfirm = { viewModel.confirmGenerateTasks(it) }
-        )
-    }
-
-    // Category Rules Configuration Dialog
-    if (state.isCategoryRulesDialogOpen) {
-        CategoryRulesDialog(
-            rules = state.categoryRules,
-            // 批量设置的波及范围要显式告诉用户：改的不是这一行，而是这一类下的每一门课。
-            courseCountByCategory = state.courses.groupingBy { it.category }.eachCount(),
-            onDismiss = { viewModel.closeCategoryRulesDialog() },
-            onApply = { viewModel.applyCategoryRules(it) }
-        )
-    }
-
-    // 课程 × 类型的生成规则
-    if (state.isTaskRulesDialogOpen) {
-        TaskRulesDialog(
-            courses = state.courses,
-            taskRules = state.taskRules,
-            onDismiss = { viewModel.closeTaskRulesDialog() },
-            onSaveRule = { courseId, type, spec ->
-                viewModel.saveTaskRule(courseId, type, spec)
-            },
-            onToggleEnabled = { courseId, type, enabled ->
-                viewModel.setCourseTaskEnabled(courseId, type, enabled)
-            }
-        )
-    }
-
-    // Week Picker Dialog
-    if (state.isWeekPickerDialogOpen) {
-        WeekPickerDialog(
-            currentWeek = state.currentWeek,
-            onDismiss = { viewModel.closeWeekPicker() },
-            onSelectWeek = { viewModel.selectWeek(it) }
+        // 贴底 + 让开导航栏，和它在 Scaffold 里时占的位置一致。
+        SnackbarHost(
+            snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
         )
     }
 }

@@ -131,12 +131,13 @@ fun TaskStarToggle(
     isStarred: Boolean,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
-    size: Dp = 24.dp
+    size: Dp = 24.dp,
+    unstarredColor: Color = Color.White
 ) {
     Icon(
         imageVector = if (isStarred) Icons.Rounded.Star else Icons.Outlined.Star,
         contentDescription = if (isStarred) "取消星标" else "标星",
-        tint = if (isStarred) StarInk else Color.White,
+        tint = if (isStarred) StarInk else unstarredColor,
         modifier = modifier
             .size(size)
             .clickable { onToggle() }

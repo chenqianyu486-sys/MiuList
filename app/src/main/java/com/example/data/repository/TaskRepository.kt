@@ -50,4 +50,8 @@ class TaskRepository(private val taskDao: TaskDao) {
      */
     suspend fun hasWeekTask(courseId: Long, taskTypeName: String, week: Int, dayOfWeek: Int): Boolean =
         taskDao.findExistingWeekTask(courseId, taskTypeName, week, dayOfWeek) != null
+
+    suspend fun deleteTasksByType(taskType: String): Int = taskDao.deleteTasksByType(taskType)
+
+    suspend fun countTasksByType(taskType: String): Int = taskDao.countTasksByType(taskType)
 }

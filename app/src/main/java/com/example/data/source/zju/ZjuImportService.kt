@@ -1,5 +1,9 @@
-package com.example.data.source.zju
+﻿package com.example.data.source.zju
 
+import com.example.data.calendar.CalendarCache
+import com.example.data.calendar.CalendarOrigin
+import com.example.data.codec.AcademicTerm
+import com.example.data.codec.CalendarBundle
 import com.example.data.codec.JsonScheduleCodec
 import com.example.data.codec.ScheduleBundle
 import com.example.data.codec.TermRefBundle
@@ -28,7 +32,22 @@ import com.squareup.moshi.JsonClass
  */
 open class ZjuImportService(
     private val cas: ZjuCasClient = ZjuCasClient(),
-    private val calendarSource: ZjuCalendarSource = ZjuCalendarSource()
+    private val calendarSource: ZjuCalendarSource = ZjuCalendarSource(),
+    /**
+     * 校历的**三层来源**（远程 → 缓存 → 内置）。
+     *
+     * 单独注入而不是自己造一个：取哪一份的决策只该有一处，而弹层那边读的是
+     * 同一个服务 —— 这正是原来两条链路分叉的地方（弹层只读内置、导入才联网），
+     * 于是界面上显示的官方校历和真正落库的那份可以不是同一份。
+     *
+     * 默认值是**明确不缓存**的降级配置（远程 → 内置两层），单测与「只想读一次」
+     * 的场景用它。图省事在生产代码里省略这个参数，会悄悄让用户每次开 App 都
+     * 重新拉一次、断网时只剩内置那份 —— 真正的缓存走 AppContainer 注入。
+     */
+    private val calendarUpdates: CalendarUpdateService = CalendarUpdateService(
+        source = calendarSource,
+        cache = CalendarCache(null)
+    )
 ) {
 
     /** 学期下拉里的一项。 */
@@ -54,7 +73,7 @@ open class ZjuImportService(
      * 而浙大嘴里的学期本来就是那 16 周。
      */
     suspend fun availableTerms(): List<TermOption> = withContext(Dispatchers.IO) {
-        val configs = calendarSource.fetch().termConfigs
+        val configs = calendarUpdates.loadForImport().termConfigs
         configs.mapNotNull { tc ->
             val year = tc.year?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
             val term = tc.term ?: return@mapNotNull null
@@ -78,7 +97,10 @@ open class ZjuImportService(
         option: TermOption
     ): String = withContext(Dispatchers.IO) {
         // 1. 公共校历（人人相同，也决定单双周要展开到第几周）
-        val fullCalendar = calendarSource.fetch()
+        //    走三层来源，**不联网**：校历换没换是用户在「本学期校历」里决定的，
+        //    把这里也联网会让一次同步因为校历源不通而整条失败。
+        //    用户点过「检查更新」的话，缓存里已经是最新那份。
+        val fullCalendar = calendarUpdates.loadForImport()
         val academic = fullCalendar.termConfigs.academicTermOf(option.year, option.term)
             ?: throw ZjuException("这份配置里没有 ${option.label}，换一期试试", ZjuFailureKind.TERM)
 
@@ -142,10 +164,36 @@ private fun rowIdentity(row: ZjuClassRow): List<String?> =
         listOf(row.kcb, row.xqj?.toString(), row.djj?.toString(), row.skcd?.toString(), row.dsz, row.xxq)
 
     /**
-     * 取**内置**那份官方校历，供「本学期校历」弹层单独显示。**不联网。**
+     * 用户当前所在的那一学期，用来决定弹层摆哪一份。
      *
-     * @param preferYearSpan 当前自定义学期的学年；内置里有这一期就显示它，
-     *   没有就给最新的一期（让用户看得见「官方现在是哪一期」）。
+     * **两个字段都要，不能只有学年。**
+     *
+     * 一个学年有 16 周的学期**两个**（秋冬 / 春夏），而两者的 `yearSpan` 一样
+     * 都是 `2026-2027`。只按学年选的话，用户明明在用春夏，弹层却永远摆秋冬 ——
+     * 点「应用」就把正在用的学期整个换成了另一个，而且界面上看不出任何异样。
+     * 这正是「加新学期」时会踩的坑。
+     *
+     * @param season `秋冬` / `春夏`；短学期（`AcademicTerm.season` 为 null）传 null，
+     *   此时退回只按学年匹配。
+     */
+    data class PreferredTerm(val yearSpan: String, val season: String?)
+
+    /**
+     * 把一份校历 Bundle 折成弹层要显示的 [ZjuPresetSemester]。
+     *
+     * **读哪一份由调用方决定**（`bundle` 参数），这里只管折算。
+     * 这正是原来两条链路分叉的地方：老签名自己 `parseBundled()` 读内置，
+     * 于是弹层显示的那份与导入时真正用的那份可以不是同一份，而两边都"看起来对"。
+     *
+     * @param prefer 当前正在用的学期；null 或配置里没有这一期，就给**最新**的一期
+     *   （让用户看得见「官方现在是哪一期」，而不是干等下一次学年）。
+     * @param origin 这份 bundle 的来源，透传给界面显示。
+     *
+     * ## 选哪一期的顺序
+     *
+     * 学年 + 季节都对上 → 同学年的另一季 → 最新的一期。
+     * 三级而不是一级，是因为配置里可能只有半截学期（[AcademicTerm.season] 为 null），
+     * 那时季节对不上是正常的，不该因此什么都选不到。
      *
      * ## 为什么走一遍 [ScheduleBundleValidator]
      *
@@ -154,9 +202,12 @@ private fun rowIdentity(row: ZjuClassRow): List<String?> =
      * 一导入变成 7 天，而两边都「看起来对」。
      * 所以这里复用校验期那一份，界面上看到的就是导入会写下的。
      */
-    suspend fun bundledPreset(preferYearSpan: String?): ZjuPresetSemester? =
+    suspend fun presetFrom(
+        bundle: CalendarBundle,
+        prefer: PreferredTerm?,
+        origin: CalendarOrigin
+    ): ZjuPresetSemester? =
         withContext(Dispatchers.IO) {
-            val bundle = calendarSource.parseBundled() ?: return@withContext null
             val configs = bundle.termConfigs
 
             // 每一半都能折出一个学年学期；按「学年 + 季节」去重后就是可选的学期列表
@@ -167,8 +218,12 @@ private fun rowIdentity(row: ZjuClassRow): List<String?> =
                     configs.academicTermOf(year, term)
                 }
                 .distinctBy { it.yearSpan to it.season }
-            val academic = candidates.firstOrNull { it.yearSpan == preferYearSpan }
-                ?: candidates.maxByOrNull { it.startEpochDay }
+
+            val academic = candidates.firstOrNull {
+                prefer != null && it.yearSpan == prefer.yearSpan && it.season == prefer.season
+            } ?: candidates.firstOrNull {
+                prefer != null && it.yearSpan == prefer.yearSpan
+            } ?: candidates.maxByOrNull { it.startEpochDay }
                 ?: return@withContext null
 
             val termRef = TermRefBundle(academic.yearSpan, academic.queryTerm)
@@ -188,11 +243,29 @@ private fun rowIdentity(row: ZjuClassRow): List<String?> =
                 totalWeeks = s.totalWeeks,
                 noClassDays = valid.bundle.noClassDays.sortedBy { it.epochDay },
                 makeupDays = valid.bundle.makeupDays.sortedBy { it.epochDay },
-                // 上游写的是 `20260917` 这样的整数，这里转成人读的日期再交给界面，
-                // 否则弹层上会直接印一串「内置于 20260917」。
-                updatedOn = bundle.lastUpdated?.let { "%04d-%02d-%02d".format(it / 10000, it / 100 % 100, it % 100) }
+                origin = origin,
+                lastUpdated = bundle.lastUpdated
             )
         }
+
+    /**
+     * 这份配置里**有哪些**学年学期，按开始时间从早到晚。
+     *
+     * 弹层顶部用它在「秋冬 / 春夏 / 新学年」之间切换 —— 加了新学期之后，
+     * 用户得有个办法把它切过去；只按当前学期自动选一的话，
+     * 新加的那一期永远不会被摆出来，用户会以为「检查更新没生效」。
+     */
+    suspend fun academicTermsIn(bundle: CalendarBundle): List<AcademicTerm> {
+        val configs = bundle.termConfigs
+        return configs
+            .mapNotNull { tc ->
+                val year = tc.year?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val term = tc.term ?: return@mapNotNull null
+                configs.academicTermOf(year, term)
+            }
+            .distinctBy { it.yearSpan to it.season }
+            .sortedBy { it.startEpochDay }
+    }
 
     /**
      * 解 zdbk 课表接口的响应。

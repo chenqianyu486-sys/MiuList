@@ -65,7 +65,19 @@ class TaskTypeRepository(
         return Result.success(id)
     }
 
-    suspend fun delete(id: String) = dao.deleteById(id)
+    /**
+     * 删掉一个自定义类型，并在同一个事务中同时删除该分类下的所有待办。
+     *
+     * 返回被删除的待办条数。
+     */
+    suspend fun delete(id: String): Int {
+        val taskTypeKey = "CUSTOM:$id"
+        return db.withTransaction {
+            val deletedCount = db.taskDao().deleteTasksByType(taskTypeKey)
+            dao.deleteById(id)
+            deletedCount
+        }
+    }
 
     private fun CustomTaskTypeEntity.toModel() = CustomTaskType(
         id = id,

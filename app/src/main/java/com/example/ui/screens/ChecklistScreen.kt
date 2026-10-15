@@ -428,7 +428,7 @@ fun ChecklistScreen(
     onOpenNewTypeDialog: () -> Unit,
     onConfirmDeleteType: (CustomTaskType) -> Unit,
     onSelectGroupingMode: (TaskGroupingMode) -> Unit,
-    onSelectStatusFilter: (TaskStatusFilter) -> Unit,
+    onToggleStatusFilter: (TaskStatusFilter) -> Unit,
     onToggleTaskComplete: (TaskEntity) -> Unit,
     onToggleTaskStar: (TaskEntity) -> Unit,
     onInspectTask: (TaskEntity) -> Unit,
@@ -440,7 +440,7 @@ fun ChecklistScreen(
         state.tasks,
         state.searchQuery,
         state.selectedTaskTypeKey,
-        state.statusFilter
+        state.statusFilters
     ) {
         state.tasks.filter { task ->
             val matchSearch = state.searchQuery.isBlank() ||
@@ -453,10 +453,10 @@ fun ChecklistScreen(
             val matchType = state.selectedTaskTypeKey == null ||
                 task.taskType == state.selectedTaskTypeKey
 
-            val matchStatus = when (state.statusFilter) {
-                TaskStatusFilter.ALL -> true
-                TaskStatusFilter.PENDING -> !task.isCompleted
-                TaskStatusFilter.COMPLETED -> task.isCompleted
+            val matchStatus = if (task.isCompleted) {
+                TaskStatusFilter.COMPLETED in state.statusFilters
+            } else {
+                TaskStatusFilter.PENDING in state.statusFilters
             }
 
             matchSearch && matchType && matchStatus
@@ -547,8 +547,8 @@ fun ChecklistScreen(
             items(TaskStatusFilter.entries) { status ->
                 SelectableChip(
                     label = status.label,
-                    selected = state.statusFilter == status,
-                    onClick = { onSelectStatusFilter(status) },
+                    selected = status in state.statusFilters,
+                    onClick = { onToggleStatusFilter(status) },
                     testTag = "status_filter_${status.name}"
                 )
             }

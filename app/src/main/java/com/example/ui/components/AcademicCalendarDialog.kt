@@ -37,6 +37,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.codec.AcademicTerm
+import com.example.data.calendar.CalendarDiff
 import com.example.data.calendar.EpochDays
 import com.example.data.local.MakeupDayEntity
 import com.example.data.local.NoClassDayEntity
@@ -51,7 +53,7 @@ import com.example.data.timetable.resizePeriodDrafts
 import com.example.data.timetable.toDrafts
 
 /**
- * 本学期校历：**预置的官方校历**与**你自己的校历**分开摆。
+ * 本学期校历：**官方校历**与**你自己的校历**分开摆。
  *
  * 两块之间用一条分隔线隔开，上面那块只读、下面那块可编辑。混在一起显示过一次，
  * 后果是用户在界面上看到一份学期日期却分不清它是官方的还是自己上次敲的，
@@ -59,6 +61,13 @@ import com.example.data.timetable.toDrafts
  *
  * 顶部那行「第 1 周 = X 月 X 日 – X 月 X 日」的换算是刻意做的：
  * 学期起始日填错会让**单双周整体判错且不易察觉**，必须给一个能一眼验的反馈。
+ *
+ * ## 差异确认为什么不是第二个弹层
+ *
+ * [GlassOverlayHost] 是**同窗口 overlay**。在里面再开 M3 `AlertDialog` /
+ * `DatePickerDialog`（独立窗口）会造成"子层看得见但点不动"—— 上层窗口的透明区域
+ * 把下面的都吃掉了触摸事件，不报错、只在真机上出现。
+ * 所以差异预览在**同一个弹层内**展开，并把下面的自定义区收起来。
  */
 @Composable
 fun AcademicCalendarDialog(
@@ -66,9 +75,26 @@ fun AcademicCalendarDialog(
     periodTable: PeriodTable,
     existingNoClass: List<NoClassDayEntity>,
     existingMakeup: List<MakeupDayEntity>,
-    /** 内置的浙大官方校历；null = 这台机器上读不到（弹层会明说，不会假装没有）。 */
+    /** 当前可用的官方校历；null = 三层都读不到（弹层会明说，不会假装没有）。 */
     preset: ZjuPresetSemester?,
     isPresetLoading: Boolean,
+    /** 「检查更新」在跑。 */
+    isCheckingUpdate: Boolean = false,
+    /** 刚拉到、还没应用的新版。非 null 时顶部出现「发现新版」。 */
+    pendingPreset: ZjuPresetSemester? = null,
+    /** 这份官方配置里**所有**可选的学年学期，供弹层顶部切换。 */
+    availableTerms: List<AcademicTerm> = emptyList(),
+    /** 切看别的学期。**只改显示，不写库。** */
+    onPreviewTerm: (AcademicTerm) -> Unit = {},
+    /** 差异预览的内容；null = 没在预览。 */
+    calendarDiff: CalendarDiff? = null,
+    isDiffOpen: Boolean = false,
+    onCheckUpdate: () -> Unit = {},
+    /** 算差异并展开预览。**不写库**。 */
+    onPreviewDiff: () -> Unit = {},
+    onDismissDiff: () -> Unit = {},
+    /** 用户确认后才写库。 */
+    onConfirmApply: () -> Unit = {},
     onSave: (
         SemesterEntity?,
         List<TimetablePeriodEntity>,
@@ -121,20 +147,6 @@ fun AcademicCalendarDialog(
         }
     }
 
-    /** 把预置官方校历填进下面的自定义草稿。**只填草稿，不直接落库** —— 仍要用户点保存。 */
-    fun applyPreset(p: ZjuPresetSemester) {
-        name = p.label
-        startText = EpochDays.format(p.startEpochDay)
-        firstMondayText = EpochDays.format(p.firstMondayEpochDay)
-        endText = EpochDays.format(p.endEpochDay)
-        totalWeeksText = p.totalWeeks.toString()
-        noClassDrafts.clear()
-        noClassDrafts.addAll(p.noClassDays.toDraftRanges())
-        makeupDrafts.clear()
-        makeupDrafts.addAll(p.makeupDays.sortedBy { it.epochDay }.map { it.toDraft() })
-        inputError = null
-    }
-
     // 换算预览：学期起始日 / 首个周一解析不出来时显示提示而不是静默算错
     val startDay = EpochDays.parse(startText)
     val endDay = EpochDays.parse(endText)
@@ -165,8 +177,50 @@ fun AcademicCalendarDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // ================= 预置（官方）· 只读 =================
-                SectionLabel("预置 ZJU 校历")
+                // ================= 官方（只读） =================
+                SectionLabel("官方校历")
+
+                // 学期切换。**只在有得选时才出现** ——
+                // 配置里就一学期时，摆一个只能点出同一个选项的下拉纯属噪音。
+                if (availableTerms.size > 1) {
+                    var termMenuOpen by remember { mutableStateOf(false) }
+                    val selectedIndex = remember(availableTerms, preset) {
+                        availableTerms.indexOfFirst { it.label == preset?.label }.coerceAtLeast(0)
+                    }
+                    Box {
+                        OutlinedButton(
+                            onClick = { termMenuOpen = true },
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text(
+                                text = availableTerms[selectedIndex].label,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("▾", fontSize = 11.sp)
+                        }
+                        DropdownMenu(
+                            expanded = termMenuOpen,
+                            onDismissRequest = { termMenuOpen = false }
+                        ) {
+                            availableTerms.forEachIndexed { index, term ->
+                                DropdownMenuItem(
+                                    text = { Text(term.label, fontSize = 12.sp) },
+                                    onClick = {
+                                        termMenuOpen = false
+                                        // 只切显示。真要落库仍走「应用到本机校历」。
+                                        onPreviewTerm(term)
+                                    },
+                                    trailingIcon = {
+                                        if (index == selectedIndex) Text("当前", fontSize = 10.sp)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
                 when {
                     isPresetLoading -> Text(
                         text = "正在读取…",
@@ -175,9 +229,9 @@ fun AcademicCalendarDialog(
                     )
 
                     preset == null -> Text(
-                        // 说清楚是「读不到」而不是「不存在」：这台机器上没打出那份内置文件，
-                        // 与用户自己的校历无关，底下那块照样能用。
-                        text = "读不到内置的官方校历，下面的自定义内容不受影响",
+                        // 说清楚是「读不到」而不是「不存在」：这台机器上没打出那份数据
+                        // （缓存与内置都没有），与用户自己的校历无关，底下那块照样能用。
+                        text = "读不到官方校历，下面的自定义内容不受影响",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -206,21 +260,65 @@ fun AcademicCalendarDialog(
                             text = buildString {
                                 append("停课 ${p.noClassDays.size} 天")
                                 append(" · 补课 ${p.makeupDays.size} 天")
-                                p.updatedOn?.let { append(" · 内置于 $it") }
+                                // **来源必须显示**：用户凭什么相信这一块，唯一的依据
+                                // 就是它能说清自己读的是远程、缓存还是内置。
+                                append(" · 来源 ${p.originLabel}")
+                                p.versionLabel?.let { append(" · 版本 $it") }
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        OutlinedButton(
-                            onClick = { applyPreset(p) },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp)
-                        ) { Text("填入下面的自定义校历", fontSize = 12.sp) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedButton(
+                                onClick = onCheckUpdate,
+                                enabled = !isCheckingUpdate,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text(
+                                    if (isCheckingUpdate) "检查中…" else "检查更新",
+                                    fontSize = 12.sp
+                                )
+                            }
+                            // 「应用到本机校历」不直接写库：它走差异预览。
+                            // 直接一键全量替换过一次，用户自己敲的停课会被无声抹掉。
+                            Spacer(modifier = Modifier.width(8.dp))
+                            OutlinedButton(
+                                onClick = onPreviewDiff,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp)
+                            ) { Text("应用到本机校历", fontSize = 12.sp) }
+                        }
+
+                        // 拉到新版才出现。**只提示不自动应用** —— 校历一变就悄悄
+                        // 改动用户正在用的学期，这种事不能替用户决定。
+                        pendingPreset?.let { np ->
+                            Text(
+                                text = "发现新版 ${np.versionLabel ?: "（无版本号）"}",
+                                style = MaterialTheme.typography.bodySmall
+                                    .copy(fontWeight = FontWeight.Medium),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            OutlinedButton(
+                                onClick = onPreviewDiff,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp)
+                            ) { Text("查看差异", fontSize = 12.sp) }
+                        }
                     }
                 }
 
                 HorizontalDivider(modifier = Modifier.padding(top = 4.dp, bottom = 2.dp))
 
+                // 差异预览**替换**下面那块自定义区，而不是叠在它上面：
+                // 两块表单同屏会让人分不清改的是哪一份，而这里要做的是一次确认。
+                if (isDiffOpen && calendarDiff != null) {
+                    CalendarDiffSection(
+                        diff = calendarDiff,
+                        onConfirm = onConfirmApply,
+                        onCancel = onDismissDiff
+                    )
+                } else {
                 // ================= 自定义 · 可编辑 =================
                 SectionLabel("自定义（本机当前使用的）")
                 OutlinedTextField(
@@ -427,11 +525,15 @@ fun AcademicCalendarDialog(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
+                }
             }
         },
         confirmButton = {
-            Button(
-                onClick = save@{
+            // 差异预览开着时不摆「保存」：这一屏只有差异，确认动作在差异区里。
+            // 两个都能点的话，用户不知道自己点的是"存草稿"还是"覆盖本机校历"。
+            if (!isDiffOpen) {
+                Button(
+                    onClick = save@{
                     val start = EpochDays.parse(startText)
                     val end = EpochDays.parse(endText)
                     if (start == null || end == null || start > end) {
@@ -526,9 +628,126 @@ fun AcademicCalendarDialog(
                 shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
             ) { Text("保存", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold) }
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
+}
+
+/**
+ * 「应用官方校历」的差异预览。
+ *
+ * ## 为什么必须有这一屏
+ *
+ * 应用是**全量替换**停课与补课。用户自己敲的东西（"考试周那几天不排课"）
+ * 会在点完按钮后无声消失，而这个动作以前就只是一个按钮。
+ *
+ * 逐条列出「新增 / 移除 / 修改」，让用户在写库**之前**知道会少什么。
+ *
+ * ## 强调「移除」而不是只强调「新增」
+ *
+ * 新增的东西用户会开心，移除的东西用户会后悔。两者同屏时，
+ * 只用 primary 色标"有 N 项更新"是不诚实的 —— 真正有破坏性的那半边
+ * 必须和新增一样显眼。
+ */
+@Composable
+private fun CalendarDiffSection(
+    diff: CalendarDiff,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionLabel("应用后会发生的变化")
+
+        if (diff.isEmpty) {
+            Text(
+                text = "与当前校历完全一致，不需要改动",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        if (diff.semesterChanges.isNotEmpty()) {
+            Text(
+                text = "学期",
+                style = MaterialTheme.typography.labelMedium
+                    .copy(fontWeight = FontWeight.SemiBold)
+            )
+            diff.semesterChanges.forEach { DiffLine(it.label, it.before, it.after, DiffKind.CHANGED) }
+        }
+
+        if (diff.noClassAdded.isNotEmpty() || diff.noClassRemoved.isNotEmpty()) {
+            Text(
+                text = "停课",
+                style = MaterialTheme.typography.labelMedium
+                    .copy(fontWeight = FontWeight.SemiBold)
+            )
+            diff.noClassAdded.forEach { DiffLine(EpochDays.formatCn(it), "无", "停课", DiffKind.ADDED) }
+            diff.noClassRemoved.forEach { DiffLine(EpochDays.formatCn(it), "停课", "恢复上课", DiffKind.REMOVED) }
+        }
+
+        if (diff.makeupAdded.isNotEmpty() || diff.makeupRemoved.isNotEmpty() || diff.makeupChanged.isNotEmpty()) {
+            Text(
+                text = "补课",
+                style = MaterialTheme.typography.labelMedium
+                    .copy(fontWeight = FontWeight.SemiBold)
+            )
+            diff.makeupAdded.forEach {
+                DiffLine(EpochDays.formatCn(it.epochDay), "无", "补周${it.makeupForDayOfWeek}", DiffKind.ADDED)
+            }
+            diff.makeupRemoved.forEach {
+                DiffLine(EpochDays.formatCn(it.epochDay), "补周${it.makeupForDayOfWeek}", "恢复", DiffKind.REMOVED)
+            }
+            diff.makeupChanged.forEach { c ->
+                DiffLine(
+                    label = EpochDays.formatCn(c.after.epochDay),
+                    before = "补周${c.before.makeupForDayOfWeek}",
+                    after = "补周${c.after.makeupForDayOfWeek}",
+                    kind = DiffKind.CHANGED
+                )
+            }
+        }
+
+        Text(
+            text = "确认后会整体替换上面的停课与补课（作息表不动）。被移除的那些会真的消失。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Button(
+            onClick = onConfirm,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+        ) { Text("确认应用", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold) }
+
+        TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("先不应用") }
+    }
+}
+
+/** 差异的一行。用 kind 决定颜色 —— 移除要和新增一样显眼，不能都当成普通文案。 */
+private enum class DiffKind { ADDED, REMOVED, CHANGED }
+
+@Composable
+private fun DiffLine(label: String, before: String, after: String, kind: DiffKind) {
+    val color = when (kind) {
+        DiffKind.ADDED -> MaterialTheme.colorScheme.primary
+        // 移除用 error 色：这是唯一"用户会后悔"的一类，压成灰色等于把它藏起来。
+        DiffKind.REMOVED -> MaterialTheme.colorScheme.error
+        DiffKind.CHANGED -> MaterialTheme.colorScheme.onSurface
+    }
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = "$before → $after",
+            style = MaterialTheme.typography.bodySmall,
+            color = color
+        )
+    }
 }
 
 /**
@@ -695,19 +914,11 @@ private fun noClassRangeText(from: Long, to: Long): String =
     if (from == to) EpochDays.format(from) else "${EpochDays.format(from)}~${EpochDays.format(to)}"
 
 /**
- * 学期名 → [SemesterEntity.term]，按**学年学期**口径（秋冬 / 春夏）。
- *
- * 「秋冬 / 春夏」必须判在单字前面：「秋冬」里也有个「秋」，先判单字会把一个
- * 16 周的学年学期记成 8 周的半学期，导出时 `termConfigs` 就只写得出秋那一条。
- * 旧名字（「…学年 秋季 学期」）仍按原样存回去 —— 不能因为换了口径就让已有学期读丢。
+ * 学期名 → [SemesterEntity.term]。**直接走仓储那份**，弹层不自己再写一套 ——
+ * 写过一份，然后漂成了旧的春秋/秋季口径；而「应用官方校历」那边也要算同一个字段，
+ * 两份实现必然分叉。
  */
-private fun seasonOf(name: String): String = when {
-    name.contains("秋冬") -> "秋冬"
-    name.contains("春夏") -> "春夏"
-    name.contains("秋") -> "秋季"
-    name.contains("春") -> "春季"
-    else -> ""
-}
+private fun seasonOf(name: String): String = AcademicCalendarRepository.seasonOf(name)
 
 /** 学期名兜底直接走仓储那份，弹层不自己再写一套 —— 写过一份，然后漂成了旧的春秋/秋季口径。 */
 private fun defaultSemesterName(): String = AcademicCalendarRepository.defaultName()

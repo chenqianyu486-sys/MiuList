@@ -17,29 +17,28 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import okhttp3.OkHttpClient
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.util.concurrent.TimeUnit
 
 /**
- * 公共校历配置来源：zju-ical 的 `configs/config.json`。
+ * 校历配置的**取与解**：从远程拿到一段文本、把文本解成 [CalendarBundle]。
  *
- * **这份数据全校通用、人人相同，没有理由让每个用户自己去教务网猜。**
- * zju-ical 把它维护在仓库里并且会定期更新（`lastUpdated` 字段就是这个用途），
- * 所以这里先读它，而不是在 App 里另抄一份。
+ * **这一类里没有「该用哪一份」的决策**，那是 [CalendarUpdateService] 的事。
+ * 之前这里同时管着「联网取数」和「联网 vs 内置怎么合并」，于是有两条独立的
+ * 取数链路（弹层只读内置、导入才联网），界面上显示的官方校历和实际落库的
+ * 那份可以不是同一份。决策与执行分开之后，两边必然走同一份解析。
  *
- * 但**联网不能是唯一出路**，所以有第二层：App 内置一份 `assets/zju-calendar-fallback.json`。
- * 加这一层的直接原因是实测——GitHub 系域名（github.com / raw.githubusercontent /
- * jsdelivr / 各种 gh-proxy 镜像）在很多网络环境下根本连不上：
- * 要么 TLS 握手被中间设备掐断，要么被墙。实测这台开发机上 `SSLHandshakeException`
- * 命中了**全部**镜像源（2026-10-13）。
+ * ## 格式
  *
- * 顺序是「联网 → 内置」，但**不是简单的联网优先**：两份会按学期取并集，
- * 理由见 [merge] 的注释（上游那份可能比内置的旧，直接覆盖会让学期下拉里
- * 只剩过期学期）。
- *
- * 返回的 [CalendarBundle] **就是 v2 文档里的 `calendar` 块**——
- * 字段名与类型和上游逐字段相同，所以这份 config.json 本身也能被当成
- * 「只有校历的 v2 文档」直接导入。
+ * 用的是 zju-ical 的 `configs/config.json` 形状，**没有换**。
+ * 托管方可以换成任何仓库 / 任何路径，文件本身的格式不变，所以
+ * `parse` / `selectTerm` / `ScheduleBundleValidator` 这一整条已验证过的链路原样复用。
  */
+sealed interface RemoteFetch {
+    data class Got(val text: String) : RemoteFetch
+    data class Unavailable(val reason: String) : RemoteFetch
+}
+
 class ZjuCalendarSource(
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -51,81 +50,87 @@ class ZjuCalendarSource(
      * **必须走 Context.assets，不能用 `classLoader.getResourceAsStream`**：
      * 后者在 JVM 单测里能工作（assets 被打进 test classpath），但 Android 运行时
      * 的 assets 并不在 JVM classpath 上，那条路在真机上是 null —— 而这恰恰是最需要
-     * 它工作的场景（用户网络受限才走兜底）。单测可以改传 [bundledConfigText] 字符串。
+     * 它工作的场景（用户网络受限才走兜底）。单测可以改传 [bundledText] 字符串。
      */
     private val assets: android.content.res.AssetManager? = null,
     /** 直接给定内置文本，优先于 [assets]。单测用这个注入，省掉 Android 依赖。 */
-    private val bundledText: String? = null
+    private val bundledText: String? = null,
+    /** 远程地址。留空则完全不联网（单测用）。生产由 [CONFIG_URLS] 提供。 */
+    private val remoteUrls: List<String> = CONFIG_URLS,
+    /**
+     * 直接给定「远程拿到的那段文本」，**完全跳过网络**。单测用。
+     *
+     * 与 [bundledText] 刻意对称：三层优先级里每一层都要能在离线测试里单独驱动，
+     * 否则"远程比缓存新 → 写缓存 → 返回 Updated"这条最要紧的路径只能靠真联网验。
+     */
+    private val remoteText: String? = null
 ) {
 
     /**
-     * 取一次完整配置。失败抛 [ZjuException]。
+     * 逐个试远程地址，返回第一份拿到手的**原文**，或**拿不到的真实原因**。
      *
-     * 返回的 Bundle 里 `periods` 已经填上浙大作息：上游把作息硬编码在 Go 里、
-     * config.json 里没有对应字段，而本项目要用它画栅格。
+     * 为什么不是 `String?`：拿不到的原因有好几种完全不同的毛病 ——
+     * 域名解析不了、TLS 握手被掐、镜像返回 403、地址写错 —— 而它们的处置方式
+     * 不一样（换网络、换镜像、改配置）。一律压成一句「连不上校历源」，
+     * 用户既没法自查，托管方也没法定位是哪一环坏的，等于把排查成本全推给用户。
+     *
+     * 全都失败才返回 [RemoteFetch.Unavailable]，由调用方决定回落策略 ——
+     * 这里不吞掉"拉不到"这件事，否则上层只能把失败和"没有更新"混为一谈。
+     *
+     * 多挂几条镜像是因为免费托管（GitHub raw / gitee raw）在不同网络环境下
+     * 时通时不通，而校历是全校同一份静态数据，任何一个源返回的内容都一样，
+     * 逐个试过去比「一个源失败就让用户手动导入」划算得多。
      */
-    suspend fun fetch(): CalendarBundle = withContext(Dispatchers.IO) {
-        val remote = runCatching { fetchText() }.getOrNull()?.let { runCatching { parse(it) }.getOrNull() }
-        val bundled = bundledConfigText()?.let { runCatching { parse(it) }.getOrNull() }
-
-        when {
-            remote != null && bundled != null -> merge(remote, bundled)
-            remote != null -> remote
-            bundled != null -> bundled
-            else -> throw ZjuException(
-                "校历配置拉取失败，可改用文件导入",
-                // 联网那份拿不到**不等于**用户网络有问题：内置那份也解析不了时才会走到这里，
-                // 更像是配置本身出了岔子。归到 SERVER 而不是 NETWORK，
-                // 是为了不让界面把矛头指向用户的网络设置。
-                ZjuFailureKind.SERVER
-            )
+    suspend fun fetchRemoteText(): RemoteFetch {
+        remoteText?.let { return RemoteFetch.Got(it) }
+        return withContext(Dispatchers.IO) {
+            val reasons = mutableListOf<String>()
+            for (url in remoteUrls) {
+                when (val r = fetchOne(url)) {
+                    is RemoteFetch.Got -> return@withContext r
+                    is RemoteFetch.Unavailable -> reasons += "${url.toHttpUrlOrNull()?.host ?: url}: ${r.reason}"
+                }
+            }
+            RemoteFetch.Unavailable(reasons.joinToString("；").ifEmpty { "没有配置任何远程地址" })
         }
     }
 
-    /** [merge] 的测试入口。这是**唯一**能离线验证合并规则的地方。 */
-    internal fun mergeForTest(remote: CalendarBundle, bundled: CalendarBundle) =
-        merge(remote, bundled)
+    private fun fetchOne(url: String): RemoteFetch = try {
+        client.newCall(Request.Builder().url(url).get().build()).execute().use { res ->
+            // 2xx 之外一律带状态码：镜像站最常见的两种毛病是 403（签名过期）
+            // 和 404（文件没推上去/路径写错），它们在界面上要能被一眼区分。
+            if (res.isSuccessful) {
+                val body = res.body?.string()
+                if (body.isNullOrBlank()) RemoteFetch.Unavailable("返回了空内容")
+                else RemoteFetch.Got(body)
+            } else {
+                RemoteFetch.Unavailable("HTTP ${res.code}")
+            }
+        }
+    } catch (e: Exception) {
+        RemoteFetch.Unavailable(e.describe())
+    }
+
+    /** 把异常翻成一句用户/托管方看得懂的话，而不是 `java.net` 的类名。 */
+    private fun Exception.describe(): String = when (this) {
+        is java.net.UnknownHostException -> "域名解析不了（$message）"
+        is javax.net.ssl.SSLException -> "TLS 握手失败（${message ?: "被对端中断"}）"
+        is java.net.SocketTimeoutException -> "连接超时"
+        is java.net.ConnectException -> "连不上服务器"
+        else -> message ?: javaClass.simpleName
+    }
 
     /**
-     * 合并联网与内置两份配置：**联网优先，但不让它把内置里更新的学期盖掉。**
+     * 取一次远程原文并解析。拉取失败或格式不对都返回 null。
      *
-     * ## 为什么不能简单「联网优先」
-     *
-     * 上游 zju-ical 的 `configs/config.json` 只更到 2024-2025（该仓库 2023-11 后
-     * 基本停更），而 App 内置的那份有 2026-2027。如果老老实实「联网成功就以它为准」，
-     * 学期下拉里就**只剩 2024-2025 的过期学期**——用户会选到一个完全不存在的当前学期，
-     * 后面抓回来的课表自然是空的，而且没有任何报错提示。
-     * 这个坑是在模拟器上真跑出来的（2026-10-13），不是推演出来的。
-     *
-     * ## 合并规则
-     *
-     * - `termConfigs` / `classTerms` / `examTerms`：按学期键**并集**，**联网优先**
-     *   ——联网有更新的调休/日期就用联网的，内置只补它没有的学期。
-     * - `tweaks`：按 `(from, to)` 去重后**取并集**。两份都是「停课/调休」这一类
-     *   事实，缺一份不会让结果错，只会让那一段调休没生效。
+     * 解析失败**不重试下一个源** —— 解析坏的是文件内容而不是连接，
+     * 换一条 URL 拿到的是同一份内容，试完只是白等。
      */
-    private fun merge(remote: CalendarBundle, bundled: CalendarBundle): CalendarBundle {        // **联网的先占位**：putIfAbsent 只在缺席时写入，所以谁先谁赢。
-        // 顺序写成 (bundled + remote) 会让内置反过来盖住联网的更新，那是反的。
-        val terms = LinkedHashMap<Pair<String?, Int?>, TermConfigBundle>()
-        (remote.termConfigs + bundled.termConfigs).forEach { tc ->
-            terms.putIfAbsent(tc.year to tc.term, tc)
-        }
-
-        return remote.copy(
-            termConfigs = terms.values.toList(),
-            classTerms = (bundled.classTerms.orEmpty() + remote.classTerms.orEmpty()).distinct(),
-            examTerms = (bundled.examTerms.orEmpty() + remote.examTerms.orEmpty()).distinct(),
-            tweaks = (remote.tweaks + bundled.tweaks)
-                .distinctBy { listOf(it.tweakType, it.from, it.to) }
-        )
-    }
+    suspend fun fetchRemoteBundle(): CalendarBundle? =
+        (fetchRemoteText() as? RemoteFetch.Got)?.text?.let { runCatching { parse(it) }.getOrNull() }
 
     /**
      * 只读**内置**那份（assets），**完全不联网**。
-     *
-     * 给「校历设置」弹层用：设置界面要在**秒开、无网**的状态下把预置校历摆出来，
-     * 而 [fetch] 每次都要过一遍三个镜像（且 [merge] 的联网优先会把内置那份盖掉），
-     * 用它来显示「预置」既慢又不准 —— 显示的必须是那份**文件本身**。
      *
      * 读不到或解析不了返回 null，由调用方决定是显示「预置不可用」还是别的。
      */
@@ -187,8 +192,10 @@ class ZjuCalendarSource(
      * 而课程周号已经按 16 周平移过（第 9–16 周），两端口径对不上，
      * 后半学期整段没课。
      *
-     * 裁 tweaks 时也按**整个学年学期**的区间裁：冬的调休（元旦停课、12-31 补课）
-     * 落在秋那条的 `End` 之后，按单条区间裁会被误删。
+     * 裁 tweaks 时也按**整个学年学期**的区间裁。区间外的日期不会被误删：
+     * 判断条件是**重叠**（`to >= begin && from <= end`）而不是两端包含 ——
+     * 学生节那条 `Move`（12-31 停课、1-4 补课）的补课日落在学期结束日之后一天，
+     * 但它的 `from` 在区间内，属于有重叠，照样保留。
      */
     fun selectTerm(calendar: CalendarBundle, year: String, term: Int): CalendarBundle {
         val target = calendar.termConfigs.firstOrNull { it.year == year && it.term == term }
@@ -226,41 +233,50 @@ class ZjuCalendarSource(
         return "${raw.substring(0, idx)}:$code"
     }
 
-    private suspend fun fetchText(): String? {
-        for (url in CONFIG_URLS) {
-            val ok = runCatching {
-                client.newCall(Request.Builder().url(url).get().build()).execute().use { res ->
-                    if (res.isSuccessful) res.body?.string() else null
-                }
-            }.getOrNull()
-            if (!ok.isNullOrBlank()) return ok
-        }
-        return null
-    }
-
     private val moshi = Moshi.Builder().build()
 
     companion object {
         /**
-         * 与 zju-ical `pkg/zjuservice/zjuconst/config.go` 的 `OnlineConfigPath` 一致，
-         * 后两条是兜底。
+         * 远程托管的校历配置，逐个镜像试。
          *
-         * 多挂一条 jsDelivr 是因为裸 raw.githubusercontent.com 在不少网络环境里
-         * 连不上（本机实测直接超时），而 gh-proxy 本身也是第三方服务、会挂。
-         * 校历是全校同一份静态数据，任何一个源返回的内容都一样，
-         * 所以逐个试过去比「一个源失败就让用户手动导入」划算得多。
+         * ## 维护方式
+         *
+         * 把 `assets/zju-calendar-fallback.json` 的内容 push 到
+         * `https://gitee.com/zjuchenqianyu/MiuList` 仓库下的 `config.json`，
+         * 之后在 App 的「本学期校历」里点「检查更新」→ 看差异 → 确认应用即可。
+         * **不需要改代码，也不需要重装。**
+         *
+         * Gitee 的 raw 路径形状是 `/raw/<分支>/<路径>`，这个仓库的默认分支是 `main`。
+         * 想加镜像就往这个列表里往后追加——取数是**逐个试**，排在后面的只有前面
+         * 全挂了才会被请求，所以主源正常时它一次都不会被碰到，纯粹是保险。
+         *
+         * ## 这个仓库必须是**公开**的
+         *
+         * 拉取是**匿名**的（只发一个 GET，不带任何凭据）。私有仓库会返回 403，
+         * App 就一直拿不到新版，只能退回内置那份。
+         *
+         * **不要把访问令牌写进这份 URL 常量**：打进 APK 的常量任何人都能解出来，
+         * 等于把令牌公开。而且这里的内容本来就是全校公开的校历，没有私有理由。
+         * 真要带鉴权，就得先想清楚令牌怎么保管 —— 那不是这里该顺手做的事。
+         *
+         * ## 曾经指向的 zju-ical 上游
+         *
+         * 原先这里挂的是 zju-ical 的 `configs/config.json`。那个仓库的
+         * `lastUpdated` 停在 `20250213`，`termConfigs` 只到 2024-2025 学年、
+         * 调休描述还写着"（待定）"，比 App 内置的 2026-2027 旧了一整个学年。
+         * 它当时的作用全靠一套合并逻辑兜着别覆盖内置，是纯延迟。
+         * 真源换成自托管后**合并逻辑随之删除** —— 只剩一份真源，
+         * 不存在跨源冲突；留着它反而是给人"顺手再接个源"的口子。
          */
         private val CONFIG_URLS = listOf(
-            "https://gh-proxy.com/https://raw.githubusercontent.com/cxz66666/zju-ical/master/configs/config.json",
-            "https://fastly.jsdelivr.net/gh/cxz66666/zju-ical@master/configs/config.json",
-            "https://raw.githubusercontent.com/cxz66666/zju-ical/master/configs/config.json"
+            "https://gitee.com/zjuchenqianyu/MiuList/raw/main/config.json"
         )
 
         /**
-         * 内置兜底配置文件（assets）。上面三条全部失败时用它。
+         * 内置兜底配置文件（assets）。
          *
-         * 里面的日期由用户按浙大官方校历提供：2026-2027 秋冬 2026-09-14 ~ 2027-01-04。
-         * **联网拿到时永远以联网的为准**，这份只在网络完全不通时才生效。
+         * 它的角色是**最后一道**：远程拉不到、且本机从来没有成功缓存过时才生效，
+         * 保证新装用户离线也能有一份能用的学期起止。
          */
         const val FALLBACK_ASSET = "zju-calendar-fallback.json"
     }

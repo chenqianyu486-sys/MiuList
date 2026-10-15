@@ -123,6 +123,12 @@ interface TaskDao {
         unlinkedColor: String
     ): Int
 
+    @Query("DELETE FROM tasks WHERE taskType = :taskType")
+    suspend fun deleteTasksByType(taskType: String): Int
+
+    @Query("SELECT COUNT(*) FROM tasks WHERE taskType = :taskType")
+    suspend fun countTasksByType(taskType: String): Int
+
     @Query("DELETE FROM tasks")
     suspend fun clearTasks()
 }

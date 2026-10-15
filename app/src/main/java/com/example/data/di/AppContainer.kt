@@ -1,6 +1,7 @@
 package com.example.data.di
 
 import android.content.Context
+import com.example.data.calendar.CalendarCache
 import com.example.data.codec.JsonScheduleCodec
 import com.example.data.codec.ScheduleCodec
 import com.example.data.local.AppDatabase
@@ -11,6 +12,7 @@ import com.example.data.repository.CourseRepository
 import com.example.data.repository.ScheduleSettingsRepository
 import com.example.data.repository.TaskRepository
 import com.example.data.repository.TaskTypeRepository
+import com.example.data.source.zju.CalendarUpdateService
 import com.example.data.source.zju.ZjuCalendarSource
 import com.example.data.source.zju.ZjuImportService
 import com.example.data.security.SecureAccountStorage
@@ -18,6 +20,7 @@ import com.example.data.sync.ScheduleSyncManager
 import com.example.data.transfer.ScheduleExportService
 import com.example.data.transfer.ScheduleImportService
 import com.example.data.validate.ScheduleBundleValidator
+import java.io.File
 
 /**
  * 手写的依赖容器。
@@ -85,12 +88,32 @@ class AppContainer(context: Context) {
      * 「ZJU」导入源。纯网络客户端，不依赖 Room，所以它自己不持有数据库 ——
      * 产出的 JSON 走 `importService` 那条与文件导入相同的管线落库。
      *
-     * 这里把 Context 传进去是为了让 [ZjuCalendarSource] 能读内置的校历兜底
-     * assets —— GitHub 系域名在很多网络环境下连不上，没有这层「课表能抓到、
-     * 校历却拉不到」的半残状态。
+     * Context 在这里有两个用途：让 [ZjuCalendarSource] 读内置的校历兜底 assets，
+     * 以及给 [CalendarCache] 一个 `filesDir` 落缓存。
      */
+    val zjuCalendarSource: ZjuCalendarSource by lazy {
+        ZjuCalendarSource(assets = appContext.assets)
+    }
+
+    /**
+     * 校历的三层来源（远程 → 缓存 → 内置）。
+     *
+     * 弹层的预置块与课表导入**共用这一个实例** —— 它们必须看到同一份数据。
+     * 改造前是两条独立链路（弹层只读内置、导入才联网），于是界面上显示的
+     * 官方校历与真正落库的那份可以不是同一份，而两边都「看起来对」。
+     */
+    val calendarUpdateService: CalendarUpdateService by lazy {
+        CalendarUpdateService(
+            source = zjuCalendarSource,
+            cache = CalendarCache(File(appContext.filesDir, CalendarCache.FILE_NAME))
+        )
+    }
+
     val zjuImportService: ZjuImportService by lazy {
-        ZjuImportService(calendarSource = ZjuCalendarSource(assets = appContext.assets))
+        ZjuImportService(
+            calendarSource = zjuCalendarSource,
+            calendarUpdates = calendarUpdateService
+        )
     }
 
     val secureAccountStorage: SecureAccountStorage by lazy {

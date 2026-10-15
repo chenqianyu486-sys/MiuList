@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -97,6 +98,62 @@ class CourseLinkageSheetTest {
 
         assertEquals("点击左侧小圆圈应触发切换完成状态", sampleTask.id, toggledTask?.id)
         assertEquals("点击左侧小圆圈不应触发打开待办详情", null, inspectedTask)
+    }
+
+    @Test
+    fun clicking_right_star_button_only_toggles_star() {
+        var inspectedTask: TaskEntity? = null
+        var toggledTask: TaskEntity? = null
+        var starredTask: TaskEntity? = null
+
+        composeTestRule.setContent {
+            CourseLinkageSheet(
+                courseWithSlots = CourseWithSlots(course = sampleCourse, slots = emptyList()),
+                linkedTasks = listOf(sampleTask),
+                customTypes = emptyList(),
+                onDismiss = {},
+                onToggleTaskComplete = { toggledTask = it },
+                onToggleTaskStar = { starredTask = it },
+                onInspectTask = { inspectedTask = it },
+                onAddNewTaskForCourse = {},
+                onEditCourse = {},
+                onDeleteCourse = {}
+            )
+        }
+
+        // 只点击右侧星标图标
+        composeTestRule.onNodeWithTag("course_sheet_task_star_${sampleTask.id}").performClick()
+
+        assertEquals("点击右侧星标按钮应触发切换标星状态", sampleTask.id, starredTask?.id)
+        assertEquals("点击右侧星标按钮不应触发勾选完成", null, toggledTask)
+        assertEquals("点击右侧星标按钮不应触发打开待办详情", null, inspectedTask)
+    }
+
+    @Test
+    fun star_button_reflects_starred_and_unstarred_states() {
+        val starredTask = sampleTask.copy(id = 202L, priority = "HIGH")
+        composeTestRule.setContent {
+            CourseLinkageSheet(
+                courseWithSlots = CourseWithSlots(course = sampleCourse, slots = emptyList()),
+                linkedTasks = listOf(sampleTask, starredTask),
+                customTypes = emptyList(),
+                onDismiss = {},
+                onToggleTaskComplete = {},
+                onToggleTaskStar = {},
+                onInspectTask = {},
+                onAddNewTaskForCourse = {},
+                onEditCourse = {},
+                onDeleteCourse = {}
+            )
+        }
+
+        // 未标星的待办，星标按钮为 "标星"
+        composeTestRule.onNodeWithTag("course_sheet_task_star_${sampleTask.id}")
+            .assertContentDescriptionEquals("标星")
+
+        // 已标星的待办，星标按钮为 "取消星标"
+        composeTestRule.onNodeWithTag("course_sheet_task_star_${starredTask.id}")
+            .assertContentDescriptionEquals("取消星标")
     }
 
     @Test

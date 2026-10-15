@@ -136,6 +136,25 @@ class AcademicCalendarRepository(
             return "$startYear-${startYear + 1}学年 $season 学期"
         }
 
+        /**
+         * 学期名 → [SemesterEntity.term]，按**学年学期**口径（秋冬 / 春夏）。
+         *
+         * 「秋冬 / 春夏」必须判在单字前面：「秋冬」里也有个「秋」，先判单字会把一个
+         * 16 周的学年学期记成 8 周的半学期，导出时 `termConfigs` 就只写得出秋那一条。
+         * 旧名字（「…学年 秋季 学期」）仍按原样存回去 —— 不能因为换了口径就让已有学期读丢。
+         *
+         * 放在这里而不是各自写一份：弹层手填学期名时要用它，
+         * 「应用官方校历」直接写官方那份 label 时也要用它，两边算出来的
+         * `term` 必须一致 —— 不一致会让同一条学期在导出里一会儿 8 周一会儿 16 周。
+         */
+        fun seasonOf(name: String): String = when {
+            name.contains("秋冬") -> "秋冬"
+            name.contains("春夏") -> "春夏"
+            name.contains("秋") -> "秋季"
+            name.contains("春") -> "春季"
+            else -> ""
+        }
+
         fun toEntity(s: Semester): SemesterEntity = SemesterEntity(
             id = SemesterEntity.SINGLETON_ID,
             name = s.name,

@@ -5,19 +5,27 @@ import com.example.data.calendar.ZjuCalendarAdapter
 import com.example.data.codec.academicTermOf
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody.Companion.toResponseBody
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.TimeUnit
 
 /**
- * 校历来源的**兜底分支**。
+ * 校历配置的**解析**与**学期裁剪**。
  *
- * 加内置兜底的起因是一次真实的失败：2026-10-13 在这台开发机上，GitHub 系的
- * 全部镜像（gh-proxy.com / jsdelivr / raw.githubusercontent）都在 TLS 握手阶段
- * 被掐断，`fetchPublicCalendar` 整条挂掉 —— 于是「课表能抓到，校历却拉不到」，
- * 导入管线走不完。
+ * ## 这里不再测「联网 vs 内置怎么合并」
+ *
+ * 原来有两个 `mergeForTest` 用例，钉的是"上游那份比内置旧时不能覆盖内置"。
+ * 那个场景在换掉真源之后**不再存在**：上游 zju-ical 的 `lastUpdated` 停在 20250213，
+ * 只到 2024-2025 学年，比内置旧一整个学年，现在是完全的延迟来源。
+ * 真源换成自托管后只剩一份，`merge` 随之删除 —— 留着那份测试就是给下一个人
+ * 「顺手把合并加回来」的台阶。
+ *
+ * 合并掉的三层优先级（远程 → 缓存 → 内置）改由 `CalendarUpdateServiceTest` 覆盖。
  *
  * 这些用例全部**离线**，不碰网络。
  */
@@ -42,8 +50,8 @@ class ZjuCalendarSourceTest {
     """.trimIndent()
 
     /**
-     * 让 [ZjuCalendarSource.fetchText] 的每个 URL 都立刻失败，
-     * 从而**真正**覆盖「联网全挂 → 落到内置」这条分支（而不是顺带联网一下）。
+     * 让每个远程 URL 都立刻失败，从而**真正**覆盖「拉不到远程」这条分支
+     * （而不是顺带联网一下）。
      *
      * 手法是把 DNS 换成一个必然连接失败的地址（TEST-NET-3 保留网段），
      * 再关掉重试 —— 比「挂个死代理」可靠，也不依赖 okHttp 的内部 API。
@@ -62,95 +70,124 @@ class ZjuCalendarSourceTest {
             .build()
     }
 
+    /**
+     * 一个**根本不联网**的客户端：直接造一个 [code] / [body] 响应。
+     *
+     * [deadClient] 只能造出"连接层失败"，造不出 403/空响应那类**应用层**结果，
+     * 而这两类在失败原因里长得完全不一样，必须分别钉住。
+     */
+    private fun stubClient(code: Int, body: String = bundled): OkHttpClient =
+        OkHttpClient.Builder()
+            .retryOnConnectionFailure(false)
+            .addInterceptor { chain ->
+                okhttp3.Response.Builder()
+                    .request(chain.request())
+                    .protocol(okhttp3.Protocol.HTTP_1_1)
+                    .code(code)
+                    .message(if (code in 200..299) "OK" else "Error")
+                    .body(body.toResponseBody("application/json".toMediaTypeOrNull()))
+                    .build()
+            }
+            .build()
+
+    /**
+     * 远程拉不到时返回 [RemoteFetch.Unavailable] 并**带上原因**，**不抛异常也不去碰内置**。
+     *
+     * 抛不抛、回落不回落是 [CalendarUpdateService] 的决定，不该在这一层。
+     * 这一层只搬字节：它不知道内置的存在，也没有理由知道。
+     *
+     * 但「为什么没拉到」必须在这一层留下来 —— 到了上层就只剩一个 `null`，
+     * 而域名解析不了 / TLS 被掐 / 403 签名过期的处置方式完全不同。
+     */
     @Test
-    fun `联网全失败时退回内置校历`() = runBlocking {
-        val source = ZjuCalendarSource(client = deadClient(), bundledText = bundled)
+    fun `远程全部失败时给出原因而不是抛异常`() = runBlocking {
+        val source = ZjuCalendarSource(
+            client = deadClient(),
+            bundledText = bundled,
+            remoteUrls = listOf("https://example.invalid/config.json")
+        )
 
-        val bundle = source.fetch() // 不抛异常就是兜底生效了
-
-        val autumn = bundle.termConfigs.single { it.term == 0 }
-        assertEquals("2026-2027", autumn.year)
-        assertEquals(0, autumn.term)
-        assertTrue("作息表不该为空", bundle.periods.isNotEmpty())
+        val result = source.fetchRemoteText()
+        assertTrue(
+            "拉不到必须是 Unavailable，让上层去决定回落，实际=$result",
+            result is RemoteFetch.Unavailable
+        )
+        // 原因里要带得上网址，否则多镜像场景下不知道是哪一个挂了。
+        assertTrue("原因应指明是哪个地址失败：${(result as RemoteFetch.Unavailable).reason}",
+            result.reason.contains("example.invalid"))
+        assertNull(source.fetchRemoteBundle())
     }
 
+    /** `remoteUrls` 为空 = 完全不联网，同样是 Unavailable 而不是空 Bundle。 */
     @Test
-    fun `既没有网络也没有内置时才报错`() = runBlocking {
-        val source = ZjuCalendarSource(client = deadClient(), bundledText = null, assets = null)
+    fun `没有配置任何远程地址时给出原因`() = runBlocking {
+        val source = ZjuCalendarSource(bundledText = bundled, remoteUrls = emptyList())
 
-        val error = runCatching { source.fetch() }.exceptionOrNull()
-
-        assertTrue("应该抛 ZjuException，实际：$error", error is ZjuException)
-        assertEquals("校历配置拉取失败，可改用文件导入", error?.message)
+        val result = source.fetchRemoteText()
+        assertTrue(result is RemoteFetch.Unavailable)
+        assertEquals(
+            "一个地址都没配时要说清是配置问题，不是网络问题",
+            "没有配置任何远程地址",
+            (result as RemoteFetch.Unavailable).reason
+        )
     }
 
     /**
-     * 联网那份**比内置的旧**时，当前学期必须仍然出现在下拉里。
-     *
-     * 这个 bug 是 2026-10-13 在模拟器上真跑出来的：宿主代理配好后校历走通了联网源，
-     * 而上游 zju-ical 的 config.json 只更到 2024-2025（仓库 2023-11 后基本停更），
-     * 于是「联网优先」把内置的 2026-2027 整个盖掉，学期下拉里只剩
-     * `2024-2025 春学期 / 夏学期` —— 用户会选到一个根本不存在的当前学期，
-     * 后面抓回来的课表自然是空的，**而且没有任何报错**。
-     *
-     * 没有这条用例，改回「联网优先」不会有任何测试失败。
+     * 非 2xx 要带状态码：403（签名过期）和 404（文件没推上去）在界面上必须能一眼分开，
+     * 而它们在 OkHttp 里都只是 `isSuccessful == false`。
      */
     @Test
-    fun `联网那份比内置旧时 当前学期不能被盖掉`() {
-        // 上游那份的形状取自实抓：只有 2023-2024 / 2024-2025，没有 2026-2027。
-        val staleRemote = """
-            {
-              "lastUpdated": 20240501,
-              "termConfigs": [
-                { "Year": "2023-2024", "Term": 4, "Begin": 20240226, "End": 20240707, "FirstWeekNo": 1 },
-                { "Year": "2024-2025", "Term": 4, "Begin": 20250224, "End": 20240707, "FirstWeekNo": 1 }
-              ],
-              "classTerms": ["2023-2024:4", "2024-2025:4"],
-              "examTerms": [],
-              "tweaks": [
-                { "TweakType": 2, "Description": "[国庆节] 调休", "From": 20241001, "To": 20241007 }
-              ]
-            }
-        """.trimIndent()
-
-        val merged = ZjuCalendarSource().mergeForTest(
-            remote = ZjuCalendarSource().parse(staleRemote),
-            bundled = ZjuCalendarSource().parse(bundled)
+    fun `非 2xx 的失败原因里带 HTTP 状态码`() = runBlocking {
+        val source = ZjuCalendarSource(
+            client = stubClient(code = 403),
+            remoteUrls = listOf("https://example.com/config.json")
         )
 
+        val result = source.fetchRemoteText()
+        assertTrue(result is RemoteFetch.Unavailable)
         assertTrue(
-            "下拉里必须有 2026-2027 秋学期，实际：${merged.termConfigs.map { it.year to it.term }}",
-            merged.termConfigs.any { it.year == "2026-2027" && it.term == 0 }
+            "状态码要出现在原因里：${(result as RemoteFetch.Unavailable).reason}",
+            result.reason.contains("403")
         )
-        // 联网那份的旧学期也要保留，否则历史学期会消失。
-        assertTrue(
-            "联网那份的学期不该被丢",
-            merged.termConfigs.any { it.year == "2024-2025" && it.term == 4 }
-        )
-        assertTrue("联网那份的调休不该被丢", merged.tweaks.any { it.from == 20241001 })
     }
 
+    /** 2xx 但内容是空的也算失败，且要说清是空内容而不是网络问题。 */
     @Test
-    fun `联网与内置都有同一学期时 以联网的日期为准`() {
-        val sameTermDifferentDates = """
-            {
-              "lastUpdated": 20270101,
-              "termConfigs": [
-                { "Year": "2026-2027", "Term": 0, "Begin": 20260921, "End": 20270115, "FirstWeekNo": 2 }
-              ],
-              "classTerms": [], "examTerms": [], "tweaks": []
-            }
-        """.trimIndent()
-
-        val merged = ZjuCalendarSource().mergeForTest(
-            remote = ZjuCalendarSource().parse(sameTermDifferentDates),
-            bundled = ZjuCalendarSource().parse(bundled)
+    fun `返回空内容时原因是空内容而不是网络`() = runBlocking {
+        val source = ZjuCalendarSource(
+            client = stubClient(code = 200, body = "   "),
+            remoteUrls = listOf("https://example.com/config.json")
         )
 
-        val term = merged.termConfigs.single { it.year == "2026-2027" && it.term == 0 }
-        assertEquals("联网优先：日期应取联网那份", 20260921, term.begin)
-        assertEquals(20270115, term.end)
-        assertEquals(2, term.firstWeekNo)
+        val result = source.fetchRemoteText()
+        assertTrue(result is RemoteFetch.Unavailable)
+        assertTrue(
+            "要能分辨「空内容」和「网络不通」，实际：${(result as RemoteFetch.Unavailable).reason}",
+            result.reason.contains("空内容")
+        )
+    }
+
+    /** 注入文本时直接拿到 Got，**完全不联网**。 */
+    @Test
+    fun `注入的远程文本直接返回 Got`() = runBlocking {
+        val source = ZjuCalendarSource(remoteText = bundled)
+
+        assertEquals(RemoteFetch.Got(bundled), source.fetchRemoteText())
+    }
+
+    /** 内置那份能被 `parseBundled` 直接读出来（不联网）。 */
+    @Test
+    fun `parseBundled 直接读内置那份`() {
+        val parsed = ZjuCalendarSource(bundledText = bundled).parseBundled()
+
+        assertNotNull(parsed)
+        assertEquals(2, parsed!!.termConfigs.size)
+    }
+
+    /** 内置文本没给也读不到 assets 时返回 null（而不是空 Bundle）。 */
+    @Test
+    fun `既没有内置文本也没有 assets 时 parseBundled 返回 null`() {
+        assertNull(ZjuCalendarSource(bundledText = null, assets = null).parseBundled())
     }
 
     /**

@@ -48,6 +48,8 @@ import com.example.data.model.TaskType
 import com.example.ui.components.IslandBottomInset
 import com.example.ui.components.TaskItemCard
 import com.example.ui.components.formatPeriodRange
+import com.example.ui.components.todayCalendar
+import com.example.ui.components.todayStatusLabel
 import com.example.data.calendar.EpochDays
 import com.example.data.calendar.ScheduleResolver
 import com.example.ui.components.parseColor
@@ -83,7 +85,7 @@ fun DashboardScreen(
     val totalCount = state.tasks.size
     val completionRatio = if (totalCount > 0) completedCount.toFloat() / totalCount.toFloat() else 0f
 
-    val todayCalendar = remember { Calendar.getInstance() }
+    val todayCalendar = remember { todayCalendar() }
     val todayDateStr = remember {
         val sdf = SimpleDateFormat("yyyy年M月d日 EEEE", Locale.CHINESE)
         sdf.format(Date())
@@ -279,9 +281,18 @@ fun DashboardScreen(
                     )
                 }
                 Spacer(modifier = Modifier.width(8.dp))
+                val now = System.currentTimeMillis()
+                val coursesHeader = if (todaySlots.isEmpty()) {
+                    "今日课程 · 0 堂"
+                } else {
+                    val status = todayStatusLabel(todayCalendar, todaySlots, now, state.periodTable)
+                    "今日课程 · ${todaySlots.size} 堂 · $status"
+                }
                 Text(
-                    text = "今日课程 · ${todaySlots.size} 堂",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    text = coursesHeader,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }

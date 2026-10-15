@@ -34,11 +34,13 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -295,6 +297,11 @@ fun FloatingIslandNav(
                 noiseFactor = IslandNoiseFactor,
                 hazeFloor = IslandHazeFloor
             )
+            // 拦截并消费整颗浮岛内部的点击事件，防止未命中按钮的点击（如按键间距、外壳内边距处）穿透触发底层卡片
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) {}
             .height(IslandHeight)
             .padding(horizontal = IslandHorizontalPadding, vertical = 4.dp),
         contentAlignment = Alignment.CenterStart

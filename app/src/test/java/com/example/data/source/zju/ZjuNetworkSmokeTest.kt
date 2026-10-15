@@ -4,6 +4,7 @@ import com.example.data.calendar.ZjuCalendarAdapter
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -46,11 +47,13 @@ class ZjuNetworkSmokeTest {
      */
     @Test
     fun fetchPublicCalendar() = runBlocking {
-        val bundle = ZjuCalendarSource(client).fetch()
-        println("lastUpdated=${bundle.lastUpdated} terms=${bundle.termConfigs.size}")
-        bundle.termConfigs.forEach { println("  ${it.year} term=${it.term} ${it.begin}..${it.end}") }
-        bundle.tweaks.forEach { println("  tweak ${it.description} ${it.from}..${it.to}") }
-        assertTrue("校历里一个学期都没有", bundle.termConfigs.isNotEmpty())
+        // 只搬字节那层；拉不到就 null，由 CalendarUpdateService 决定回落。
+        val bundle = ZjuCalendarSource(client).fetchRemoteBundle()
+        println("lastUpdated=${bundle?.lastUpdated} terms=${bundle?.termConfigs?.size}")
+        bundle?.termConfigs?.forEach { println("  ${it.year} term=${it.term} ${it.begin}..${it.end}") }
+        bundle?.tweaks?.forEach { println("  tweak ${it.description} ${it.from}..${it.to}") }
+        assertNotNull("远程校历拉不到（托管地址还没填？）", bundle)
+        assertTrue("校历里一个学期都没有", bundle!!.termConfigs.isNotEmpty())
         assertTrue("作息时间表没填上", bundle.periods.isNotEmpty())
 
         val first = bundle.termConfigs.first()

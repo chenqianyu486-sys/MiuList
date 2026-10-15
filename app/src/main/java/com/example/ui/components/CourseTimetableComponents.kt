@@ -400,6 +400,7 @@ fun CourseLinkageSheet(
     totalWeeks: Int = 25,
     onDismiss: () -> Unit,
     onToggleTaskComplete: (TaskEntity) -> Unit,
+    onToggleTaskStar: (TaskEntity) -> Unit = {},
     onInspectTask: (TaskEntity) -> Unit = {},
     onAddNewTaskForCourse: () -> Unit,
     onEditCourse: () -> Unit,
@@ -741,10 +742,6 @@ fun CourseLinkageSheet(
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
-                                        if (TaskStar.isMarked(task.priority)) {
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            TaskStarMark(size = 14.dp)
-                                        }
                                     }
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Text(
@@ -759,6 +756,13 @@ fun CourseLinkageSheet(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                TaskStarToggle(
+                                    isStarred = TaskStar.isMarked(task.priority),
+                                    onToggle = { onToggleTaskStar(task) },
+                                    unstarredColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                                    modifier = Modifier.testTag("course_sheet_task_star_${task.id}")
+                                )
                             }
                         }
                     }

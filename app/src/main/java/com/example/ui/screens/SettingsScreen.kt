@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.ImportExport
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material3.Button
@@ -62,6 +63,7 @@ import com.example.ui.viewmodel.MainUiState
 fun SettingsScreen(
     state: MainUiState,
     onOpenTransferDialog: () -> Unit,
+    onOpenCategoryManageDialog: () -> Unit,
     onResetDemoData: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -85,6 +87,23 @@ fun SettingsScreen(
                 actionLabel = "管理",
                 actionTestTag = "open_transfer_button",
                 onAction = onOpenTransferDialog
+            )
+        }
+
+        item {
+            val customCount = state.customTaskTypes.size
+            val subtitle = if (customCount > 0) {
+                "4 个自带分类 · $customCount 个自定义分类"
+            } else {
+                "4 个自带分类 · 暂无自定义分类"
+            }
+            SettingsActionCard(
+                icon = Icons.Outlined.Category,
+                title = "待办分类管理",
+                subtitle = subtitle,
+                actionLabel = "管理",
+                actionTestTag = "open_task_category_dialog_button",
+                onAction = onOpenCategoryManageDialog
             )
         }
 
