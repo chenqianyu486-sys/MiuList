@@ -161,9 +161,14 @@ object ZjuScheduleMapper {
         )
     }
 
-    /** 学期代码 → provenance 里的一句话。 */
-    fun termNote(termCode: Int, termQuery: String) =
-        "${ZjuTerms.labelOf(termCode)}（$termQuery）"
+    /**
+     * 学期代码 → provenance 里的一句话。
+     *
+     * [termQueries] 是**实际发出去的每一个**查询串。学年学期要查两半
+     * （秋冬 = `1|秋` + `1|冬`），只写一个会让人以为后半学期没导入。
+     */
+    fun termNote(termCode: Int, termQueries: List<String>) =
+        "${ZjuTerms.labelOf(termCode)}（${termQueries.joinToString(" + ")}）"
 
     /** 组装成可以直接交给导入管线的 v2 Bundle。 */
     fun toBundle(
@@ -171,13 +176,14 @@ object ZjuScheduleMapper {
         calendarBundle: com.example.data.codec.CalendarBundle,
         termYear: String,
         termCode: Int,
+        termQueries: List<String>,
         studentId: String
     ): ScheduleBundle = ScheduleBundle(
         provenance = ProvenanceBundle(
             source = "zju",
             generator = "MiuList 内置浙大导入",
             studentId = studentId,
-            note = termNote(termCode, ZjuTerms.queryOf(termCode))
+            note = termNote(termCode, termQueries)
         ),
         calendar = calendarBundle,
         timetable = TimetableBlockBundle(

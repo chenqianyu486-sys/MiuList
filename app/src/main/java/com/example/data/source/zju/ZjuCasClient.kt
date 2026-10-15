@@ -43,12 +43,12 @@ import java.util.concurrent.TimeUnit
  * 下面 [login] 的分支就是按这条分界写的：**只有正文明确说是凭据问题才这么说**，
  * 其余各归各类，真实原因见 [casFailureReason]。
  */
-class ZjuCasClient(
+open class ZjuCasClient(
     private val client: OkHttpClient = defaultClient()
 ) {
 
-    /** 登录成功。抛出的都是带中文文案的 [ZjuException]。 */
-    suspend fun login(studentId: String, password: String) = withContext(Dispatchers.IO) {
+    /** 登录成功。抛出的都是带中文文案的 [ZjuException]。[open] 供单测替换。 */
+    open suspend fun login(studentId: String, password: String) = withContext(Dispatchers.IO) {
         try {
             loginImpl(studentId, password)
         } catch (e: ZjuException) {
@@ -178,7 +178,13 @@ class ZjuCasClient(
      *
      * @param termQuery 学期查询串，见 [ZjuTerms]。
      */
-    suspend fun fetchSchedule(academicYear: String, termQuery: String): String =
+/**
+     * 按 `xqm` 取一份课表。
+     *
+     * [open] 是为了单测：真实响应只有联网才拿得到，
+     * `ZjuImportServiceTest` 用一份手写响应把它替掉，不必每次出网。
+     */
+    open suspend fun fetchSchedule(academicYear: String, termQuery: String): String =
         withContext(Dispatchers.IO) {
             try {
                 fetchScheduleImpl(academicYear, termQuery)

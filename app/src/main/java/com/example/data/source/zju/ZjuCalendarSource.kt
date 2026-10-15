@@ -1,10 +1,13 @@
 package com.example.data.source.zju
 
+import com.example.data.calendar.TweakKind
 import com.example.data.calendar.ZjuCalendarAdapter
 import com.example.data.codec.CalendarBundle
 import com.example.data.codec.PeriodBundle
 import com.example.data.codec.TermConfigBundle
 import com.example.data.codec.TweakBundle
+import com.example.data.codec.halvesOfAcademicTerm
+import com.example.data.codec.academicTermOf
 import com.example.data.timetable.PeriodTable
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
@@ -112,9 +115,22 @@ class ZjuCalendarSource(
             termConfigs = terms.values.toList(),
             classTerms = (bundled.classTerms.orEmpty() + remote.classTerms.orEmpty()).distinct(),
             examTerms = (bundled.examTerms.orEmpty() + remote.examTerms.orEmpty()).distinct(),
-            tweaks = (remote.tweaks + bundled.tweaks).distinctBy { it.from to it.to }
+            tweaks = (remote.tweaks + bundled.tweaks)
+                .distinctBy { listOf(it.tweakType, it.from, it.to) }
         )
     }
+
+    /**
+     * 只读**内置**那份（assets），**完全不联网**。
+     *
+     * 给「校历设置」弹层用：设置界面要在**秒开、无网**的状态下把预置校历摆出来，
+     * 而 [fetch] 每次都要过一遍三个镜像（且 [merge] 的联网优先会把内置那份盖掉），
+     * 用它来显示「预置」既慢又不准 —— 显示的必须是那份**文件本身**。
+     *
+     * 读不到或解析不了返回 null，由调用方决定是显示「预置不可用」还是别的。
+     */
+    fun parseBundled(): CalendarBundle? =
+        bundledConfigText()?.let { runCatching { parse(it) }.getOrNull() }
 
     /** 内置兜底：优先用注入的文本，否则读 assets。两个都没有才返回 null。 */
     private fun bundledConfigText(): String? {
@@ -133,12 +149,20 @@ class ZjuCalendarSource(
         return CalendarBundle(
             lastUpdated = dto.lastUpdated,
             termConfigs = dto.termConfigs.orEmpty().map {
-                TermConfigBundle(it.year, it.term, it.begin, it.end, it.firstWeekNo)
+                TermConfigBundle(
+                    it.year,
+                    ZjuCalendarAdapter.termCodeOf(it.term),
+                    it.begin,
+                    it.end,
+                    it.firstWeekNo
+                )
             },
-            classTerms = dto.classTerms.orEmpty(),
+            classTerms = dto.classTerms.orEmpty().map { normalizeClassTerm(it) },
             examTerms = dto.examTerms.orEmpty(),
+            // 认不出来的 tweakType 留 null（而不是默认成 CLEAR）：校验期会照它报一条
+            // 「无法识别，已忽略」，用户看得见；默认成 CLEAR 等于悄悄把人课停掉
             tweaks = dto.tweaks.orEmpty().map {
-                TweakBundle(it.tweakType ?: 0, it.description, it.from, it.to)
+                TweakBundle(TweakKind.ofRaw(it.tweakType), it.description, it.from, it.to)
             },
             // 上游没有这个字段，用我们自己的 ZJU 作息补上
             periods = PeriodTable.ZJU_PERIODS.map {
@@ -153,16 +177,27 @@ class ZjuCalendarSource(
     }
 
     /**
-     * 只保留指定学期，并把 tweaks 裁到这一期的区间内。
+     * 只保留指定学年学期，并把 tweaks 裁到这一期的区间内。
      *
-     * 裁剪的理由：config.json 里通常同时挂着秋冬与春夏两期的 tweaks，
-     * 全量带进一份只描述单期的文档，会让另一个学期的停课日也落进库。
+     * **保留的是整个学年学期（秋冬 / 春夏），不是那一条 `termConfigs`。**
+     *
+     * 浙大一个学期是秋(1–8 周)与冬(9–16 周)两段拼起来的 16 周，而
+     * `termConfigs` 一条只描述其中一段。之前这里只留选中那条，于是导入「秋冬」
+     * 拿到的学期只有 8 周：冬那 8 周连同冬的停课/调休一起被丢掉，
+     * 而课程周号已经按 16 周平移过（第 9–16 周），两端口径对不上，
+     * 后半学期整段没课。
+     *
+     * 裁 tweaks 时也按**整个学年学期**的区间裁：冬的调休（元旦停课、12-31 补课）
+     * 落在秋那条的 `End` 之后，按单条区间裁会被误删。
      */
     fun selectTerm(calendar: CalendarBundle, year: String, term: Int): CalendarBundle {
         val target = calendar.termConfigs.firstOrNull { it.year == year && it.term == term }
             ?: return calendar
-        val begin = ZjuCalendarAdapter.yyyymmddToEpochDay(target.begin)
-        val end = ZjuCalendarAdapter.yyyymmddToEpochDay(target.end)
+        val halves = calendar.termConfigs.halvesOfAcademicTerm(year, term)
+            .ifEmpty { listOf(target) }
+        val academic = calendar.termConfigs.academicTermOf(year, term)
+        val begin = academic?.startEpochDay ?: ZjuCalendarAdapter.yyyymmddToEpochDay(target.begin)
+        val end = academic?.endEpochDay ?: ZjuCalendarAdapter.yyyymmddToEpochDay(target.end)
         val keptTweaks = calendar.tweaks.filter { tw ->
             val f = ZjuCalendarAdapter.yyyymmddToEpochDay(tw.from)
             val t = ZjuCalendarAdapter.yyyymmddToEpochDay(tw.to)
@@ -170,10 +205,25 @@ class ZjuCalendarSource(
             else t >= begin && f <= end
         }
         return calendar.copy(
-            termConfigs = listOf(target),
-            classTerms = listOf("$year:$term"),
+            termConfigs = halves,
+            classTerms = halves.mapNotNull { it.year?.let { y -> it.term?.let { t2 -> "$y:$t2" } } },
             tweaks = keptTweaks
         )
+    }
+
+    /**
+     * `"2026-2027:秋"` → `"2026-2027:0"`；已经是数字的原样返回。
+     *
+     * 上游的 `classTerms` 与 `termConfigs[].Term` 用的是同一套中文写法，
+     * 归一后才能和 `TermConfigBundle.key` 对得上，导出的文档也自洽。
+     * 认不出来的整条原样保留 —— 这段只是元数据，不该因为认不出就丢掉。
+     */
+    private fun normalizeClassTerm(raw: String): String {
+        val idx = raw.lastIndexOf(':')
+        if (idx <= 0) return raw
+        val token = raw.substring(idx + 1).trim()
+        val code = ZjuCalendarAdapter.termCodeOf(token.toIntOrNull() ?: token) ?: return raw
+        return "${raw.substring(0, idx)}:$code"
     }
 
     private suspend fun fetchText(): String? {
@@ -240,7 +290,13 @@ data class UpstreamConfigDto(
 
 @JsonClass(generateAdapter = true)
 data class UpstreamTweakDto(
-    @Json(name = "TweakType") val tweakType: Int? = null,
+    /**
+     * 上游写的是**字符串**（`"Clear"` / `"Move"` / `"Exchange"`），历史版本写过数字。
+     * 声明成 [Any] 让两种都收进来，再由 [TweakKind.ofRaw] 归一 ——
+     * 声明成 Int 会让 Moshi 在遇到 `"Clear"` 时抛 JsonDataException，
+     * 整份校历配置解析失败（学期起止日期、调休一起丢）。
+     */
+    @Json(name = "TweakType") val tweakType: Any? = null,
     @Json(name = "Description") val description: String? = null,
     @Json(name = "From") val from: Int? = null,
     @Json(name = "To") val to: Int? = null
@@ -249,7 +305,12 @@ data class UpstreamTweakDto(
 @JsonClass(generateAdapter = true)
 data class UpstreamTermConfigDto(
     @Json(name = "Year") val year: String? = null,
-    @Json(name = "Term") val term: Int? = null,
+    /**
+     * 上游写的是**中文**：`"Term": "秋"`。声明成 `Int?` 时 Moshi 遇到字符串抛
+     * `JsonDataException`，整份配置解析失败（连 `tweaks` 一起丢）。
+     * 数字（0–6）也收，由 [ZjuCalendarAdapter.termCodeOf] 归一。
+     */
+    @Json(name = "Term") val term: Any? = null,
     @Json(name = "Begin") val begin: Int? = null,
     @Json(name = "End") val end: Int? = null,
     @Json(name = "FirstWeekNo") val firstWeekNo: Int? = null
