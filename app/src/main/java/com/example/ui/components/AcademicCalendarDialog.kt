@@ -19,6 +19,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -41,6 +42,8 @@ import com.example.data.local.MakeupDayEntity
 import com.example.data.local.NoClassDayEntity
 import com.example.data.local.SemesterEntity
 import com.example.data.local.TimetablePeriodEntity
+import com.example.data.repository.AcademicCalendarRepository
+import com.example.data.source.zju.ZjuPresetSemester
 import com.example.data.timetable.MAX_PERIODS_PER_DAY
 import com.example.data.timetable.PeriodDraft
 import com.example.data.timetable.PeriodTable
@@ -48,7 +51,11 @@ import com.example.data.timetable.resizePeriodDrafts
 import com.example.data.timetable.toDrafts
 
 /**
- * 本学期自定义校历。
+ * 本学期校历：**预置的官方校历**与**你自己的校历**分开摆。
+ *
+ * 两块之间用一条分隔线隔开，上面那块只读、下面那块可编辑。混在一起显示过一次，
+ * 后果是用户在界面上看到一份学期日期却分不清它是官方的还是自己上次敲的，
+ * 于是改错了也不知道该去哪里改。
  *
  * 顶部那行「第 1 周 = X 月 X 日 – X 月 X 日」的换算是刻意做的：
  * 学期起始日填错会让**单双周整体判错且不易察觉**，必须给一个能一眼验的反馈。
@@ -59,6 +66,9 @@ fun AcademicCalendarDialog(
     periodTable: PeriodTable,
     existingNoClass: List<NoClassDayEntity>,
     existingMakeup: List<MakeupDayEntity>,
+    /** 内置的浙大官方校历；null = 这台机器上读不到（弹层会明说，不会假装没有）。 */
+    preset: ZjuPresetSemester?,
+    isPresetLoading: Boolean,
     onSave: (
         SemesterEntity?,
         List<TimetablePeriodEntity>,
@@ -98,13 +108,31 @@ fun AcademicCalendarDialog(
             addAll(existingNoClass.sortedBy { it.epochDay }.map { EpochDays.format(it.epochDay) })
         }
     }
+    /**
+     * 一行补课草稿：补课日 / 补周几 / 来源日（那份课原本属于哪一天）。
+     *
+     * 必须留着来源日：补课日与来源日可以差两周以上（2026 国庆把 10-02 的周五课
+     * 补到 10-17），只存周几就丢了「这是第几周的课」，排课时单双周会集体判错。
+     * 手填的行留空即可（空 = 未知，退回按补课当天算）。
+     */
     val makeupDrafts = remember {
-        mutableStateListOf<Pair<String, String>>().apply {
-            addAll(
-                existingMakeup.sortedBy { it.epochDay }
-                    .map { EpochDays.format(it.epochDay) to it.makeupForDayOfWeek.toString() }
-            )
+        mutableStateListOf<MakeupDraft>().apply {
+            addAll(existingMakeup.sortedBy { it.epochDay }.map { it.toDraft() })
         }
+    }
+
+    /** 把预置官方校历填进下面的自定义草稿。**只填草稿，不直接落库** —— 仍要用户点保存。 */
+    fun applyPreset(p: ZjuPresetSemester) {
+        name = p.label
+        startText = EpochDays.format(p.startEpochDay)
+        firstMondayText = EpochDays.format(p.firstMondayEpochDay)
+        endText = EpochDays.format(p.endEpochDay)
+        totalWeeksText = p.totalWeeks.toString()
+        noClassDrafts.clear()
+        noClassDrafts.addAll(p.noClassDays.toDraftRanges())
+        makeupDrafts.clear()
+        makeupDrafts.addAll(p.makeupDays.sortedBy { it.epochDay }.map { it.toDraft() })
+        inputError = null
     }
 
     // 换算预览：学期起始日 / 首个周一解析不出来时显示提示而不是静默算错
@@ -137,10 +165,68 @@ fun AcademicCalendarDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                // ================= 预置（官方）· 只读 =================
+                SectionLabel("预置 ZJU 校历")
+                when {
+                    isPresetLoading -> Text(
+                        text = "正在读取…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    preset == null -> Text(
+                        // 说清楚是「读不到」而不是「不存在」：这台机器上没打出那份内置文件，
+                        // 与用户自己的校历无关，底下那块照样能用。
+                        text = "读不到内置的官方校历，下面的自定义内容不受影响",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    else -> {
+                        val p = preset
+                        Text(
+                            text = p.label,
+                            style = MaterialTheme.typography.bodyMedium
+                                .copy(fontWeight = FontWeight.SemiBold)
+                        )
+                        Text(
+                            text = buildString {
+                                append("${EpochDays.formatCn(p.startEpochDay)} – ${EpochDays.formatCn(p.endEpochDay)}")
+                                append(" · ${p.totalWeeks} 周")
+                                // 起始日就是第一周周一时再说一遍「第 1 周起于 …」是同一句话说两遍；
+                                // 只有学期从周中开始（浙大不常见，但别的学校会）才需要补这句。
+                                if (p.firstMondayEpochDay != p.startEpochDay) {
+                                    append(" · 第 1 周起于 ${EpochDays.formatCn(p.firstMondayEpochDay)}")
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = buildString {
+                                append("停课 ${p.noClassDays.size} 天")
+                                append(" · 补课 ${p.makeupDays.size} 天")
+                                p.updatedOn?.let { append(" · 内置于 $it") }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedButton(
+                            onClick = { applyPreset(p) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp)
+                        ) { Text("填入下面的自定义校历", fontSize = 12.sp) }
+                    }
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(top = 4.dp, bottom = 2.dp))
+
+                // ================= 自定义 · 可编辑 =================
+                SectionLabel("自定义（本机当前使用的）")
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("学期名称（20xx-20xx学年 春季/秋季学期）") },
+                    label = { Text("学期名称（20xx-20xx学年 秋冬/春夏 学期）") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true
                 )
@@ -215,32 +301,56 @@ fun AcademicCalendarDialog(
                 ) { Text("添加停课区间", fontSize = 12.sp) }
 
                 // ---- 补课 ----
-                SectionLabel("补课日期（哪天要补 · 补周几 1–7）")
-                makeupDrafts.forEachIndexed { index, pair ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = pair.first,
-                            onValueChange = { makeupDrafts[index] = pair.first to it },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodySmall,
-                            isError = pair.first.isNotBlank() && EpochDays.parse(pair.first) == null
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        OutlinedTextField(
-                            value = pair.second,
-                            onValueChange = { makeupDrafts[index] = it to pair.second },
-                            modifier = Modifier.width(64.dp),
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodySmall,
-                            isError = pair.second.toIntOrNull()?.let { it !in 1..7 } ?: true
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        TextButton(onClick = { makeupDrafts.removeAt(index) }) { Text("删", fontSize = 11.sp) }
+                SectionLabel("补课日期（哪天要补 · 补周几 1–7 · 来源日）")
+                // 说明只写一遍，放在段标题下：原来挂在每一行下面，8 条补课就是 8 段
+                // 一样的字，把真正要看的日期挤到视口外。
+                Text(
+                    text = "来源日填了才算这次补课属于哪一周的课；留空则按补课当天算。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                makeupDrafts.forEachIndexed { index, draft ->
+                    Column(modifier = Modifier.padding(bottom = 2.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(
+                                value = draft.dateText,
+                                onValueChange = { makeupDrafts[index] = draft.copy(dateText = it) },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodySmall,
+                                isError = draft.dateText.isNotBlank() && EpochDays.parse(draft.dateText) == null
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            OutlinedTextField(
+                                value = draft.dowText,
+                                onValueChange = { makeupDrafts[index] = draft.copy(dowText = it) },
+                                modifier = Modifier.width(48.dp),
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodySmall,
+                                isError = draft.dowText.toIntOrNull()?.let { it !in 1..7 } ?: true
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            TextButton(onClick = { makeupDrafts.removeAt(index) }) { Text("删", fontSize = 11.sp) }
+                        }
+                        // 来源日另起一行：三个 `yyyy-MM-dd` 并排放不下 —— 实测日期框
+                        // 只剩 90dp，而「2026-10-17」加输入框自带的那圈内边距就要 94dp，
+                        // 截成「2026-09」比不给来源日更难认。
+                        if (draft.showSource) {
+                            OutlinedTextField(
+                                value = draft.sourceText,
+                                onValueChange = { makeupDrafts[index] = draft.copy(sourceText = it) },
+                                modifier = Modifier.width(180.dp),
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodySmall,
+                                isError = draft.sourceText.isNotBlank() &&
+                                    EpochDays.parse(draft.sourceText) == null,
+                                placeholder = { Text("来源日 2026-10-02", fontSize = 11.sp) }
+                            )
+                        }
                     }
                 }
                 OutlinedButton(
-                    onClick = { makeupDrafts.add("" to "1") },
+                    onClick = { makeupDrafts.add(MakeupDraft("", "1", "", showSource = true)) },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp)
                 ) { Text("添加补课", fontSize = 12.sp) }
@@ -343,19 +453,27 @@ fun AcademicCalendarDialog(
                     }
 
                     val makeup = mutableListOf<MakeupDayEntity>()
-                    makeupDrafts.forEachIndexed { index, (dateText, dowText) ->
-                        if (dateText.isBlank() && dowText.isBlank()) return@forEachIndexed
-                        val day = EpochDays.parse(dateText)
+                    makeupDrafts.forEachIndexed { index, draft ->
+                        if (draft.dateText.isBlank() && draft.dowText.isBlank()) return@forEachIndexed
+                        val day = EpochDays.parse(draft.dateText)
                         if (day == null) {
-                            inputError = "第 ${index + 1} 行补课日期无法解析：$dateText"
+                            inputError = "第 ${index + 1} 行补课日期无法解析：${draft.dateText}"
                             return@save
                         }
-                        val dow = dowText.toIntOrNull()
+                        val dow = draft.dowText.toIntOrNull()
                         if (dow == null || dow !in 1..7) {
-                            inputError = "第 ${index + 1} 行「补周几」必须是 1–7，当前是「$dowText」"
+                            inputError = "第 ${index + 1} 行「补周几」必须是 1–7，当前是「${draft.dowText}」"
                             return@save
                         }
-                        makeup += MakeupDayEntity(day, dow, "")
+                        // 来源日随草稿一起落库。它填错**不拦保存** —— 只影响「算第几周」，
+                        // 把值清 0 退回按当天算即可；整行作废反而会连带丢掉用户敲好的
+                        // 补课日与周几。输入框已经标红，错误当场看得见。
+                        val source = if (draft.showSource) {
+                            EpochDays.parse(draft.sourceText) ?: 0L
+                        } else {
+                            0L
+                        }
+                        makeup += MakeupDayEntity(day, dow, "", source)
                     }
 
                     inputError = null
@@ -388,7 +506,7 @@ fun AcademicCalendarDialog(
                         name = name,
                         yearSpan = Regex("(20\\d{2})\\s*[-–—~至]\\s*(20\\d{2})").find(name)
                             ?.let { "${it.groupValues[1]}-${it.groupValues[2]}" } ?: "",
-                        term = if (name.contains("春")) "春季" else if (name.contains("秋")) "秋季" else "",
+                        term = seasonOf(name),
                         startEpochDay = start,
                         firstMondayEpochDay = fm,
                         endEpochDay = end,
@@ -520,9 +638,76 @@ private fun SectionLabel(text: String) {
     )
 }
 
-private fun defaultSemesterName(): String {
-    val now = java.time.LocalDate.ofEpochDay(EpochDays.today())
-    val startYear = if (now.monthValue >= 8) now.year else now.year - 1
-    val term = if (now.monthValue in 1..7) "春季" else "秋季"
-    return "$startYear-${startYear + 1}学年 $term 学期"
+/**
+ * 一行补课草稿：补课日 + 补周几 + 来源日。
+ *
+ * [sourceText] 存**原文**而不是 epochDay：输入框要允许敲到一半（「2026-1」）才判错，
+ * 若把解析结果存成数字、显示时再格式化，用户每敲一个字符都会被重写成上一版能解析
+ * 出来的日期，光标和输入都被抢走。保存那一刻才解析。
+ *
+ * [showSource] 是「这一行有没有来源日输入框」，由**建行时就定死**：库里有来源日就显示，
+ * 「添加补课」新建的行也显示（默认给）。若改成「填了才显示」，手填的行就永远没有那个框，
+ * 而来源日恰恰是这三样里最容易漏、又最影响单双周的一样。
+ */
+private data class MakeupDraft(
+    val dateText: String,
+    val dowText: String,
+    val sourceText: String,
+    val showSource: Boolean
+)
+
+/** 库里那条补课 → 草稿行。来源日为 0（未知）时留空，也不给它开输入框。 */
+private fun MakeupDayEntity.toDraft() = MakeupDraft(
+    dateText = EpochDays.format(epochDay),
+    dowText = makeupForDayOfWeek.toString(),
+    sourceText = if (sourceEpochDay > 0L) EpochDays.format(sourceEpochDay) else "",
+    showSource = sourceEpochDay > 0L
+)
+
+/**
+ * 停课日 → 草稿行：**连续的日子合成一个区间**。
+ *
+ * 国庆七天一天一行就是七个输入框，把弹层顶得比作息表还长；合成
+ * `2026-10-01~2026-10-07` 一行既短，又是这个输入框本来就认的写法。
+ *
+ * 区间里夹着上课日的仍会分成两段 —— 强行合并会把中间那些天也停掉。
+ */
+private fun List<NoClassDayEntity>.toDraftRanges(): List<String> {
+    val days = map { it.epochDay }.distinct().sorted()
+    if (days.isEmpty()) return emptyList()
+    val out = mutableListOf<String>()
+    var from = days.first()
+    var to = from
+    days.drop(1).forEach { d ->
+        if (d == to + 1L) {
+            to = d
+        } else {
+            out += noClassRangeText(from, to)
+            from = d
+            to = d
+        }
+    }
+    out += noClassRangeText(from, to)
+    return out
 }
+
+private fun noClassRangeText(from: Long, to: Long): String =
+    if (from == to) EpochDays.format(from) else "${EpochDays.format(from)}~${EpochDays.format(to)}"
+
+/**
+ * 学期名 → [SemesterEntity.term]，按**学年学期**口径（秋冬 / 春夏）。
+ *
+ * 「秋冬 / 春夏」必须判在单字前面：「秋冬」里也有个「秋」，先判单字会把一个
+ * 16 周的学年学期记成 8 周的半学期，导出时 `termConfigs` 就只写得出秋那一条。
+ * 旧名字（「…学年 秋季 学期」）仍按原样存回去 —— 不能因为换了口径就让已有学期读丢。
+ */
+private fun seasonOf(name: String): String = when {
+    name.contains("秋冬") -> "秋冬"
+    name.contains("春夏") -> "春夏"
+    name.contains("秋") -> "秋季"
+    name.contains("春") -> "春季"
+    else -> ""
+}
+
+/** 学期名兜底直接走仓储那份，弹层不自己再写一套 —— 写过一份，然后漂成了旧的春秋/秋季口径。 */
+private fun defaultSemesterName(): String = AcademicCalendarRepository.defaultName()

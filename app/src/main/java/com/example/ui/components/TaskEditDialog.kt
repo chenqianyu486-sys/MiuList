@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -35,6 +36,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
@@ -58,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.local.CourseEntity
 import com.example.data.local.TaskEntity
@@ -78,6 +81,12 @@ import java.util.TimeZone
 private const val DEFAULT_DUE_DAYS = 3
 private const val DEFAULT_DUE_HOUR = 23
 private const val DEFAULT_DUE_MINUTE = 59
+
+/**
+ * 类型行那颗「不属于任何类型」的 chip 文案。与 `ChecklistScreen.NO_TYPE_GROUP_TITLE` 同名，
+ * 别再改回「不设」——那是否定式选择，读起来像「这项可以不设」，而不是一个归类名。
+ */
+private const val TASK_TYPE_NONE_LABEL = "未分类"
 
 /** 一行紧凑的字段标签。原先每个字段上方都顶一个加粗标题，弹层高度被标签吃掉大半。 */
 @Composable
@@ -227,9 +236,11 @@ fun TaskEditDialog(
 
                 FieldLabel("待办类型")
                 // 类型是一行横排：内置 3 个 + 用户新建的，数量不可控，
-                // 所以既用横向滚动，又在最前面留一个「不设」的落点。
-                // 「不设」不是一种类型，是「这条不属于任何类型」——它必须一直摆在
+                // 所以既用横向滚动，又在最前面留一个「未分类」的落点。
+                // 「未分类」不是一种类型，是「这条不属于任何类型」——它必须一直摆在
                 // 第一位，否则一旦有人建了自定义类型，想清掉类型就得先滚回最左端。
+                // 措辞跟列表页那个兜底分组（ChecklistScreen 的 NO_TYPE_GROUP_TITLE）一致：
+                // 「不设」是个否定式选择，读起来像「这项可以不设」，而它其实是个归类名。
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -237,7 +248,7 @@ fun TaskEditDialog(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     TypeChoiceChip(
-                        label = "不设",
+                        label = TASK_TYPE_NONE_LABEL,
                         selected = selectedTypeKey.isEmpty(),
                         onClick = { selectedTypeKey = "" }
                     )
@@ -454,31 +465,71 @@ fun TaskEditDialog(
             initialMinute = dueCal.get(Calendar.MINUTE),
             is24Hour = true
         )
-        GlassOverlayHost(
+        // 必须自己开一个 `Dialog` 窗口，**不能**用 GlassOverlayHost。
+        //
+        // 外层这个编辑弹层是 M3 `AlertDialog`，它跑在独立窗口里；而 `GlassOverlayHost`
+        // 是同窗口 overlay（见 GlassOverlays 的注释：毛玻璃要跟页面同窗口才接得上 haze）。
+        // 两者混用时，时间选择器被画在**下面那层**窗口：表盘看着在屏幕上，实际被编辑弹层
+        // 的窗口整个压住，点下去事件全被上层窗口吃掉——表现就是「时间 x 时 x 分改不了」。
+        // 同文件里的日期选择器用 `DatePickerDialog`（自带窗口）所以一直没这个毛病。
+        //
+        // 窗口里不能用玻璃面：haze 读不到别的窗口的源层（同一坑，同一个前提），
+        // 所以这里给实心 surface，面板观感与上面的日期选择器一致。
+        Dialog(
             onDismissRequest = { showTimePicker = false },
-            horizontalPadding = 24.dp,
-            title = { Text("选择时间", color = MaterialTheme.colorScheme.onSurface) },
-            text = {
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    TimePicker(state = timePickerState)
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                shape = GlassDialogShape,
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp,
+                modifier = Modifier
+                    .padding(horizontal = 24.dp)
+                    .widthIn(max = 400.dp)
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text(
+                        text = "选择时间",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        TimePicker(state = timePickerState)
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = { showTimePicker = false }) {
+                            Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        TextButton(
+                            onClick = {
+                                dueMillis = Calendar.getInstance().apply {
+                                    timeInMillis = dueMillis
+                                    set(Calendar.HOUR_OF_DAY, timePickerState.hour)
+                                    set(Calendar.MINUTE, timePickerState.minute)
+                                    set(Calendar.SECOND, 0)
+                                    set(Calendar.MILLISECOND, 0)
+                                }.timeInMillis
+                                showTimePicker = false
+                            },
+                            modifier = Modifier.testTag("confirm_time_button")
+                        ) { Text("确定") }
+                    }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    dueMillis = Calendar.getInstance().apply {
-                        timeInMillis = dueMillis
-                        set(Calendar.HOUR_OF_DAY, timePickerState.hour)
-                        set(Calendar.MINUTE, timePickerState.minute)
-                        set(Calendar.SECOND, 0)
-                        set(Calendar.MILLISECOND, 0)
-                    }.timeInMillis
-                    showTimePicker = false
-                }) { Text("确定") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showTimePicker = false }) { Text("取消") }
             }
-        )
+        }
     }
 }
 

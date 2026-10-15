@@ -719,7 +719,7 @@ private val ruleFlow = combine(
         _uiState.update {
             it.copy(
                 isZjuImportRunning = false,
-                zjuTermOptions = options.map { o -> ZjuTermOption(o.year, o.term) },
+                zjuTermOptions = options.map { o -> ZjuTermOption(o.year, o.term, o.season) },
                 zjuError = if (options.isEmpty()) "校历配置拉取失败，可改用文件导入" else null
             )
         }
@@ -928,9 +928,43 @@ private val ruleFlow = combine(
 
     // ------------------------------------------------------------ 校历设置
 
-    fun openAcademicCalendarDialog() = _uiState.update { it.copy(isAcademicCalendarDialogOpen = true) }
+    /**
+     * 打开弹层。
+     *
+     * 「开弹层」与「开始读预置校历」必须落在**同一次 update** 里：分成两次的话，
+     * 中间那一帧弹层看到的是 `preset = null && loading = false`，
+     * 于是先闪一句「读不到内置的官方校历」再变成「正在读取…」。
+     * 读不到和没在读是两件事，不该用同一帧去表示。
+     */
+    fun openAcademicCalendarDialog() {
+        _uiState.update {
+            it.copy(
+                isAcademicCalendarDialogOpen = true,
+                isZjuPresetLoading = it.zjuPreset == null
+            )
+        }
+        loadZjuPreset()
+    }
 
     fun closeAcademicCalendarDialog() = _uiState.update { it.copy(isAcademicCalendarDialogOpen = false) }
+
+    /**
+     * 读内置那份官方校历，给弹层单独显示。**不联网**（读 assets），秒开。
+     *
+     * 结果与 loading 在**同一次 update** 里落：只设 `isZjuPresetLoading = false` 而漏了
+     * `zjuPreset`，界面上就会一直转圈；反过来只设结果不设 loading，转圈永远不停。
+     * 成功与失败都不抛 —— 读不到内置文件是「这台机器上没这份数据」，
+     * 该由弹层显示「预置不可用」，不该让开弹层这个动作失败。
+     */
+    private fun loadZjuPreset() = viewModelScope.launch {
+        // 只按「有没有结果」判重，不按 loading：打开时已经把 loading 置 true 了，
+        // 拿 loading 当「已经在读」的凭据会把这次读取自己挡在门外。
+        if (_uiState.value.zjuPreset != null) return@launch
+        val preset = runCatching {
+            zjuImportService.bundledPreset(_uiState.value.semester?.yearSpan)
+        }.getOrNull()
+        _uiState.update { it.copy(isZjuPresetLoading = false, zjuPreset = preset) }
+    }
 
     fun saveAcademicCalendar(
         semester: SemesterEntity?,

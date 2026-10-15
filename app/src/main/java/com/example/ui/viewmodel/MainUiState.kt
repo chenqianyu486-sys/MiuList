@@ -64,9 +64,17 @@ enum class ImportSource(val label: String) {
     ZJU("ZJU")
 }
 
-/** 浙大校历里的一个学期（学年的哪一段）。 */
-data class ZjuTermOption(val year: String, val term: Int) {
-    val label: String get() = "$year ${ZjuTermLabels.of(term)}"
+/**
+ * 浙大校历里的一个**学年学期**（秋冬 / 春夏，16 周）。
+ *
+ * [term] 是教务网查询用的那一半（秋冬 → 0 秋，春夏 → 4 春），
+ * [season] 只影响显示：有它就写「2026-2027学年 秋冬学期」，
+ * 短学期那类独立段没有季节，退回写半学期自己的名字。
+ */
+data class ZjuTermOption(val year: String, val term: Int, val season: String? = null) {
+    val label: String
+        get() = if (season != null) "${year}学年 $season 学期" else "$year ${ZjuTermLabels.of(term)}"
+
     val key: String get() = "$year:$term"
 }
 
@@ -114,6 +122,16 @@ data class MainUiState(
     val makeupDays: List<MakeupDayEntity> = emptyList(),
     val noClassDayCount: Int = 0,
     val makeupDayCount: Int = 0,
+
+    /**
+     * 内置的浙大官方校历，**只读**，仅供校历弹层单独显示。
+     *
+     * 与上面那份 [semester] / [noClassDays] / [makeupDays] 是两件事：
+     * 那是用户自己的（可能改过、可能不是浙大），这是官方的（谁都没改过）。
+     * 弹层里分两块摆，不混。
+     */
+    val zjuPreset: com.example.data.source.zju.ZjuPresetSemester? = null,
+    val isZjuPresetLoading: Boolean = false,
 
     // Filter & Presentation options
     val searchQuery: String = "",

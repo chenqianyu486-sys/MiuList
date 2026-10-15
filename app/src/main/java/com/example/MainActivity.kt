@@ -565,7 +565,6 @@ fun MainApp(viewModel: MainViewModel) {
                             NavigationTab.DASHBOARD -> {
                                 DashboardScreen(
                                     state = state,
-                                    onNavigateTab = { viewModel.setNavigationTab(it) },
                                     onGenerateTodayTasks = { viewModel.generateTasksDirectlyForWeek() },
                                     onPreviewGenerateTasks = { viewModel.openQuickGenerateWeekDialog() },
                                     onToggleTaskComplete = { viewModel.toggleTaskComplete(it) },
@@ -851,6 +850,9 @@ fun MainApp(viewModel: MainViewModel) {
             periodTable = state.periodTable,
             existingNoClass = state.noClassDays,
             existingMakeup = state.makeupDays,
+            // 官方那份与用户自己那份分两块摆，所以这两项与 semester 无关、各自独立。
+            preset = state.zjuPreset,
+            isPresetLoading = state.isZjuPresetLoading,
             onSave = { sem, periods, noClass, makeup ->
                 viewModel.saveAcademicCalendar(sem, periods, noClass, makeup)
             },

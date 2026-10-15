@@ -21,8 +21,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.outlined.CalendarMonth
-import androidx.compose.material.icons.outlined.ListAlt
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -62,7 +62,6 @@ import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.glassSurface
 import com.example.ui.theme.LocalCardRevealProgress
 import com.example.ui.viewmodel.MainUiState
-import com.example.ui.viewmodel.NavigationTab
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -71,7 +70,6 @@ import java.util.Locale
 @Composable
 fun DashboardScreen(
     state: MainUiState,
-    onNavigateTab: (NavigationTab) -> Unit,
     onGenerateTodayTasks: () -> Unit = {},
     onPreviewGenerateTasks: () -> Unit = {},
     onToggleTaskComplete: (TaskEntity) -> Unit,
@@ -258,50 +256,33 @@ fun DashboardScreen(
         }
 
         // Section: Today's Classes & Linked Tasks
+        // 组头只剩标题：原来右侧那颗「全周课表 >」是跳课表页的按钮，已撤。
+        // 切页由底部浮岛承担，组头里再放一个跳转入口就是同一个动作的第二个落点。
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .background(TeaColor)
-                            .border(0.5.dp, TeaColorBorder, CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.School,
-                            contentDescription = null,
-                            tint = TeaOnColor,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "今日课程 · ${todaySlots.size} 堂",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                }
-
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
+                        .size(28.dp)
+                        .clip(CircleShape)
                         .background(TeaColor)
-                        .border(0.5.dp, TeaColorBorder, RoundedCornerShape(12.dp))
-                        .clickable { onNavigateTab(NavigationTab.SCHEDULE) }
-                        .padding(horizontal = 9.dp, vertical = 3.5.dp)
+                        .border(0.5.dp, TeaColorBorder, CircleShape),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "全周课表 >",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = TeaOnColor,
-                        fontSize = 11.5.sp
+                    Icon(
+                        imageVector = Icons.Outlined.School,
+                        contentDescription = null,
+                        tint = TeaOnColor,
+                        modifier = Modifier.size(16.dp)
                     )
                 }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "今日课程 · ${todaySlots.size} 堂",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
             }
         }
 
@@ -482,50 +463,32 @@ fun DashboardScreen(
         }
 
         // Section: Urgent / Today's Pending Tasks
+        // 同上：右侧「清单 >」跳转按钮已撤，这一组只剩标题。
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .background(TeaColor)
-                            .border(0.5.dp, TeaColorBorder, CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.ListAlt,
-                            contentDescription = null,
-                            tint = TeaOnColor,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "待办清单 · ${pendingTasks.size}",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                }
-
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
+                        .size(28.dp)
+                        .clip(CircleShape)
                         .background(TeaColor)
-                        .border(0.5.dp, TeaColorBorder, RoundedCornerShape(12.dp))
-                        .clickable { onNavigateTab(NavigationTab.CHECKLIST) }
-                        .padding(horizontal = 9.dp, vertical = 3.5.dp)
+                        .border(0.5.dp, TeaColorBorder, CircleShape),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "清单 >",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = TeaOnColor,
-                        fontSize = 11.5.sp
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Outlined.ListAlt,
+                        contentDescription = null,
+                        tint = TeaOnColor,
+                        modifier = Modifier.size(16.dp)
                     )
                 }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "待办清单 · ${pendingTasks.size}",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
             }
         }
 
