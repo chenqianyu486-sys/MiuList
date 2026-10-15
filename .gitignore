@@ -45,3 +45,5 @@ google-services.json
 /window_dump*.xml
 /ui.xml
 /test_screen.png
+# 本地跑 Gradle 时重定向出来的日志（testDebugUnitTest 输出等），不是源码也不是报告。
+/*.log
