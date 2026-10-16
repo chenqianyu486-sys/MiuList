@@ -33,6 +33,21 @@ object EpochDays {
         return "${d.monthValue}月${d.dayOfMonth}日"
     }
 
+    /**
+     * 「10/12」这样的短日期。
+     *
+     * 周课表的列头只有约 52.dp 宽，完整日期（10月12日）必然折行或截断；
+     * 去掉「月」「日」两个字是最省的一刀，省下的宽度正好留给「放假 / 补周五」这类
+     * 状态徽标——那两个字才是用户要看这列的原因。
+     */
+    fun formatShort(epochDay: Long): String {
+        val d = LocalDate.ofEpochDay(epochDay)
+        return "${d.monthValue}/${d.dayOfMonth}"
+    }
+
+    /** 周次条的日期区间，「10/12 – 10/18」。 */
+    fun formatShortRange(from: Long, to: Long): String = "${formatShort(from)} – ${formatShort(to)}"
+
     /** [from]..[to] 闭区间展开。区间非法时返回空列表。 */
     fun expandRange(from: Long, to: Long): List<Long> {
         if (to < from) return emptyList()

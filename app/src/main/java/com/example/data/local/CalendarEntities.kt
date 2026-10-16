@@ -46,22 +46,23 @@ data class NoClassDayEntity(
 )
 
 /**
- * 补课日。[makeupForDayOfWeek] 表示「这天要上星期几的课」——
- * 10 月 17 日（周六）补周五 的课，记 `makeupForDayOfWeek = 5`。
+ * 补课日。**[sourceEpochDay] 是唯一真源**：「这份课原本属于哪一天」（10 月 2 日）。
  *
- * [sourceEpochDay] 记「那份课原本属于哪一天」（10 月 2 日）。
+ * 补周几和算第几周都由它推出来，见 `AcademicCalendar.makeupDayOfWeek` 与
+ * `teachingWeekOf`。早先这里另存了一个 [makeupForDayOfWeek]，两份事实可以互相矛盾
+ * （写着补周五、来源日却是周三），而界面上看不出任何异常 —— 直到单双周的课集体判错。
  *
- * **两者回答的不是同一个问题，不能只留前者。** 界面上出哪门课由周几决定，
- * 而**它算第几周**由来源日决定：2026 国庆把 10-02 的周五课补到 10-17，
- * 10-02 在第 3 周、10-17 在第 5 周，按补课当天的日期算周次的话，
- * 这一场补上来的课会被当成第 5 周的课，单双周课就集体判错。
+ * [makeupForDayOfWeek] 现在是**由来源日算出来写进去的派生值**，保留它只为两件事：
+ * 数据库列不删（删了要迁移），以及 v1 旧文档的导出格式不变。
+ * **判定逻辑一律不读它** —— 一读，两份事实就又能各说各话。
  *
- * 0 表示「来源日未知」（v1 旧文档、以及校历弹层里手工填的行），
- * 此时退回按补课当天算周次 —— 这是仅存的兼容路径。
+ * [sourceEpochDay] <= 0 是「不知道补的是哪一天的课」，不构成一次搬运；
+ * 导入与手工填写两处已把它拦成必填，老库里残留的由 `AcademicCalendar` 滤掉。
  */
 @Entity(tableName = "makeup_days")
 data class MakeupDayEntity(
     @PrimaryKey val epochDay: Long,
+    /** 由 [sourceEpochDay] 推出的派生值，仅供展示与 v1 导出。判定不读它。 */
     val makeupForDayOfWeek: Int,
     val note: String = "",
     val sourceEpochDay: Long = 0L

@@ -15,6 +15,9 @@ import com.example.data.repository.TaskTypeRepository
 import com.example.data.source.zju.CalendarUpdateService
 import com.example.data.source.zju.ZjuCalendarSource
 import com.example.data.source.zju.ZjuImportService
+import com.example.data.source.weather.SeniverseWeatherSource
+import com.example.data.source.weather.WeatherCache
+import com.example.data.source.weather.WeatherService
 import com.example.data.security.SecureAccountStorage
 import com.example.data.sync.ScheduleSyncManager
 import com.example.data.transfer.ScheduleExportService
@@ -116,9 +119,25 @@ class AppContainer(context: Context) {
         )
     }
 
+    /**
+     * 总览页当天的天气。
+     *
+     * **这里没有任何密钥**，是刻意的：这一块曾经接心知天气，需要把私钥编译进
+     * dex 才能在客户端算签名 —— 于是它以明文常量躺在安装包里（实测能直接搜到）。
+     * 换成 Open-Meteo 之后这条注入链路整个删掉了，不需要 `isConfigured` 闸门，
+     * 也不再有「忘了配密钥就什么都不显示」的那一档状态。
+     */
+    val weatherService: WeatherService by lazy {
+        WeatherService(
+            source = SeniverseWeatherSource(),
+            cache = WeatherCache(File(appContext.filesDir, WeatherCache.FILE_NAME))
+        )
+    }
+
     val secureAccountStorage: SecureAccountStorage by lazy {
         SecureAccountStorage(appContext)
     }
+
 
     val syncManager: ScheduleSyncManager by lazy {
         ScheduleSyncManager(

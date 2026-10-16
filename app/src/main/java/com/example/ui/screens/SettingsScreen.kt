@@ -149,6 +149,34 @@ fun SettingsScreen(
         }
 
         item {
+            // 天气与空气质量的数据署名（用户 2026-10-16 定：从抽屉挪到这里）。
+            //
+            // **这是许可证义务，不是关于这一页的说明文字。** 天气与空气质量都是
+            // CC BY 4.0，Open-Meteo 要求署它的名，空气质量那部分还要求一并署
+            // 数据提供方 CAMS。放这一页是因为它是「关于这个 App」的地方，
+            // 而天气块只有 92.dp 宽、抽屉又是一份操作入口清单 ——
+            // 署名塞进任何一个操作区，都会被当成那一区的附属说明。
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp)
+            ) {
+                Text(
+                    text = "天气与空气质量",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "天气与空气质量数据来源于心知天气 (Seniverse)。" +
+                        "通过 GitHub Actions 定时同步静态托管，本软件据此展示。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        item {
             Spacer(modifier = Modifier.height(30.dp))
         }
     }

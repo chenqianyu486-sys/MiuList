@@ -332,16 +332,16 @@ class ScheduleBundleValidator {
      *
      * v2 的规范形态是 `tweaks`（与 zju-ical 同构），三种语义见 [TweakKind]。
      * **每条规则的两端都是具体的某一天**，所以 `MOVE` / `EXCHANGE` 落库时
-     * 既记周几（出哪门课）也记来源日（算第几周）：
+     * 只记来源日（补周几与第几周都由它算）：
      *
-     * | TweakKind | From 那天的课 | To 那天的课 | 落库 |
-     * |-----------|---------------|-------------|------|
-     * | Clear     | 没有课         | 不变         | `noClassDays` 展开 From..To |
-     * | Move      | **让出课**     | 上 From 的课  | `makeupDays(To)` |
-     * | Exchange  | 上 To 的课     | 上 From 的课  | `makeupDays` 两条 |
+     * | TweakKind | 工作日与周末调休（借调公休） | 双工作日互换 |
+     * |-----------|-----------------------------|--------------|
+     * | Clear     | `noClassDays` 展开 From..To  | 同左 |
+     * | Move      | 工作日让出课，周末上工作日的课 | 同左 |
+     * | Exchange  | 工作日让出课，周末上工作日的课 | 双方互为补课日，互上对方星期的课 |
      *
-     * `Move` 的 From 那天要让出课，**但不在这里写进 `noClassDays`**：
-     * 「这份课被搬到哪一天」已经完整记在 `makeupDays[To].sourceEpochDay` 里，
+     * 让出课的那天（`Move` 的工作日、或 `Exchange` 与周末调休时的工作日）**不在这里写进 `noClassDays`**：
+     * 「这份课被搬到哪一天」已经完整记在 `makeupDays[周末].sourceEpochDay` 里，
      * 再抄一份进 `noClassDays` 就是同一事实存两处 —— 导出时会被合成一条
      * CLEAR + 一条 MOVE，导回来多出一个停课日，round-trip 不再稳定。
      * 「让出」这件事由 [AcademicCalendar.isVacatedForShift] 从 makeup 推导。
@@ -401,8 +401,23 @@ class ScheduleBundleValidator {
                     makeup += MakeupDayEntity(to, EpochDays.dayOfWeek1To7(from), note, from)
 
                 TweakKind.EXCHANGE -> {
-                    makeup += MakeupDayEntity(to, EpochDays.dayOfWeek1To7(from), note, from)
-                    makeup += MakeupDayEntity(from, EpochDays.dayOfWeek1To7(to), note, to)
+                    val fromIsWeekend = EpochDays.isWeekend(from)
+                    val toIsWeekend = EpochDays.isWeekend(to)
+                    when {
+                        // 工作日与周末对调（节假日借调公休）：
+                        // 周末作为补课日（上工作日的课）；工作日让出课（作为法定休息日不上课，由 isVacatedForShift 推导）
+                        !fromIsWeekend && toIsWeekend -> {
+                            makeup += MakeupDayEntity(to, EpochDays.dayOfWeek1To7(from), note, from)
+                        }
+                        fromIsWeekend && !toIsWeekend -> {
+                            makeup += MakeupDayEntity(from, EpochDays.dayOfWeek1To7(to), note, to)
+                        }
+                        else -> {
+                            // 两天同为工作日（普通换课）或同为周末：常规双向互换
+                            makeup += MakeupDayEntity(to, EpochDays.dayOfWeek1To7(from), note, from)
+                            makeup += MakeupDayEntity(from, EpochDays.dayOfWeek1To7(to), note, to)
+                        }
+                    }
                 }
             }
         }
@@ -421,19 +436,22 @@ class ScheduleBundleValidator {
         }
         calendar.legacyMakeupDays.forEachIndexed { index, m ->
             val day = EpochDays.parse(m.date.orEmpty())
-            val dow = m.makeupForDayOfWeek
             if (day == null) {
                 issues += ImportIssue("补课第 ${index + 1} 项", "日期无法解析，已忽略")
                 return@forEachIndexed
             }
-            if (dow == null || dow !in 1..7) {
-                issues += ImportIssue("补课 ${m.date ?: "?"}", "补周几必须是 1–7，已忽略该条")
+            // 来源日是**必填**：补周几和算第几周都由它算出来，没有它这次补课无从解释。
+            // 早先的兜底是「退回按补课当天算」，等于把一条说不清的搬运塞进课表：
+            // 界面上看不出任何异常，直到单双周的课集体判错。
+            val source = m.fromDate?.let { EpochDays.parse(it) }
+            if (source == null) {
+                issues += ImportIssue(
+                    "补课 ${m.date ?: "?"}",
+                    "缺少来源日（补的是哪一天的课），已忽略该条"
+                )
                 return@forEachIndexed
             }
-            // fromDate 是后加的：v1 老文档没有它，留 0 表示「来源日未知」，
-            // 周次退回按补课当天算 —— 与升级前一致
-            val source = m.fromDate?.let { EpochDays.parse(it) } ?: 0L
-            makeup += MakeupDayEntity(day, dow, m.note.orEmpty(), source)
+            makeup += MakeupDayEntity(day, EpochDays.dayOfWeek1To7(source), m.note.orEmpty(), source)
         }
 
         return noClass.distinctBy { it.epochDay } to makeup.distinctBy { it.epochDay }

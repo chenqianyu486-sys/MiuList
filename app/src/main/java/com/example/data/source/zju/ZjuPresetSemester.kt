@@ -66,7 +66,6 @@ data class ZjuPresetSemester(
         makeupDays = makeupDays.associate {
             it.epochDay to CalendarSnapshot.Makeup(
                 epochDay = it.epochDay,
-                makeupForDayOfWeek = it.makeupForDayOfWeek,
                 sourceEpochDay = it.sourceEpochDay
             )
         }

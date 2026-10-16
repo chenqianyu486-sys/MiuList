@@ -39,8 +39,9 @@ class AcademicCalendarRepository(
                 calendar = AcademicCalendar(
                     semester = sem?.toDomain(),
                     noClassDays = noClass.map { it.epochDay }.toSet(),
+                    // 只搬来源日：补周几由它算，不搬实体里那个派生列
                     makeupDays = makeup.associate {
-                        it.epochDay to MakeupShift(it.makeupForDayOfWeek, it.sourceEpochDay)
+                        it.epochDay to MakeupShift(it.sourceEpochDay)
                     }
                 ),
                 periodTable = PeriodTable.from(
@@ -80,6 +81,22 @@ class AcademicCalendarRepository(
         if (periods.isNotEmpty()) calendarDao.insertPeriods(periods.map { toEntity(it) })
     }
 
+    /**
+     * 清理补课日中的非法/脏数据（如老版本对调逻辑残留的「工作日补周末课」或来源日为空的行）。
+     *
+     * 节假日调休只会在周末补工作日课（或工作日间互换），工作日作为让出日绝不应该是补课日。
+     * 本方法在启动时自动执行自愈，消除历史残留脏数据。
+     */
+    suspend fun sanitizeMakeupDays() = db.withTransaction {
+        val all = calendarDao.makeupDaysOnce()
+        val invalidDays = all.filter {
+            it.sourceEpochDay > 0L && EpochDays.isWeekend(it.sourceEpochDay) && !EpochDays.isWeekend(it.epochDay)
+        }.map { it.epochDay }
+        if (invalidDays.isNotEmpty()) {
+            calendarDao.deleteMakeupDays(invalidDays)
+        }
+    }
+
     /** 替换整个校历配置。作息表传空列表表示「不动」。 */
     suspend fun saveCalendar(
         semester: SemesterEntity?,
@@ -106,7 +123,10 @@ class AcademicCalendarRepository(
         }
         if (replaceMakeup) {
             calendarDao.clearMakeupDays()
-            if (makeup.isNotEmpty()) calendarDao.insertMakeupDays(makeup)
+            val validMakeup = makeup.filterNot {
+                it.sourceEpochDay > 0L && EpochDays.isWeekend(it.sourceEpochDay) && !EpochDays.isWeekend(it.epochDay)
+            }
+            if (validMakeup.isNotEmpty()) calendarDao.insertMakeupDays(validMakeup)
         }
     }
 

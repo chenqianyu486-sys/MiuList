@@ -35,8 +35,8 @@ class CalendarDiffTest {
         makeup: Map<Long, CalendarSnapshot.Makeup> = emptyMap()
     ) = CalendarSnapshot(semester, noClass, makeup)
 
-    private fun mk(day: Long, dow: Int, source: Long = 0L) =
-        CalendarSnapshot.Makeup(day, dow, source)
+    /** 补课快照只有来源日一个字段——补周几由它算，比它是比一个派生值。 */
+    private fun mk(day: Long, source: Long) = CalendarSnapshot.Makeup(day, source)
 
     // ---------------- 完全一致 ----------------
 
@@ -48,7 +48,7 @@ class CalendarDiffTest {
      */
     @Test
     fun `完全一致时没有差异`() {
-        val a = snap(noClass = setOf(20722L), makeup = mapOf(20738L to mk(20738L, 5, 20723L)))
+        val a = snap(noClass = setOf(20722L), makeup = mapOf(20738L to mk(20738L, 20723L)))
         val diff = CalendarDiffCalculator.compute(a, a)
 
         assertTrue("不该有差异，实际：$diff", diff.isEmpty)
@@ -65,7 +65,7 @@ class CalendarDiffTest {
     @Test
     fun `本机没配过学期时算首次应用`() {
         val current = snap(semester = null, noClass = emptySet(), makeup = emptyMap())
-        val incoming = snap(noClass = setOf(20722L), makeup = mapOf(20738L to mk(20738L, 5, 20723L)))
+        val incoming = snap(noClass = setOf(20722L), makeup = mapOf(20738L to mk(20738L, 20723L)))
 
         val diff = CalendarDiffCalculator.compute(current, incoming)
 
@@ -127,8 +127,8 @@ class CalendarDiffTest {
 
     @Test
     fun `补课的新增与移除要分开列`() {
-        val current = snap(makeup = mapOf(20738L to mk(20738L, 5, 20723L), 20739L to mk(20739L, 4)))
-        val incoming = snap(makeup = mapOf(20738L to mk(20738L, 5, 20723L), 20740L to mk(20740L, 2)))
+        val current = snap(makeup = mapOf(20738L to mk(20738L, 20723L), 20739L to mk(20739L, 20724L)))
+        val incoming = snap(makeup = mapOf(20738L to mk(20738L, 20723L), 20740L to mk(20740L, 20725L)))
 
         val diff = CalendarDiffCalculator.compute(current, incoming)
 
@@ -137,54 +137,44 @@ class CalendarDiffTest {
         assertTrue("内容没变的补课不该进 changed", diff.makeupChanged.isEmpty())
     }
 
-    /** 同一天补周几变了 —— 是"修改"不是"移除+新增"，界面上该能一眼看出。 */
-    @Test
-    fun `补课补周几变了算修改`() {
-        val current = snap(makeup = mapOf(20738L to mk(20738L, 5, 20723L)))
-        val incoming = snap(makeup = mapOf(20738L to mk(20738L, 3, 20723L)))
-
-        val diff = CalendarDiffCalculator.compute(current, incoming)
-
-        assertEquals(1, diff.makeupChanged.size)
-        assertEquals(5, diff.makeupChanged[0].before.makeupForDayOfWeek)
-        assertEquals(3, diff.makeupChanged[0].after.makeupForDayOfWeek)
-        assertTrue("不是新增", diff.makeupAdded.isEmpty())
-        assertTrue("不是移除", diff.makeupRemoved.isEmpty())
-    }
-
     /**
-     * 来源日变了同样算修改。
+     * 来源日变了算「修改」而不是「移除+新增」，界面上该能一眼看出。
      *
-     * 来源日决定「这段课算第几周」，改错了会让单双周课集体判错 ——
-     * 所以它必须出现在差异里。
+     * 比较的是**来源日**而不是补周几：补周几由它算出来，改了来源日而派生的周几恰好
+     * 没变的话（例如从一个周二挪到另一个周二），那这条其实没有任何行为差异，
+     * 不该报一条让人以为课表会变的假变更。
      */
     @Test
     fun `补课来源日变了算修改`() {
-        val current = snap(makeup = mapOf(20738L to mk(20738L, 5, 20723L)))
-        val incoming = snap(makeup = mapOf(20738L to mk(20738L, 5, 20730L)))
+        val current = snap(makeup = mapOf(20738L to mk(20738L, 20723L)))
+        val incoming = snap(makeup = mapOf(20738L to mk(20738L, 20730L)))
 
         val diff = CalendarDiffCalculator.compute(current, incoming)
 
         assertEquals(1, diff.makeupChanged.size)
         assertEquals(20723L, diff.makeupChanged[0].before.sourceEpochDay)
         assertEquals(20730L, diff.makeupChanged[0].after.sourceEpochDay)
+        assertTrue("不是新增", diff.makeupAdded.isEmpty())
+        assertTrue("不是移除", diff.makeupRemoved.isEmpty())
     }
 
     /**
-     * 手填的补课（`sourceEpochDay = 0`，来源日未知）也要能正常比对。
+     * 差异里显示出来的补课实体，补周几是**由来源日算出来的**，不是另存的。
      *
-     * 校历弹层里手工加的行就是这样，它们不是坏数据，
-     * 只是退回「按补课当天算周次」的兼容路径。
+     * 这条钉的是「派生值不会再分叉」：库里那一列仍然存在（删了要迁移），
+     * 但只要来源日定了，周几就只有一个答案。
      */
     @Test
-    fun `来源日未知的手填补课不误报`() {
-        val handFilled = snap(makeup = mapOf(20738L to mk(20738L, 5, 0L)))
+    fun `差异里的补课周几由来源日算出`() {
+        val friday = EpochDays.parse("2026-10-02")!!   // 周五
+        val saturday = EpochDays.parse("2026-10-17")!! // 周六补周五的课
+        val incoming = snap(makeup = mapOf(saturday to mk(saturday, friday)))
 
-        val same = CalendarDiffCalculator.compute(handFilled, handFilled)
-        assertTrue("一样的两份不该算有差异", same.isEmpty)
+        val diff = CalendarDiffCalculator.compute(snap(), incoming)
 
-        val changedDow = CalendarDiffCalculator.compute(handFilled, snap(makeup = mapOf(20738L to mk(20738L, 2, 0L))))
-        assertEquals(1, changedDow.makeupChanged.size)
+        assertEquals(1, diff.makeupAdded.size)
+        assertEquals("周六那天上的是周五的课", 5, diff.makeupAdded[0].makeupForDayOfWeek)
+        assertEquals(friday, diff.makeupAdded[0].sourceEpochDay)
     }
 
     // ---------------- 从实体构造 ----------------
@@ -208,12 +198,12 @@ class CalendarDiffTest {
                 totalWeeks = 16
             ),
             noClassDays = listOf(NoClassDayEntity(20722L, "国庆"), NoClassDayEntity(20723L, "")),
+            // 实体里那个 `5` 是派生值：快照不搬它，只搬来源日
             makeupDays = listOf(MakeupDayEntity(20738L, 5, "国庆调休", 20723L))
         )
 
         assertEquals(setOf(20722L, 20723L), snapshot.noClassDays)
         assertEquals(1, snapshot.makeupDays.size)
-        assertEquals(5, snapshot.makeupDays.getValue(20738L).makeupForDayOfWeek)
         assertEquals(20723L, snapshot.makeupDays.getValue(20738L).sourceEpochDay)
         assertEquals(16, snapshot.semester!!.totalWeeks)
 

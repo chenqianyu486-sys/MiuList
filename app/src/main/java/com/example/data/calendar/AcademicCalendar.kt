@@ -31,20 +31,22 @@ data class Semester(
 }
 
 /**
- * 一次「哪天调到哪天」。
+ * 一次「哪天调到哪天」。**只有来源日一个字段。**
  *
  * 调休是**日期到日期**的搬运，不是「把星期几挪一下」：同一条规则的两端
  * 可以隔两周以上，所以两端都得记成具体日期。
  *
- * - [dayOfWeek] 补课日（To）上**星期几**的课 → 决定界面上出哪门课
- * - [sourceEpochDay] 那份课**原本属于哪一天**（From）→ 决定它算第几周
+ * 早先这里同时存「补周几的课」和来源日，于是有两份可以互相矛盾的事实：
+ * 一条写着「补周五」、来源日却是周三的记录完全写得进去，而界面上看不出任何异常——
+ * 直到单双周的课集体判错才被发现。来源日一个字段就够：补周几由它推
+ * （`dayOfWeek1To7(sourceEpochDay)`），算第几周也由它推（`weekOf(sourceEpochDay)`），
+ * 两者不可能再各说各话。
  *
- * [sourceEpochDay] 为 0 表示来源日未知，此时周次退回按补课当天算。
+ * [sourceEpochDay] <= 0 表示「不知道补的是哪一天的课」，那就不构成一次搬运，
+ * [AcademicCalendar] 会把它整条丢掉。来源日在导入层就已经是必填（见
+ * `ScheduleBundleValidator` 与校历弹层的保存校验）。
  */
-data class MakeupShift(
-    val dayOfWeek: Int,
-    val sourceEpochDay: Long = 0L
-)
+data class MakeupShift(val sourceEpochDay: Long)
 
 /**
  * 校历判定。**唯一的「某天是否上课、算第几周、算星期几」入口。**
@@ -62,7 +64,24 @@ class AcademicCalendar(
     makeupDays: Map<Long, MakeupShift> = emptyMap()
 ) {
     private val noClass: Set<Long> = noClassDays
+
+    /**
+     * 来源日不明的行在这里被丢掉。
+     *
+     * 早先那种行是「补周几的课 + 按补课当天算周次」的半吊子搬运：它既说不清补的是
+     * 哪一天的课，排出来的课也就落不进任何一周。留着只会让界面上出现一次无法解释的
+     * 补课，所以宁可当它不存在。新数据在导入与手工填写两处就已经拦下了，
+     * 这里的过滤是防老库里残留的行。
+     *
+     * 节假日调休只会在周末补工作日课（或工作日间互换），绝不存在工作日补周末课。
+     * 工作日被误标为补周末课的脏数据（例如老版本对调时把调休日也写成了补周末课）
+     * 在这里过滤掉，避免让假日本身被误判定为补课日。
+     */
     private val makeup: Map<Long, MakeupShift> = makeupDays
+        .filterValues { it.sourceEpochDay > 0L }
+        .filter { (day, shift) ->
+            !(EpochDays.isWeekend(shift.sourceEpochDay) && !EpochDays.isWeekend(day))
+        }
 
     val hasSemester: Boolean get() = semester != null
 
@@ -91,21 +110,36 @@ class AcademicCalendar(
      * 会去匹配第 5 周的单双周——要么凭空多出一次课，要么一次都不出，
      * 而且界面上看不出哪里不对。
      *
-     * 不知道来源日时（[MakeupShift.sourceEpochDay] 为 0，v1 旧文档与手工填的行）
-     * 退回 [weekOf]，也就是旧有行为。
+     * 不知道来源日的那类行已经被构造时滤掉了，这里不存在回退路径。
      */
     fun teachingWeekOf(epochDay: Long): Int {
-        val source = makeup[epochDay]?.sourceEpochDay?.takeIf { it > 0L }
+        val source = makeup[epochDay]?.sourceEpochDay
         return weekOf(source ?: epochDay)
     }
 
     fun isNoClass(epochDay: Long): Boolean = epochDay in noClass
 
+    /**
+     * 这一天是否落在学期范围内（开学前 / 学期结束后都为 false）。
+     *
+     * 未配置学期时一律 true：那时的数据里根本没有「学期」这个东西，
+     * 判成 false 会让整张周课表变成「不在学期内」，等于凭空否定用户自己的排课。
+     */
+    fun isInTerm(epochDay: Long): Boolean {
+        val s = semester ?: return true
+        return weekOf(epochDay) > 0
+    }
+
     fun isMakeup(epochDay: Long): Boolean = epochDay in makeup
 
-    fun makeupFor(epochDay: Long): Int? = makeup[epochDay]?.dayOfWeek
+    /**
+     * 这天补的是**星期几**的课。由来源日推出来，不是另存的字段。
+     * 不是补课日就返回 null。
+     */
+    fun makeupDayOfWeek(epochDay: Long): Int? =
+        makeup[epochDay]?.let { EpochDays.dayOfWeek1To7(it.sourceEpochDay) }
 
-    /** 这次补课的完整搬运信息（周几 + 来源日）。 */
+    /** 这次补课的来源日（那份课原本属于哪一天）。 */
     fun shiftFor(epochDay: Long): MakeupShift? = makeup[epochDay]
 
     /**
@@ -118,10 +152,8 @@ class AcademicCalendar(
      *
      * 判据是「它是某次搬运的来源，且自己不是任何一次搬运的目标」：
      * - `Move`（10-02 → 10-17）：10-02 是来源、不是目标 → 让出 ✓
-     * - `Exchange`（10-06 ↔ 09-20）：两侧互为来源与目标 → 都不让出 ✓
-     *   （它俩当天照常上课，只是上的不是自己那套课）
-     * - 来源日未知的老数据（`sourceEpochDay == 0`）：无从判断，一律不让出，
-     *   也就是维持升级前的行为。
+     * - `Exchange` 与周末调休（10-06 ↔ 09-20）：工作日 10-06 是 09-20 补课的来源、自己借调休息不是目标 → 让出 ✓
+     * - `Exchange` 双工作日互换：两侧互为来源与目标 → 都不让出，照常上课（互换）✓
      */
     fun isVacatedForShift(epochDay: Long): Boolean {
         if (makeup.containsKey(epochDay)) return false
@@ -151,7 +183,7 @@ class AcademicCalendar(
      * 10 月 17 日（周六）补的是周五 的课，课表上就该出周五的课。
      */
     fun effectiveDayOfWeek(epochDay: Long): Int =
-        makeup[epochDay]?.dayOfWeek ?: EpochDays.dayOfWeek1To7(epochDay)
+        makeupDayOfWeek(epochDay) ?: EpochDays.dayOfWeek1To7(epochDay)
 
     companion object {
         val EMPTY = AcademicCalendar()

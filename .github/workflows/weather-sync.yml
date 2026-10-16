@@ -1,0 +1,54 @@
+name: Sync Weather Data (Seniverse)
+
+on:
+  schedule:
+    # 每小时的第 25 分钟执行一次（避免整点高峰，一天 24 次，完全在免费额度内）
+    - cron: '25 * * * *'
+  workflow_dispatch: # 支持在 GitHub Actions 页面手动点击运行
+
+concurrency:
+  group: weather-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run sync script
+        env:
+          SENIVERSE_KEY: ${{ secrets.SENIVERSE_KEY }}
+          WEATHER_LOCATION: "hangzhou"
+          WEATHER_CITY_NAME: "杭州"
+        run: |
+          python scripts/sync_weather.py
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add weather.json
+          if ! git diff --staged --quiet weather.json; then
+            git commit -m "chore(weather): update weather.json from Seniverse"
+            git push origin main
+          else
+            echo "weather.json 没有变化，无需提交。"
+          fi
+
+      - name: Push to Gitee (optional mirror)
+        if: env.GITEE_TOKEN != ''
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          git push https://zjuchenqianyu:${GITEE_TOKEN}@gitee.com/zjuchenqianyu/MiuList.git main || true
+

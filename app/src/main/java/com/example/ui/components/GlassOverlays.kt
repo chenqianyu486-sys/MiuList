@@ -135,6 +135,14 @@ fun GlassOverlayHost(
     dismissButton: @Composable (() -> Unit)? = null,
     title: @Composable (() -> Unit)? = null,
     text: @Composable (() -> Unit)? = null,
+    /**
+     * 内容区之后、按钮行之前的一小块**不滚动**区域。
+     *
+     * 给「保存被拦下时要说的话」这类东西用：表单内容一长就被推进滚动区看不见了，
+     * 而用户点完保存正盯着按钮 —— 提示出现在视口外，表现就和「点了没反应」一样。
+     * 默认 null，其它弹层不受影响。
+     */
+    belowContent: @Composable (() -> Unit)? = null,
     shape: Shape = GlassDialogShape,
     scrimAlpha: Float = GlassOverlay.SCRIM,
     horizontalPadding: Dp = 40.dp,
@@ -211,6 +219,9 @@ fun GlassOverlayHost(
             }
             text?.let {
                 Box(modifier = Modifier.fillMaxWidth()) { it() }
+            }
+            belowContent?.let {
+                Box(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { it() }
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 24.dp),

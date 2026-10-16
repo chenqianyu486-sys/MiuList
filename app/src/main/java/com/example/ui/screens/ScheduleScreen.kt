@@ -29,12 +29,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.EventAvailable
 import androidx.compose.material.icons.outlined.ViewDay
 import androidx.compose.material.icons.outlined.ViewWeek
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -66,7 +70,10 @@ import com.example.ui.components.epochDayOf
 import com.example.ui.components.formatPeriodRange
 import com.example.ui.components.todayCalendar
 import com.example.ui.components.todayStatusLabel
+import com.example.data.calendar.DayOffReason
+import com.example.data.calendar.EpochDays
 import com.example.data.calendar.ScheduleResolver
+import com.example.data.calendar.WeekDayPlan
 import com.example.data.timetable.PeriodTable
 import com.example.ui.components.parseColor
 import com.example.ui.theme.CardBlockGap
@@ -101,6 +108,8 @@ import java.util.TimeZone
 fun ScheduleScreen(
     state: MainUiState,
     onSelectViewMode: (ScheduleViewMode) -> Unit,
+    onSelectWeek: (Int) -> Unit,
+    onOpenWeekPicker: () -> Unit,
     onInspectCourse: (CourseWithSlots) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -173,16 +182,27 @@ fun ScheduleScreen(
                     // 原来这里还有一条「有待办 / 无待办」图例条，已按要求撤掉（省一行竖向空间）。
                     // 状态本身不需要图例：深浅两档本来就靠底色本身表达，
                     // 角标上的「N 待办」/「✓」也只报数目不报颜色语义。
-                    val visibleByDay = remember(state.courseSlots, state.slotWeeks, state.selectedWeek, state.calendar) {
-                        resolver.slotsInWeek(state.selectedWeek, state.courseSlots, state.slotWeeks)
+                    // 七列按「这一周真实的日期」排，不是按星期几——补课只有在这里才表达得出来。
+                    // 判定全部交给 resolver 的 weekPlan（与列表页 slotsOn 同一套），
+                    // 这一层不再自己筛一次，免得两边各算各的。
+                    val plan = remember(
+                        state.courseSlots,
+                        state.slotWeeks,
+                        state.selectedWeek,
+                        state.calendar
+                    ) {
+                        resolver.weekPlan(state.selectedWeek, state.courseSlots, state.slotWeeks)
                     }
                     WeekTimetableGrid13(
+                        week = state.selectedWeek,
+                        currentWeek = state.currentWeek,
+                        totalWeeks = state.totalWeeks,
+                        plan = plan,
                         coursesWithSlots = state.coursesWithSlots,
-                        slots = state.courseSlots,
                         tasks = state.tasks,
-                        selectedDay = state.selectedScheduleDay,
                         periodTable = state.periodTable,
-                        visibleSlotsByDay = visibleByDay,
+                        onSelectWeek = onSelectWeek,
+                        onOpenWeekPicker = onOpenWeekPicker,
                         onInspectCourse = onInspectCourse,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -444,9 +464,21 @@ private val ConflictColumnGap = 2.dp
 private val PeriodRowHeight = 48.dp
 
 /**
- * 周课表表头每一列（周一~周日）的高度。独立圆角块之后不需要太高。
+ * 周课表表头每一列（周一~周日）的高度。
+ *
+ * 单行文字 + 一个小图标，32.dp 就够。早先试过两行（「周五 10/16」+ 文字徽标），
+ * 那让列头要占 44.dp，而且七列各挤一个 `10/12` 又多占一份与周次条重复的信息——
+ * 日期已经由周次条的「10/12 – 10/18」说清了。
  */
-private val WeekHeaderHeight = 30.dp
+private val WeekHeaderHeight = 32.dp
+
+/**
+ * 课表列背景放假水印图标的大小。
+ *
+ * 放假日期在课表对应列的背景中半透明居中展示，作为放假标识水印。
+ * 在约 51.dp 宽的列内，28.dp 既足够清晰醒目，又与列宽留有充足呼吸余量（左右约各 11.dp）。
+ */
+private val HolidayWatermarkSize = 28.dp
 
 /**
  * 左侧节次刻度列的宽度。
@@ -459,6 +491,149 @@ private val WeekHeaderHeight = 30.dp
  * 否则七个星期块会整体右移，压不到对应的日列上。
  */
 private val PeriodRulerWidth = 20.dp
+
+/**
+ * 周次条：第几周 + 日期区间 + 这一周的放假 / 补课概况。
+ * 左右箭头翻周，点中间开周选择器。
+ *
+ * 「这一周有什么不一样」写在**周次条**上而不是让用户逐列去认，是因为用户翻周时的
+ * 第一个问题从来不是「周三有什么课」，而是「这一周要不要我早起去上一天课」。
+ * 概况行只在真有调休或当前是本周时才出现：16 周里绝大多数是普通周，
+ * 为它们恒定预留一行，等于每翻一页都欠一行高度。
+ */
+@Composable
+private fun WeekStrip(
+    week: Int,
+    currentWeek: Int,
+    plan: List<WeekDayPlan>,
+    canGoBack: Boolean,
+    canGoForward: Boolean,
+    onSelectWeek: (Int) -> Unit,
+    onOpenPicker: () -> Unit
+) {
+    val monday = plan.firstOrNull()?.epochDay ?: 0L
+    val sunday = plan.lastOrNull()?.epochDay ?: 0L
+    val offDays = plan.count {
+        it.offReason == DayOffReason.NO_CLASS || it.offReason == DayOffReason.VACATED
+    }
+    val makeupDays = plan.count { it.isMakeup && it.offReason == null }
+
+    val notes = buildList {
+        // 「本周」跟着浏览位置走而不是跟着日期走：用户翻到第 5 周时它就消失，
+        // 这正是「我现在不在本周」最省事的确认方式，不需要另做高亮。
+        if (week == currentWeek) add("本周")
+        if (plan.isNotEmpty() && plan.all { it.offReason == DayOffReason.OUT_OF_TERM }) {
+            add("不在学期范围内")
+        }
+        if (offDays > 0) add("放假 $offDays 天")
+        if (makeupDays > 0) add("补课 $makeupDays 天")
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 2.dp, bottom = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            WeekStepButton(
+                icon = Icons.Outlined.ChevronLeft,
+                enabled = canGoBack,
+                description = "上一周",
+                onClick = { onSelectWeek(week - 1) }
+            )
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 8.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onOpenPicker),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "第 $week 周 · ${EpochDays.formatShortRange(monday, sunday)}",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1
+                )
+            }
+            WeekStepButton(
+                icon = Icons.Outlined.ChevronRight,
+                enabled = canGoForward,
+                description = "下一周",
+                onClick = { onSelectWeek(week + 1) }
+            )
+        }
+        if (notes.isNotEmpty()) {
+            Text(
+                text = notes.joinToString(" · "),
+                fontSize = 10.sp,
+                color = TextSecondary,
+                maxLines = 1,
+                modifier = Modifier.padding(top = 1.dp)
+            )
+        }
+    }
+}
+
+/**
+ * 翻周箭头。禁用时用 [FlatGridNumber] 淡到接近隐形而不是 `onSurfaceVariant.copy(alpha=…)`，
+ * 因为它压在栅格底上——透明度叠出来的灰会和栅格线混成一种颜色，看不出「不能点」。
+ */
+@Composable
+private fun WeekStepButton(
+    icon: ImageVector,
+    enabled: Boolean,
+    description: String,
+    onClick: () -> Unit
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.size(30.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else FlatGridNumber,
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+/**
+ * 周课表的列头：星期几。
+ *
+ * 星期表头为每列一个独立圆角块：今天填主题绿配深墨字，其余六天是中性冷灰片。
+ * 原来在文字旁挂的放假小图标已移至课表对应那一天的列背景中半透明显示，
+ * 使周几卡片更加纯粹简洁。
+ */
+@Composable
+private fun WeekDayHeaderCell(
+    dayLabel: String,
+    isToday: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val contentColor = if (isToday) LimeGreenOnPrimary else MaterialTheme.colorScheme.onSurface
+    Row(
+        modifier = modifier
+            .padding(horizontal = 2.dp)
+            .height(WeekHeaderHeight)
+            .clip(RoundedCornerShape(8.dp))
+            // 主题绿只做填充，上面必须是深色前景（Color.kt 的全局约定）。
+            .background(if (isToday) LimeGreenPrimary else ChipSurfaceNeutral),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "周$dayLabel",
+            fontSize = 11.5.sp,
+            fontWeight = if (isToday) FontWeight.Bold else FontWeight.SemiBold,
+            color = contentColor,
+            maxLines = 1
+        )
+    }
+}
 
 /**
  * 扁平化周课表栅格（连堂课自动铺满）。
@@ -477,16 +652,25 @@ private val PeriodRulerWidth = 20.dp
  *
  * 行数一律走 [PeriodTable.periodsPerDay]，不写死节数：换作息时写死会让
  * 列总高与课程块偏移各说各话，越界的课程块直接被裁到列外。
+ *
+ * **七列是「这一周真实的七个日期」，不是「星期几的结构」。**
+ * 之前按星期几分列，补课就表达不出来：10-16（周五）让出课、10-17（周六）补周五的课，
+ * 而周六那一列按结构永远是空的，用户看到的是「周六没课」而不是「周六补周五的课」。
+ * 现在的列内容全部来自 [com.example.data.calendar.ScheduleResolver.weekPlan]，
+ * 和列表页同一套判定，列头则把星期几、日期、当天状态三件事一起报出来。
  */
 @Composable
 fun WeekTimetableGrid13(
+    week: Int,
+    currentWeek: Int,
+    /** 学期总周数。翻周箭头的上界：学期之外没有课表，翻过去只会得到一张全空的表。 */
+    totalWeeks: Int,
+    plan: List<WeekDayPlan>,
     coursesWithSlots: List<CourseWithSlots>,
-    slots: List<CourseSlotEntity>,
     tasks: List<TaskEntity>,
-    selectedDay: Int,
     periodTable: PeriodTable,
-    /** 已按所浏览周次做过开课周次过滤的分组结果，由 ScheduleResolver 产出 */
-    visibleSlotsByDay: Map<Int, List<CourseSlotEntity>>,
+    onSelectWeek: (Int) -> Unit,
+    onOpenWeekPicker: () -> Unit,
     onInspectCourse: (CourseWithSlots) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -498,6 +682,10 @@ fun WeekTimetableGrid13(
     val periodsPerDay = periodTable.periodsPerDay.coerceAtLeast(1)
     val totalHeight = periodHeight * periodsPerDay
 
+    // 「今天」必须按**日期**判，不能按星期几：翻到别的周时，周一那一列并不是今天。
+    // 之前这里传的是 `selectedScheduleDay`（今天的星期几），于是看第 3 周也会把周一标绿。
+    val today = remember { EpochDays.today() }
+
     val scrollState = rememberScrollState()
 
     Column(
@@ -506,39 +694,36 @@ fun WeekTimetableGrid13(
             // 栅格动态铺满屏幕宽度，平涂微透底色，避免全屏 recursive hazeEffect 引起的渲染残影与开销
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.88f))
     ) {
+        // 周次条放在栅格**自己**的头部而不是页面上方那一行：它只在周课表视图里有意义
+        // （列表页是从今天往后推的，没有「浏览第几周」这回事），跟着栅格走就不用为
+        // 列表页也预留它那一行高度。
+        WeekStrip(
+            week = week,
+            currentWeek = currentWeek,
+            plan = plan,
+            // 翻周只在学期范围内开：翻到学期外的那几周只会得到一张七列全空的表，
+            // 而那不是用户要找的东西——学期外的情况留给周次条上的「不在学期范围内」。
+            canGoBack = week > 1,
+            canGoForward = week < totalWeeks,
+            onSelectWeek = onSelectWeek,
+            onOpenPicker = onOpenWeekPicker
+        )
+
         // 吸顶星期表头：每列一个独立圆角块，今天填绿，其余是中性片
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 6.dp),
+                .padding(vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 刻度列在表头的占位：与网格主体刻度列完全同宽（PeriodRulerWidth），保证表头 7 列与网格 7 列精确对齐
             Box(modifier = Modifier.width(PeriodRulerWidth))
-            dayLabels.forEachIndexed { index, day ->
-                val dayNum = index + 1
-                val isToday = dayNum == selectedDay
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 2.dp)
-                        .height(WeekHeaderHeight)
-                        .clip(RoundedCornerShape(8.dp))
-                        // 主题绿只做填充，上面必须是深色前景（Color.kt 的全局约定）。
-                        // 原本挂在表头底部的绿色小横条删掉了：整块已经是绿的，横条纯属冗余。
-                        .background(
-                            if (isToday) LimeGreenPrimary else ChipSurfaceNeutral
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "周$day",
-                        fontSize = 11.5.sp,
-                        fontWeight = if (isToday) FontWeight.Bold else FontWeight.SemiBold,
-                        color = if (isToday) LimeGreenOnPrimary
-                        else MaterialTheme.colorScheme.onSurface
-                    )
-                }
+            plan.forEach { dayPlan ->
+                WeekDayHeaderCell(
+                    dayLabel = dayLabels.getOrElse(dayPlan.dayOfWeek - 1) { "" },
+                    isToday = dayPlan.epochDay == today,
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
 
@@ -607,10 +792,12 @@ fun WeekTimetableGrid13(
                 )
             }
 
-            // 7 Day Columns
-            for (dayNum in 1..7) {
-                val isToday = dayNum == selectedDay
-                val daySlots = visibleSlotsByDay[dayNum].orEmpty()
+            // 7 Day Columns —— 每一列是这一周里的一个**真实日期**，不是「星期几」
+            plan.forEachIndexed { columnIndex, dayPlan ->
+                val isToday = dayPlan.epochDay == today
+                val isHoliday = dayPlan.offReason == DayOffReason.NO_CLASS ||
+                    dayPlan.offReason == DayOffReason.VACATED
+                val daySlots = dayPlan.slots
                 // 撞课的课在这里被分好列，后面按列宽摆格子
                 val placements = layoutDaySlots(daySlots)
                 // 入场序号按**节次**排，不按并排列：撞课并排的两块在同一行同一高度，
@@ -658,7 +845,7 @@ fun WeekTimetableGrid13(
                     }
 
                     // 2. 竖向列分隔线：比横线更淡，竖线一多就容易糊成灰墙
-                    if (dayNum < 7) {
+                    if (columnIndex < plan.lastIndex) {
                         Box(
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
@@ -668,7 +855,22 @@ fun WeekTimetableGrid13(
                         )
                     }
 
-                    // 3. 连堂课色块平铺在对应节次上；撞课的按列宽并排，互不遮挡
+                    // 3. 放假背景水印：该天放假时在对应列背景上半透明呈现放假图标，表明这天放假不上课
+                    if (isHoliday) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.EventAvailable,
+                                contentDescription = "放假",
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f),
+                                modifier = Modifier.size(HolidayWatermarkSize)
+                            )
+                        }
+                    }
+
+                    // 4. 连堂课色块平铺在对应节次上；撞课的按列宽并排，互不遮挡
                     placements.forEach { place ->
                         val slot = place.slot
                         val cWithSlots = courseMap[slot.courseId]
@@ -828,14 +1030,14 @@ private fun daySeparatorLabel(
 /**
  * 「补周五的课」这样的后缀；不是补课日就返回 null。
  *
- * 文本取的是 [com.example.data.calendar.MakeupShift.dayOfWeek]，也就是校历里
- * 记的"这天上星期几的课"，而不是这一天真实的星期几 —— 2026-10-17 是周六，
- * 但它上的是周五的课，写成"补周六的课"就是错的。
+ * 周几由 `makeupDayOfWeek` 从**来源日**推出来，不是另存的字段 ——
+ * 2026-10-17 是周六，但它的来源日 10-02 是周五，所以写「补周五的课」；
+ * 写成「补周六的课」就是把「这天是周几」当成了「补的是周几的课」。
  */
 private fun makeupSuffixLabel(group: ScheduleDayGroup, resolver: ScheduleResolver): String? {
-    val shift = resolver.calendar.shiftFor(epochDayOf(group.date)) ?: return null
-    val dow = WEEKDAY_LABELS.getOrNull(shift.dayOfWeek - 1) ?: return null
-    return "补${dow}的课"
+    val dow = resolver.calendar.makeupDayOfWeek(epochDayOf(group.date)) ?: return null
+    val label = WEEKDAY_LABELS.getOrNull(dow - 1) ?: return null
+    return "补${label}的课"
 }
 
 private val WEEKDAY_LABELS = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")

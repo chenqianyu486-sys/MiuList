@@ -63,7 +63,7 @@ class PeriodUtilsTest {
     }
 
     @Test
-    fun `todayStatusLabel returns 下一节课还有 when before first course`() {
+    fun `todayStatusLabel returns 下节课还有 when before first course`() {
         val cal = makeCalendar()
         val slots = listOf(
             CourseSlotEntity(id = 1, courseId = 100, dayOfWeek = 4, startPeriod = 1, endPeriod = 2) // 08:00 - 09:35
@@ -71,7 +71,7 @@ class PeriodUtilsTest {
         // 07:30 -> 30 分 before 08:00
         val now = timeAt(cal, 7, 30)
         val status = todayStatusLabel(cal, slots, now, periodTable)
-        assertEquals("下一节课还有 30 分 开始", status)
+        assertEquals("下节课还有 30 分 开始", status)
     }
 
     @Test
@@ -87,7 +87,7 @@ class PeriodUtilsTest {
     }
 
     @Test
-    fun `todayStatusLabel returns 下一节课还有 when between courses`() {
+    fun `todayStatusLabel returns 下节课还有 when between courses`() {
         val cal = makeCalendar()
         val slots = listOf(
             CourseSlotEntity(id = 1, courseId = 100, dayOfWeek = 4, startPeriod = 1, endPeriod = 2), // 08:00 - 09:35
@@ -96,7 +96,7 @@ class PeriodUtilsTest {
         // 09:40 -> 20 min before 10:00
         val now = timeAt(cal, 9, 40)
         val status = todayStatusLabel(cal, slots, now, periodTable)
-        assertEquals("下一节课还有 20 分 开始", status)
+        assertEquals("下节课还有 20 分 开始", status)
     }
 
     @Test

@@ -53,6 +53,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -75,6 +76,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.di.AppContainer
 import com.example.ui.theme.LocalGlassHazeState
@@ -448,6 +452,23 @@ fun MainApp(viewModel: MainViewModel) {
         }
     }
 
+    // 「每次进入软件自动刷新天气」。
+    //
+    // 只挂 ViewModel 的 init 是不够的：Android 切到别的 App 再切回来时进程还活着，
+    // init 早就跑完了，那一次「进入」不会有任何反应。ON_RESUME 才对应用户
+    // 真正看到界面的那一刻。
+    //
+    // 真正的节流在 ViewModel 里 —— 距上次拉取不足 20 分钟就读缓存不发请求，
+    // 所以这里每次 resume 都触发也不会变成高频请求。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.syncWeather()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     // 搜索态属于顶栏，但查询词属于 ViewModel（清单页的过滤要用它）。
     // 留在 MainApp 而不是 ViewModel，是因为它是一个**界面开关**而不是业务状态，
     // 而这一行的生命周期正好和 Scaffold 的 topBar 一致。
@@ -583,6 +604,8 @@ fun MainApp(viewModel: MainViewModel) {
                                 ScheduleScreen(
                                     state = state,
                                     onSelectViewMode = { viewModel.setScheduleViewMode(it) },
+                                    onSelectWeek = { viewModel.selectWeek(it) },
+                                    onOpenWeekPicker = { viewModel.openWeekPicker() },
                                     onInspectCourse = { viewModel.inspectCourse(it) }
                                 )
                             }
@@ -899,7 +922,7 @@ fun MainApp(viewModel: MainViewModel) {
         if (state.isQuickGenerateDialogOpen) {
             QuickGenerateDialog(
                 candidateTasks = state.candidateTasksForPreview,
-                week = state.selectedWeek,
+                week = state.quickGenerateWeek ?: state.currentWeek,
                 customTypes = state.customTaskTypes,
                 onDismiss = { viewModel.closeQuickGenerateDialog() },
                 onConfirm = { viewModel.confirmGenerateTasks(it) }
@@ -936,6 +959,8 @@ fun MainApp(viewModel: MainViewModel) {
         if (state.isWeekPickerDialogOpen) {
             WeekPickerDialog(
                 currentWeek = state.currentWeek,
+                selectedWeek = state.selectedWeek,
+                totalWeeks = state.totalWeeks,
                 onDismiss = { viewModel.closeWeekPicker() },
                 onSelectWeek = { viewModel.selectWeek(it) }
             )

@@ -43,7 +43,12 @@ import com.example.data.model.CategoryRule
 
 @Composable
 fun WeekPickerDialog(
+    /** 今天所在的周。格子上附淡绿色底色，让用户一眼找到现在。 */
     currentWeek: Int,
+    /** 正在浏览的周。高亮边框指向它——翻到第 3 周时高亮不该还留在第 5 周。 */
+    selectedWeek: Int,
+    /** 学期总周数。写死 20 会让 16 周的学期凭空多出 4 个空格子。 */
+    totalWeeks: Int,
     onDismiss: () -> Unit,
     onSelectWeek: (Int) -> Unit
 ) {
@@ -86,21 +91,41 @@ fun WeekPickerDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                (1..20).chunked(4).forEach { rowWeeks ->
+                (1..totalWeeks.coerceAtLeast(1)).chunked(4).forEach { rowWeeks ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         rowWeeks.forEach { w ->
-                            val isSelected = currentWeek == w
+                            val isSelected = selectedWeek == w
+                            val isCurrent = w == currentWeek
+
+                            // 本周附淡绿色（primaryContainer 为主题极淡抹茶绿）
+                            val backgroundColor = when {
+                                isCurrent -> MaterialTheme.colorScheme.primaryContainer
+                                isSelected -> MaterialTheme.colorScheme.surfaceVariant
+                                else -> MaterialTheme.colorScheme.surface
+                            }
+                            val borderColor = when {
+                                isSelected -> MaterialTheme.colorScheme.onPrimaryContainer
+                                isCurrent -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                                else -> MaterialTheme.colorScheme.outline
+                            }
+                            val textColor = when {
+                                isCurrent -> MaterialTheme.colorScheme.onPrimaryContainer
+                                isSelected -> MaterialTheme.colorScheme.onSurface
+                                else -> MaterialTheme.colorScheme.onSurface
+                            }
+                            val textWeight = if (isSelected || isCurrent) FontWeight.Bold else FontWeight.Medium
+
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface)
+                                    .background(backgroundColor)
                                     .border(
-                                        1.dp,
-                                        if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.outline,
+                                        if (isSelected) 1.5.dp else 1.dp,
+                                        borderColor,
                                         RoundedCornerShape(8.dp)
                                     )
                                     .clickable {
@@ -113,8 +138,8 @@ fun WeekPickerDialog(
                                 Text(
                                     text = "第${w}周",
                                     fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                    fontWeight = textWeight,
+                                    color = textColor
                                 )
                             }
                         }

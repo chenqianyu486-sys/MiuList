@@ -30,6 +30,7 @@ import com.example.data.repository.AcademicCalendarRepository
 import com.example.data.sample.SampleDataProvider
 import com.example.data.source.zju.CalendarUpdateService
 import com.example.data.source.zju.ZjuImportService
+import com.example.data.source.weather.WeatherService
 import com.example.data.security.DataSourceMode
 import com.example.data.sync.SyncFailure
 import com.example.data.sync.SyncResult
@@ -62,6 +63,7 @@ class MainViewModel(
     private val calendarUpdates = container.calendarUpdateService
     private val secureStorage = container.secureAccountStorage
     private val syncManager = container.syncManager
+    private val weatherService = container.weatherService
 
     private data class RepoState(
         val coursesWithSlots: List<CourseWithSlots>,
@@ -182,10 +184,14 @@ private val ruleFlow = combine(
     )
 
     init {
+        viewModelScope.launch { loadWeather() }
+
         viewModelScope.launch {
             settingsRepo.ensureDefaultRules(AppContainer.DEFAULT_CATEGORY_RULES)
             // 全新安装时作息表是空的（迁移只给升级用户写），不补的话课表栅格会是空白
             calendarRepo.ensureDefaultPeriods()
+            // 清理历史残留的非法补课脏数据（如旧版本生成的「工作日补周末课」）
+            calendarRepo.sanitizeMakeupDays()
 
             val currentCourses = courseRepo.getAllCoursesOnce()
             val hasSavedCreds = secureStorage.hasSavedCredentials()
@@ -227,7 +233,6 @@ private val ruleFlow = combine(
 
             _uiState.update {
                 it.copy(
-                    selectedScheduleDay = EpochDays.dayOfWeek1To7(EpochDays.today()),
                     isLoading = false,
                     boundStudentId = secureStorage.getMaskedStudentId(),
                     isRememberCredentials = secureStorage.isRememberCredentials(),
@@ -240,6 +245,49 @@ private val ruleFlow = combine(
             }
         }
     }
+
+    // ------------------------------------------------------------ 天气
+
+    /**
+     * 总览页当天那块天气的唯一入口。
+     *
+     * 「先用缓存立刻显示，再后台刷新」的两段式在这里是**自动完成**的：
+     * 3 小时窗口内直接返回缓存、一次请求都不发；窗口外先联网，
+     * 拉不到再退回今天的缓存 —— 用户全程面对一个非空的那一块。
+     *
+     * **没有 force 参数了**（2026-10-16 用户定）：手动刷新已取消，
+     * 「无视窗口强制拉一次」这条路径因此没有调用方。留着它等于留一个
+     * 没有入口的开关，下一个人会以为天气还能手动刷。
+     */
+    private suspend fun loadWeather() {
+        when (val state = weatherService.loadForEntry()) {
+            is WeatherService.WeatherState.Available ->
+                _uiState.update { it.copy(weather = state) }
+
+            is WeatherService.WeatherState.Unavailable -> {
+                // 正在显示着一份天气时，不把它撤成一句报错：
+                // 用户看到天气凭空消失，却不知道是自己断网了还是服务挂了。
+                // 冷启动时没得可撤，才让原因直接显示在那一块上。
+                val showingSomething = _uiState.value.weather is WeatherService.WeatherState.Available
+                _uiState.update {
+                    if (showingSomething) it else it.copy(weather = state)
+                }
+            }
+
+            WeatherService.WeatherState.Loading -> Unit
+        }
+    }
+
+    /**
+     * **每次进入软件**自动同步一次（冷启动 + 从后台切回来都会走到）。
+     *
+     * 距上次拉取不足 3 小时就直接读缓存，不发请求。
+     *
+     * 手动刷新取消后，**这是唯一会触发拉取的入口** —— 用户在前台停留再久
+     * 也不会有第二次拉取（没有定时器，也没有别的地方挂它）。真要在一屏之内
+     * 更新，得先加一个周期检查，别指望现在有。
+     */
+    fun syncWeather() = viewModelScope.launch { loadWeather() }
 
     // ------------------------------------------------------------ 导航与筛选
 
@@ -537,9 +585,8 @@ private val ruleFlow = combine(
     /**
      * 造出「第 [week] 周」的全部候选待办。
      *
-     * 周次用的是 [MainUiState.selectedWeek]（没手动选过就是今天所在的周）：
-     * 用户在周课表上浏览第 N 周时点生成，产出的就该是第 N 周，
-     * 否则「先翻到下周、再点生成」这种最自然的用法会生成到本周去。
+     * 周次由调用方给，调用方一律传 [resolveRealGenerationWeek] 的结果，**不再取**
+     * [MainUiState.selectedWeek]（正在浏览的那一周）。
      *
      * 没配置学期时**拒绝生成**：没有学期就没有周次概念，
      * 硬生成出来的去重键全是 0，第二周第三次点就会把第一周那份也当成重复。
@@ -569,6 +616,28 @@ private val ruleFlow = combine(
         ) { courseId, taskType, w, day -> taskRepo.hasWeekTask(courseId, taskType.name, w, day) }
     }
 
+    /**
+     * 「生成本周待办」要落在哪一周：**永远是真实时间所在的周**，与界面上在看第几周无关。
+     *
+     * `selectedWeek` 是「浏览周次」，是纯读操作留下的位置；生成是一次性动作，
+     * 用户翻到第 12 周看点别的再点生成，产出的却要是今天这一周 —— 否则顶栏那个
+     * 「生成本周待办」的常驻按钮会因为当前页面在看哪一周而产出不同的一周，
+     * 同一个按钮两次点出不同结果。
+     *
+     * 读**最新**的校历而不是 [uiState] 里那份：combine 有一帧延迟，
+     * 刚存完校历就点生成时那份可能还是空的，那样会误判成「今天不在学期内」。
+     *
+     * 今天不在学期范围内（学期开始前 / 结束后 / 假期）时返回 null 并如实说明：
+     * 那时压根没有「本周」这个周次，编一个（[ScheduleResolver.FALLBACK_CURRENT_WEEK]
+     * 那种兜底）只会静默生成出一批不在任何一周上的待办。
+     */
+    private suspend fun resolveRealGenerationWeek(): Int? {
+        val week = calendarRepo.calendarState.first().calendar.weekOf(EpochDays.today())
+        if (week > 0) return week
+        _uiState.update { it.copy(userMessage = "今天不在本学期范围内，没有可生成的周") }
+        return null
+    }
+
     private suspend fun commitCandidates(candidates: List<TaskEntity>): Int {
         if (candidates.isEmpty()) return 0
         taskRepo.insertTasks(candidates)
@@ -576,7 +645,7 @@ private val ruleFlow = combine(
     }
 
     /**
-     * 本周（第几周由 selectedWeek 决定）没有学期就不给生成。
+     * 生成本周待办时没有学期就不给生成。
      *
      * 必须读 [uiState] 而不是 [_uiState]：`_uiState` 只是「一次性动作」的载体
      * （开关弹层、userMessage），**数据库派生的字段一个都不写它** ——
@@ -593,20 +662,25 @@ private val ruleFlow = combine(
 
     fun openQuickGenerateWeekDialog() = viewModelScope.launch {
         if (!requireSemester()) return@launch
-        val week = uiState.value.selectedWeek
+        val week = resolveRealGenerationWeek() ?: return@launch
         val candidates = buildCandidatesForWeek(week)
         _uiState.update {
             it.copy(
                 candidateTasksForPreview = candidates,
+                quickGenerateWeek = week,
                 isQuickGenerateDialogOpen = true
             )
         }
     }
 
-    fun closeQuickGenerateDialog() = _uiState.update { it.copy(isQuickGenerateDialogOpen = false) }
+    fun closeQuickGenerateDialog() = _uiState.update {
+        it.copy(isQuickGenerateDialogOpen = false, quickGenerateWeek = null)
+    }
 
     fun confirmGenerateTasks(selected: List<TaskEntity>) = viewModelScope.launch {
-        val week = uiState.value.selectedWeek
+        // 周次取弹层打开那一刻存下的那个，不重算：候选是那会儿按这个周造出来的，
+        // 中间跨过了一周一字不改地换个周次报，会出现「说的是 A、生成了 B」。
+        val week = _uiState.value.quickGenerateWeek ?: uiState.value.currentWeek
         val count = commitCandidates(selected)
         closeQuickGenerateDialog()
         _uiState.update {
@@ -619,7 +693,7 @@ private val ruleFlow = combine(
 
     fun generateTasksDirectlyForWeek() = viewModelScope.launch {
         if (!requireSemester()) return@launch
-        val week = uiState.value.selectedWeek
+        val week = resolveRealGenerationWeek() ?: return@launch
         val candidates = buildCandidatesForWeek(week)
         val count = commitCandidates(candidates)
         _uiState.update {
@@ -1086,15 +1160,15 @@ private val ruleFlow = combine(
     }
 
     /**
-     * 算「应用 [MainUiState.pendingPreset] 会变什么」，打开差异预览。
+     * 算「应用 [MainUiState.pendingPreset] 或 [MainUiState.zjuPreset] 会变什么」，打开差异预览。
      *
      * **差异是用当前库里的值算的，不是用上一次拉到的值** —— 用户可能在
      * 上一次预览之后又手改过校历，界面上摆的必须是此刻真会发生的变化。
      */
     fun previewPendingPreset() = viewModelScope.launch {
-        val pending = _uiState.value.pendingPreset
-        if (pending == null) {
-            _uiState.update { it.copy(userMessage = "没有待应用的校历") }
+        val target = _uiState.value.pendingPreset ?: _uiState.value.zjuPreset
+        if (target == null) {
+            _uiState.update { it.copy(userMessage = "没有可应用的官方校历") }
             return@launch
         }
         val current = CalendarSnapshot.of(
@@ -1102,9 +1176,10 @@ private val ruleFlow = combine(
             noClassDays = uiState.value.noClassDays,
             makeupDays = uiState.value.makeupDays
         )
-        val diff = CalendarDiffCalculator.compute(current, pending.toSnapshot())
+        val diff = CalendarDiffCalculator.compute(current, target.toSnapshot())
         _uiState.update {
             it.copy(
+                pendingPreset = target,
                 calendarDiff = diff,
                 isCalendarDiffOpen = true,
                 userMessage = if (diff.isEmpty) "与当前校历没有差异" else null
@@ -1129,7 +1204,7 @@ private val ruleFlow = combine(
      * `replacePeriods` 为 false，作息表原样保留。
      */
     fun confirmApplyPreset() = viewModelScope.launch {
-        val pending = _uiState.value.pendingPreset ?: return@launch
+        val pending = _uiState.value.pendingPreset ?: _uiState.value.zjuPreset ?: return@launch
         val periods = container.calendarRepository.periodsOnce()
 
         calendarRepo.saveCalendar(

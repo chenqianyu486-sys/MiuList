@@ -74,7 +74,7 @@ data class CalendarSnapshot(
 
     data class Makeup(
         val epochDay: Long,
-        val makeupForDayOfWeek: Int,
+        /** 唯一真源。补周几由它算，所以比较也只比它。 */
         val sourceEpochDay: Long
     )
 
@@ -96,7 +96,7 @@ data class CalendarSnapshot(
             },
             noClassDays = noClassDays.map { it.epochDay }.toSet(),
             makeupDays = makeupDays.associate {
-                it.epochDay to Makeup(it.epochDay, it.makeupForDayOfWeek, it.sourceEpochDay)
+                it.epochDay to Makeup(it.epochDay, it.sourceEpochDay)
             }
         )
     }
@@ -109,7 +109,8 @@ object CalendarDiffCalculator {
      *
      * 停课与补课都以 **epochDay 为键**：同一天就是同一条，跨学期也不会撞。
      *
-     * 补课的比较只看 `makeupForDayOfWeek` 与 `sourceEpochDay` 两个字段，
+     * 补课只比 `sourceEpochDay` 一个字段 —— 补周几由它算，比它是比一个派生值，
+     * 改了来源日而派生的周几恰好没变的话，那条其实没有任何行为差异。
      * **不比较 `note`**。`note` 装的是官方那条描述（"[国庆节] 10月2日（周五）停课，
      * 安排在10月17日（周六）补课"，由 `ScheduleBundleValidator` 从 tweak 描述带下来），
      * 它对用户有用 —— 解释了"这天为什么上课"。但它只写文案，
@@ -137,9 +138,11 @@ object CalendarDiffCalculator {
             .mapNotNull { key ->
                 val before = current.makeupDays.getValue(key)
                 val after = incoming.makeupDays.getValue(key)
-                if (before.makeupForDayOfWeek == after.makeupForDayOfWeek &&
-                    before.sourceEpochDay == after.sourceEpochDay
-                ) null else MakeupChange(before.toEntity(), after.toEntity())
+                if (before.sourceEpochDay == after.sourceEpochDay) {
+                    null
+                } else {
+                    MakeupChange(before.toEntity(), after.toEntity())
+                }
             }
 
         return CalendarDiff(
@@ -196,7 +199,7 @@ object CalendarDiffCalculator {
      */
     private fun CalendarSnapshot.Makeup.toEntity() = MakeupDayEntity(
         epochDay = epochDay,
-        makeupForDayOfWeek = makeupForDayOfWeek,
+        makeupForDayOfWeek = EpochDays.dayOfWeek1To7(sourceEpochDay),
         note = "",
         sourceEpochDay = sourceEpochDay
     )

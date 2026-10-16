@@ -3,6 +3,47 @@ package com.example.data.calendar
 import com.example.data.local.CourseSlotEntity
 
 /**
+ * 这一天为什么不上课。
+ *
+ * 周课表要区分这几种「空列」，因为它们对用户的含义完全不同：
+ * 「停课」和「让出课」是校历上明确记着的调休，空列里**本来是有课的**；
+ * 「周末」和「学期外」则是本来就没课。前者不标出来，用户会以为自己的课被弄丢了。
+ */
+enum class DayOffReason {
+    /** 校历里明确记的停课日。 */
+    NO_CLASS,
+
+    /** 调休让出课的那一天：这天的课被搬到别的日子去了。 */
+    VACATED,
+
+    /** 普通周末，且没有标补课。 */
+    WEEKEND,
+
+    /** 落在学期范围之外（开学前 / 学期结束后）。 */
+    OUT_OF_TERM
+}
+
+/**
+ * 周课表的一列 = 学期里**真实的某一天**，而不是「星期几」。
+ *
+ * 这是周课表和「一周的结构」之间唯一也最重要的区别：2026-10-17 是周六，
+ * 但它要出周五的课，同一周里的 10-16（周五）反而一节都没有。
+ * 按星期几分列就永远表达不出这件事，只会把补课挪走的那一周显示错。
+ */
+data class WeekDayPlan(
+    val epochDay: Long,
+    /** 这天**真实**的星期几（1=周一 … 7=周日）。补课日也照实报它本来的星期几。 */
+    val dayOfWeek: Int,
+    /** 这天要上的课，已按开课周次筛过、也套好了调休。 */
+    val slots: List<CourseSlotEntity>,
+    /** 补课日：补的是星期几的课（1..7）。null = 不是补课日。 */
+    val makeupDayOfWeek: Int? = null,
+    val offReason: DayOffReason? = null
+) {
+    val isMakeup: Boolean get() = makeupDayOfWeek != null
+}
+
+/**
  * 排课判定的**唯一入口**。
  *
  * 改造前筛 `dayOfWeek` 的逻辑散在 4 处且语义已经开始漂移：
@@ -44,10 +85,89 @@ class ScheduleResolver(val calendar: AcademicCalendar) {
     }
 
     /**
-     * 周课表：返回 [week] 这一周按星期分组的时段。
+     * 周课表要的一周：**按真实日期**排的 7 列。
      *
-     * 不套 [AcademicCalendar.effectiveDayOfWeek]——周课表是「这一周的结构」，
-     * 补课只影响具体日期，不改变周的形状。
+     * 固定返回 7 条（周一…周日），空的那天也占一列——周课表有固定的 7 列栅格，
+     * 少一列会让整张表左右错位，而「周六没课」这件事本来就该由列头的状态徽标说。
+     *
+     * 每一列的课 = **那天自己的星期几**（补课日换成它补的那个星期几），
+     * 再按那一天实际所属的教学周筛开课周次。补课日取的是**来源日**那一周，
+     * 10-02 的课挪到 10-17，那节课的身份仍然是「第 3 周的周五课」——
+     * 换成 10-17 所在的那一周去筛，单双周的课会凭空多出一次或者一次都不出。
+     *
+     * **周末不是闸门，只是一个标签。** 这里刻意没有走 [slotsOn]：
+     * 它按日期流水判断，会用「周末默认不上课」把整列挡掉，于是排进了课表的
+     * 周六课在周课表里会整列消失。周末是「默认没课」，不是「一定没课」——
+     * 用户自己的排课数据说那天有课，就该认。（列表页那边仍按日期流水走，
+     * 两边在「没标调休的周六课」上口径不同是既有事实，不在这次改动范围内。）
+     */
+    fun weekPlan(
+        week: Int,
+        allSlots: List<CourseSlotEntity>,
+        weeksBySlotId: Map<Long, Set<Int>> = emptyMap()
+    ): List<WeekDayPlan> {
+        val monday = firstMondayOfWeek(week)
+        return (0 until 7).map { offset ->
+            val day = monday + offset
+            val makeupDow = calendar.makeupDayOfWeek(day)
+            val off = when {
+                calendar.isNoClass(day) -> DayOffReason.NO_CLASS
+                calendar.isVacatedForShift(day) -> DayOffReason.VACATED
+                // 「不在学期内」排在「周末」前面：学期外那一周的周六周日不是休息日，
+                // 是这一天根本不属于这个学期。先判周末会把整个学期外的周说成
+                // 「两个休息日 + 五天正常」，与周次条上的「不在学期范围内」自相矛盾。
+                !calendar.isInTerm(day) -> DayOffReason.OUT_OF_TERM
+                makeupDow == null && EpochDays.isWeekend(day) -> DayOffReason.WEEKEND
+                else -> null
+            }
+            val dow = makeupDow ?: EpochDays.dayOfWeek1To7(day)
+            // 没配置学期时 teachingWeekOf 恒为 0，而 occursInWeek 会把 0 判成「不开课」，
+            // 所以这里要显式退回「不看开课周次」——与 slotsOn 的降级路径保持一致。
+            val teachingWeek = calendar.teachingWeekOf(day).takeIf { calendar.hasSemester }
+            val candidates = allSlots.filter { it.dayOfWeek == dow }
+            val slots = when {
+                off == DayOffReason.NO_CLASS ||
+                    off == DayOffReason.VACATED ||
+                    off == DayOffReason.OUT_OF_TERM -> emptyList()
+                teachingWeek == null -> candidates.sortedBy { it.startPeriod }
+                else -> candidates
+                    .filter { occursInWeek(it.id, teachingWeek, weeksBySlotId) }
+                    .sortedBy { it.startPeriod }
+            }
+            WeekDayPlan(
+                epochDay = day,
+                dayOfWeek = EpochDays.dayOfWeek1To7(day),
+                slots = slots,
+                makeupDayOfWeek = makeupDow,
+                offReason = off
+            )
+        }
+    }
+
+    /**
+     * 第 [week] 周的周一。
+     *
+     * 有学期时用学期里显式存的 `firstMondayEpochDay`（见 [Semester] 里为什么不能猜）。
+     * 没有学期时以**今天所在周**当第 1 周往后推：那时的数据里没有任何周次基准，
+     * 不这么锚定，列头就报不出真实日期，「10 月 12 日停课」这类提示也就无从谈起。
+     */
+    fun firstMondayOfWeek(week: Int, today: Long = EpochDays.today()): Long {
+        val firstMonday = calendar.semester?.firstMondayEpochDay
+            ?: EpochDays.mondayOf(today)
+        return firstMonday + (week - 1).coerceAtLeast(0) * 7L
+    }
+
+    /**
+     * 周课表：**按教学周**投影出来的时段（星期几 → 时段），不看具体日期。
+     *
+     * 它和 [weekPlan] 是两件不同的事，别混用：
+     * - [weekPlan] 回答「第 5 周（10/12–10/18）这七天分别上什么课」，是日历视图；
+     * - 这里回答「第 5 周开课的时段有哪些」，是教学周视图。
+     *
+     * 后者供「总览的本周课时」和「按周生成待办」使用：这两件事算的是一周的课量，
+     * 与课被调到了周几无关；而按周生成的去重键是 (课程, 类型, 周次, 星期几)，
+     * 若改用 [weekPlan]，调休补上来的那节课会按补课当天的星期几再生成一次，
+     * 和它来源日那次撞成两条待办。
      */
     fun slotsInWeek(
         week: Int,

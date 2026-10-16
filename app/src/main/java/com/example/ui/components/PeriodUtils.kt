@@ -132,7 +132,7 @@ fun todayStatusLabel(
         ?.let { (_, end) -> return "还有 ${formatRemaining(end - now)} 下课" }
 
     windows.firstOrNull { (start, _) -> start > now }
-        ?.let { (start, _) -> return "下一节课还有 ${formatRemaining(start - now)} 开始" }
+        ?.let { (start, _) -> return "下节课还有 ${formatRemaining(start - now)} 开始" }
 
     return ALL_DAY_DONE_TEXT
 }

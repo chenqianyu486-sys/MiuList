@@ -135,15 +135,23 @@ fun AcademicCalendarDialog(
         }
     }
     /**
-     * 一行补课草稿：补课日 / 补周几 / 来源日（那份课原本属于哪一天）。
+     * 一行补课草稿：补课日 + 来源日（那份课原本属于哪一天）。
      *
-     * 必须留着来源日：补课日与来源日可以差两周以上（2026 国庆把 10-02 的周五课
-     * 补到 10-17），只存周几就丢了「这是第几周的课」，排课时单双周会集体判错。
-     * 手填的行留空即可（空 = 未知，退回按补课当天算）。
+     * **只有来源日是输入项**：补周几和第几周都由它算出来，让用户再手填一遍
+     * 只会给一次「写着周五、来源日却是周三」的机会 —— 而那种错误在界面上看不出来。
+     *
+     * 两个日期框并排一行放得下：内容宽 283.dp，扣掉间距与「删」按钮后每个约 115.dp，
+     * 而 `yyyy-MM-dd` 加输入框内边距要约 94.dp。（早先一行塞三个框时每个只剩 90.dp，
+     * 那才是放不下的原因。）
      */
     val makeupDrafts = remember {
         mutableStateListOf<MakeupDraft>().apply {
-            addAll(existingMakeup.sortedBy { it.epochDay }.map { it.toDraft() })
+            addAll(
+                existingMakeup
+                    .filterNot { it.sourceEpochDay > 0L && EpochDays.isWeekend(it.sourceEpochDay) && !EpochDays.isWeekend(it.epochDay) }
+                    .sortedBy { it.epochDay }
+                    .map { it.toDraft() }
+            )
         }
     }
 
@@ -399,56 +407,45 @@ fun AcademicCalendarDialog(
                 ) { Text("添加停课区间", fontSize = 12.sp) }
 
                 // ---- 补课 ----
-                SectionLabel("补课日期（哪天要补 · 补周几 1–7 · 来源日）")
+                SectionLabel("补课日期（哪天要补 · 补的是哪一天的课）")
                 // 说明只写一遍，放在段标题下：原来挂在每一行下面，8 条补课就是 8 段
                 // 一样的字，把真正要看的日期挤到视口外。
                 Text(
-                    text = "来源日填了才算这次补课属于哪一周的课；留空则按补课当天算。",
+                    text = "来源日就是那份课原本所在的那一天：补周几和第几周都由它算出来，不用另填。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 makeupDrafts.forEachIndexed { index, draft ->
-                    Column(modifier = Modifier.padding(bottom = 2.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(
-                                value = draft.dateText,
-                                onValueChange = { makeupDrafts[index] = draft.copy(dateText = it) },
-                                modifier = Modifier.weight(1f),
-                                singleLine = true,
-                                textStyle = MaterialTheme.typography.bodySmall,
-                                isError = draft.dateText.isNotBlank() && EpochDays.parse(draft.dateText) == null
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            OutlinedTextField(
-                                value = draft.dowText,
-                                onValueChange = { makeupDrafts[index] = draft.copy(dowText = it) },
-                                modifier = Modifier.width(48.dp),
-                                singleLine = true,
-                                textStyle = MaterialTheme.typography.bodySmall,
-                                isError = draft.dowText.toIntOrNull()?.let { it !in 1..7 } ?: true
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            TextButton(onClick = { makeupDrafts.removeAt(index) }) { Text("删", fontSize = 11.sp) }
-                        }
-                        // 来源日另起一行：三个 `yyyy-MM-dd` 并排放不下 —— 实测日期框
-                        // 只剩 90dp，而「2026-10-17」加输入框自带的那圈内边距就要 94dp，
-                        // 截成「2026-09」比不给来源日更难认。
-                        if (draft.showSource) {
-                            OutlinedTextField(
-                                value = draft.sourceText,
-                                onValueChange = { makeupDrafts[index] = draft.copy(sourceText = it) },
-                                modifier = Modifier.width(180.dp),
-                                singleLine = true,
-                                textStyle = MaterialTheme.typography.bodySmall,
-                                isError = draft.sourceText.isNotBlank() &&
-                                    EpochDays.parse(draft.sourceText) == null,
-                                placeholder = { Text("来源日 2026-10-02", fontSize = 11.sp) }
-                            )
-                        }
+                    Row(
+                        modifier = Modifier.padding(bottom = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = draft.dateText,
+                            onValueChange = { makeupDrafts[index] = draft.copy(dateText = it) },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall,
+                            placeholder = { Text("补课日 2026-10-17", fontSize = 11.sp) },
+                            isError = draft.dateText.isNotBlank() && EpochDays.parse(draft.dateText) == null
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        OutlinedTextField(
+                            value = draft.sourceText,
+                            onValueChange = { makeupDrafts[index] = draft.copy(sourceText = it) },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodySmall,
+                            placeholder = { Text("来源日 2026-10-02", fontSize = 11.sp) },
+                            isError = draft.sourceText.isNotBlank() &&
+                                EpochDays.parse(draft.sourceText) == null
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        TextButton(onClick = { makeupDrafts.removeAt(index) }) { Text("删", fontSize = 11.sp) }
                     }
                 }
                 OutlinedButton(
-                    onClick = { makeupDrafts.add(MakeupDraft("", "1", "", showSource = true)) },
+                    onClick = { makeupDrafts.add(MakeupDraft("", "")) },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(10.dp)
                 ) { Text("添加补课", fontSize = 12.sp) }
@@ -515,17 +512,19 @@ fun AcademicCalendarDialog(
                         }
                     )
                 }
-
-                // 错误提示放在最后：改造前它夹在补课与作息之间，而作息编辑现在就在它下面，
-                // 报错行会被刚编辑的那几行顶到视口外。贴着保存按钮报才看得见。
-                inputError?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
                 }
-                }
+            }
+        },
+        // 报错钉在**按钮正上方**而不是滚动区末尾：校历表单很长，用户点保存时人正盯着
+        // 按钮，而报错落在滚动区底部就等于「点了没反应」—— 实机就是这样：提示确实
+        // 生成了，要连滚三次才看得见。这一段不参与滚动。
+        belowContent = {
+            inputError?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
         },
         confirmButton = {
@@ -556,26 +555,21 @@ fun AcademicCalendarDialog(
 
                     val makeup = mutableListOf<MakeupDayEntity>()
                     makeupDrafts.forEachIndexed { index, draft ->
-                        if (draft.dateText.isBlank() && draft.dowText.isBlank()) return@forEachIndexed
+                        if (draft.dateText.isBlank() && draft.sourceText.isBlank()) return@forEachIndexed
                         val day = EpochDays.parse(draft.dateText)
                         if (day == null) {
                             inputError = "第 ${index + 1} 行补课日期无法解析：${draft.dateText}"
                             return@save
                         }
-                        val dow = draft.dowText.toIntOrNull()
-                        if (dow == null || dow !in 1..7) {
-                            inputError = "第 ${index + 1} 行「补周几」必须是 1–7，当前是「${draft.dowText}」"
+                        // 来源日必填，和「补周几」当年一样是硬校验而不是标红放行：
+                        // 没有它就不知道补的是哪一天的课，那行等于一次无法解释的搬运。
+                        val source = EpochDays.parse(draft.sourceText)
+                        if (source == null) {
+                            inputError =
+                                "第 ${index + 1} 行补课需要填来源日（补的是哪一天的课）：${draft.sourceText.ifBlank { "空" }}"
                             return@save
                         }
-                        // 来源日随草稿一起落库。它填错**不拦保存** —— 只影响「算第几周」，
-                        // 把值清 0 退回按当天算即可；整行作废反而会连带丢掉用户敲好的
-                        // 补课日与周几。输入框已经标红，错误当场看得见。
-                        val source = if (draft.showSource) {
-                            EpochDays.parse(draft.sourceText) ?: 0L
-                        } else {
-                            0L
-                        }
-                        makeup += MakeupDayEntity(day, dow, "", source)
+                        makeup += MakeupDayEntity(day, EpochDays.dayOfWeek1To7(source), "", source)
                     }
 
                     inputError = null
@@ -858,29 +852,25 @@ private fun SectionLabel(text: String) {
 }
 
 /**
- * 一行补课草稿：补课日 + 补周几 + 来源日。
+ * 一行补课草稿：补课日 + 来源日。
  *
  * [sourceText] 存**原文**而不是 epochDay：输入框要允许敲到一半（「2026-1」）才判错，
  * 若把解析结果存成数字、显示时再格式化，用户每敲一个字符都会被重写成上一版能解析
  * 出来的日期，光标和输入都被抢走。保存那一刻才解析。
  *
- * [showSource] 是「这一行有没有来源日输入框」，由**建行时就定死**：库里有来源日就显示，
- * 「添加补课」新建的行也显示（默认给）。若改成「填了才显示」，手填的行就永远没有那个框，
- * 而来源日恰恰是这三样里最容易漏、又最影响单双周的一样。
+ * 「补周几」原来也是草稿里的一项，现在删了：它由来源日算出来，让用户多填一遍
+ * 等于多给一次自相矛盾的机会。库里来源日缺失的老行会回填成空，保存时会被挡下，
+ * 用户照提示补上即可 —— 比让它悄悄按错的口径上课要好。
  */
 private data class MakeupDraft(
     val dateText: String,
-    val dowText: String,
-    val sourceText: String,
-    val showSource: Boolean
+    val sourceText: String
 )
 
-/** 库里那条补课 → 草稿行。来源日为 0（未知）时留空，也不给它开输入框。 */
+/** 库里那条补课 → 草稿行。来源日为 0（老数据）时留空，保存时会被拦下要求补齐。 */
 private fun MakeupDayEntity.toDraft() = MakeupDraft(
     dateText = EpochDays.format(epochDay),
-    dowText = makeupForDayOfWeek.toString(),
-    sourceText = if (sourceEpochDay > 0L) EpochDays.format(sourceEpochDay) else "",
-    showSource = sourceEpochDay > 0L
+    sourceText = if (sourceEpochDay > 0L) EpochDays.format(sourceEpochDay) else ""
 )
 
 /**

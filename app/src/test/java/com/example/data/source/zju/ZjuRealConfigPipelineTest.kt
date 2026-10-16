@@ -152,17 +152,18 @@ class ZjuRealConfigPipelineTest {
         assertFalse("10-06 是对调的一方，不是停课日", day(20261006) in noClass)
         assertFalse("10-07 同理", day(20261007) in noClass)
 
-        val swap1 = b.makeupDays.single { it.epochDay == day(20261006) }
-        assertEquals("9-20 是周日", 7, swap1.makeupForDayOfWeek)
-        assertEquals(day(20260920), swap1.sourceEpochDay)
+        // 节假日与周末对调：周末（09-20、10-10）是补课日，上对应工作日的课
+        val swap1 = b.makeupDays.single { it.epochDay == day(20260920) }
+        assertEquals("9-20 补周二 10-06 的课", 2, swap1.makeupForDayOfWeek)
+        assertEquals(day(20261006), swap1.sourceEpochDay)
 
-        val swap2 = b.makeupDays.single { it.epochDay == day(20261007) }
-        assertEquals("10-10 是周六", 6, swap2.makeupForDayOfWeek)
-        assertEquals(day(20261010), swap2.sourceEpochDay)
+        val swap2 = b.makeupDays.single { it.epochDay == day(20261010) }
+        assertEquals("10-10 补周三 10-07 的课", 3, swap2.makeupForDayOfWeek)
+        assertEquals(day(20261007), swap2.sourceEpochDay)
 
-        // 反过来，被换走的那两天也要上对方星期的课
-        assertEquals(2, b.makeupDays.single { it.epochDay == day(20260920) }.makeupForDayOfWeek)
-        assertEquals(3, b.makeupDays.single { it.epochDay == day(20261010) }.makeupForDayOfWeek)
+        // 工作日 10-06 与 10-07 借调公休放假，是让出课（Vacated），不进补课表
+        assertFalse("10-06 不是补课日", b.makeupDays.any { it.epochDay == day(20261006) })
+        assertFalse("10-07 不是补课日", b.makeupDays.any { it.epochDay == day(20261007) })
     }
 
     /**
@@ -192,7 +193,7 @@ class ZjuRealConfigPipelineTest {
         assertFalse("1-01 停课，1-04 补周一", calendar.isSchoolDay(day(20270104)))
     }
 
-    /** 停课日与补课日不能互相覆盖：国庆那天让出课，17 号才补。 */
+    /** 停课日与补课日不能互相覆盖：国庆那天让出课，17 号才补；对调放假的那两天也让出课。 */
     @Test
     fun `让出课的那天上不了课`() {
         val calendar = validated.toCalendar()
@@ -203,9 +204,79 @@ class ZjuRealConfigPipelineTest {
         assertFalse("让出课的那天上不了课", calendar.isSchoolDay(day(20261002)))
         assertTrue(calendar.isMakeup(day(20261017)))
         assertTrue("周六补课这天要上课", calendar.isSchoolDay(day(20261017)))
-        // 对调的两侧当天照常上课，只是上的不是自己那套课
-        assertFalse("对调不是让出", calendar.isVacatedForShift(day(20261006)))
-        assertTrue(calendar.isSchoolDay(day(20261006)))
+        // 10-06 与 10-07 借调公休放假，属于让出课，当天不上课
+        assertTrue("10-06 借调公休让出课", calendar.isVacatedForShift(day(20261006)))
+        assertFalse("10-06 当天不上课", calendar.isSchoolDay(day(20261006)))
+        assertTrue("10-07 借调公休让出课", calendar.isVacatedForShift(day(20261007)))
+        assertFalse("10-07 当天不上课", calendar.isSchoolDay(day(20261007)))
+    }
+
+    @Test
+    fun `第4周周课表在10-06与10-07显示放假且没有课`() {
+        val calendar = validated.toCalendar()
+        val resolver = com.example.data.calendar.ScheduleResolver(calendar)
+        val dummySlots = (1..7).map { dow ->
+            com.example.data.local.CourseSlotEntity(id = dow.toLong(), courseId = 1L, dayOfWeek = dow, startPeriod = 1, endPeriod = 2)
+        }
+        val plan = resolver.weekPlan(4, dummySlots)
+        assertEquals(7, plan.size)
+
+        // 10-05（周一）国庆停课
+        assertEquals(com.example.data.calendar.DayOffReason.NO_CLASS, plan[0].offReason)
+        assertTrue(plan[0].slots.isEmpty())
+
+        // 10-06（周二）调休放假（让出课）
+        assertEquals(com.example.data.calendar.DayOffReason.VACATED, plan[1].offReason)
+        assertTrue(plan[1].slots.isEmpty())
+
+        // 10-07（周三）调休放假（让出课）
+        assertEquals(com.example.data.calendar.DayOffReason.VACATED, plan[2].offReason)
+        assertTrue(plan[2].slots.isEmpty())
+
+        // 10-08（周四）正常上课
+        org.junit.Assert.assertNull(plan[3].offReason)
+        assertEquals(listOf(4L), plan[3].slots.map { it.id })
+
+        // 10-10（周六）补周三的课
+        org.junit.Assert.assertNull(plan[5].offReason)
+        assertEquals(3, plan[5].makeupDayOfWeek)
+        assertEquals(listOf(3L), plan[5].slots.map { it.id })
+    }
+
+    @Test
+    fun `即使本地数据库包含老版本生成的双向脏补课行，周课表依然自动自愈显示放假`() {
+        val s = validated.semester!!
+        // 模拟本地老数据库中存在的 6 条记录（含 10-06 -> 09-20 与 10-07 -> 10-10 脏数据）
+        val dirtyMakeup = mapOf(
+            day(20260920) to MakeupShift(day(20261006)),
+            day(20261006) to MakeupShift(day(20260920)), // 脏行
+            day(20261007) to MakeupShift(day(20261010)), // 脏行
+            day(20261010) to MakeupShift(day(20261007)),
+            day(20261017) to MakeupShift(day(20261002)),
+            day(20270104) to MakeupShift(day(20261231))
+        )
+        val cal = AcademicCalendar(
+            semester = Semester(
+                name = s.name, yearSpan = s.yearSpan, term = s.term,
+                startEpochDay = s.startEpochDay, firstMondayEpochDay = s.firstMondayEpochDay,
+                endEpochDay = s.endEpochDay, totalWeeks = s.totalWeeks,
+                periodsPerDay = s.periodsPerDay
+            ),
+            noClassDays = validated.noClassDays.map { it.epochDay }.toSet(),
+            makeupDays = dirtyMakeup
+        )
+        val resolver = com.example.data.calendar.ScheduleResolver(cal)
+        // 模拟选了周日（dayOfWeek = 7）的网球课
+        val tennisSlot = com.example.data.local.CourseSlotEntity(id = 999L, courseId = 99L, dayOfWeek = 7, startPeriod = 3, endPeriod = 5)
+        val plan = resolver.weekPlan(4, listOf(tennisSlot))
+
+        // 10-06（周二）必须自愈为放假让出日，周日的网球课绝不能排到周二！
+        assertEquals(com.example.data.calendar.DayOffReason.VACATED, plan[1].offReason)
+        assertTrue("10-06 不排课", plan[1].slots.isEmpty())
+
+        // 10-07（周三）必须自愈为放假让出日
+        assertEquals(com.example.data.calendar.DayOffReason.VACATED, plan[2].offReason)
+        assertTrue("10-07 不排课", plan[2].slots.isEmpty())
     }
 
     private fun ValidatedBundle.toCalendar(): AcademicCalendar {
@@ -219,7 +290,7 @@ class ZjuRealConfigPipelineTest {
             ),
             noClassDays = noClassDays.map { it.epochDay }.toSet(),
             makeupDays = makeupDays.associate {
-                it.epochDay to MakeupShift(it.makeupForDayOfWeek, it.sourceEpochDay)
+                it.epochDay to MakeupShift(it.sourceEpochDay)
             }
         )
     }

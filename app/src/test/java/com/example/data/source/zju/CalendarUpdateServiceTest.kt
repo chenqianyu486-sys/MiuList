@@ -12,7 +12,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
  * 校历的三层来源：远程 → 缓存 → 内置。
@@ -71,7 +70,22 @@ class CalendarUpdateServiceTest {
     private fun cacheFile(): File = File(temp.newFolder(), CalendarCache.FILE_NAME)
 
     /**
-     * @param remote 这次"远程"返回的内容；null = 拉不到（真的走一次空地址表）。
+     * 一个**直接抛出指定异常**的客户端：完全不联网。
+     *
+     * 早先这里挂的是真实 OkHttpClient 去连 `example.invalid`，于是「失败类型」取决于
+     * **这台机器当时的网络**：不走代理时是域名解析失败，本机代理一接管就变成 TLS 被掐。
+     * 用例于是变成一台测不出问题的钟——它既没有确定性地验证产品代码，
+     * 也会随着环境变化毫无征兆地变红。要钉的只是「原因可追溯」，
+     * 这需要一个确定的异常，不需要真的把网断掉。
+     */
+    private fun failingClient(failure: () -> Exception): OkHttpClient =
+        OkHttpClient.Builder()
+            .retryOnConnectionFailure(false)
+            .addInterceptor { throw failure() }
+            .build()
+
+    /**
+     * @param remote 这次"远程"返回的内容；null = 拉不到（用一个确定的异常表示）。
      */
     private fun service(
         cache: CalendarCache,
@@ -79,11 +93,12 @@ class CalendarUpdateServiceTest {
         remote: String? = null
     ) = CalendarUpdateService(
         source = ZjuCalendarSource(
-            client = OkHttpClient.Builder()
-                .connectTimeout(200, TimeUnit.MILLISECONDS)
-                .readTimeout(200, TimeUnit.MILLISECONDS)
-                .retryOnConnectionFailure(false)
-                .build(),
+            // remote 非 null 时 remoteUrls 是空的，这个客户端根本不会被用到
+            client = if (remote == null) {
+                failingClient { java.net.UnknownHostException("example.invalid") }
+            } else {
+                OkHttpClient.Builder().retryOnConnectionFailure(false).build()
+            },
             bundledText = bundled,
             remoteUrls = if (remote == null) listOf("https://example.invalid/config.json") else emptyList(),
             remoteText = remote

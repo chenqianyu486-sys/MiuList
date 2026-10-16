@@ -1,4 +1,4 @@
-﻿package com.example.data.source.zju
+package com.example.data.source.zju
 
 import com.example.data.calendar.CalendarOrigin
 import com.example.data.calendar.EpochDays
@@ -187,9 +187,8 @@ class ZjuPresetSemesterTest {
      *
      * 少了来源日，弹层点「填入」会丢掉最要紧的那一半：这段课算第 3 周还是第 5 周
      * 由来源日决定（10-02 在第 3 周、10-17 在第 5 周）。
-     *
-     * `Exchange` 的两端也各算一个补课日 —— 09-20 与 10-06 的课是对调的，
-     * 那两天都要上课，只算一头就等于把另一头停了。
+     * 两次 Move（10-17 补 10-02、01-04 补 12-31）+ 两次节假日借调（09-20 补 10-06、10-10 补 10-07）= 4 个补课日。
+     * 工作日 10-06 与 10-07 借调公休放假（作为让出日 Vacated），不进补课表。
      */
     @Test
     fun `停课与补课按 tweaks 展开且补课带来源日`() {
@@ -205,8 +204,8 @@ class ZjuPresetSemesterTest {
 
         val makeup = p.makeupDays.associateBy { it.epochDay }
         assertEquals(
-            "两次 Move + 两次 Exchange（各两端）= 6 天",
-            setOf("2026-09-20", "2026-10-06", "2026-10-07", "2026-10-10", "2026-10-17", "2027-01-04"),
+            "两次 Move + 两次与周末调休（周末作为补课日）= 4 天",
+            setOf("2026-09-20", "2026-10-10", "2026-10-17", "2027-01-04"),
             makeup.keys.map { EpochDays.format(it) }.toSet()
         )
 
@@ -217,11 +216,17 @@ class ZjuPresetSemesterTest {
         val newYear = makeup.getValue(EpochDays.parse("2027-01-04")!!)
         assertEquals("2027-01-04 补 12-31 的课", "2026-12-31", EpochDays.format(newYear.sourceEpochDay))
 
-        // 两次 Exchange：两天的来源日互为对方
+        // 两次与周末调休：周末上工作日的课，工作日借调公休让出课（不落补课表）
         val a = makeup.getValue(EpochDays.parse("2026-09-20")!!)
-        val b = makeup.getValue(EpochDays.parse("2026-10-06")!!)
-        assertEquals("Exchange 两端互换", a.sourceEpochDay, b.epochDay)
-        assertEquals("Exchange 两端互换", b.sourceEpochDay, a.epochDay)
+        assertEquals("09-20 补 10-06（周二）的课", "2026-10-06", EpochDays.format(a.sourceEpochDay))
+        assertEquals(2, a.makeupForDayOfWeek)
+
+        val b = makeup.getValue(EpochDays.parse("2026-10-10")!!)
+        assertEquals("10-10 补 10-07（周三）的课", "2026-10-07", EpochDays.format(b.sourceEpochDay))
+        assertEquals(3, b.makeupForDayOfWeek)
+
+        assertFalse("10-06 是放假让出课，不是补课日", makeup.containsKey(EpochDays.parse("2026-10-06")!!))
+        assertFalse("10-07 是放假让出课，不是补课日", makeup.containsKey(EpochDays.parse("2026-10-07")!!))
         assertTrue("补课要记周几", p.makeupDays.all { it.makeupForDayOfWeek in 1..7 })
     }
 

@@ -65,7 +65,7 @@ class AcademicCalendarTest {
         val cal = AcademicCalendar(
             semester = semester(),
             noClassDays = setOf(saturday),
-            makeupDays = mapOf(saturday to MakeupShift(1))
+            makeupDays = mapOf(saturday to MakeupShift(firstMonday))
         )
         // 既标了补课又标了停课：停课优先，否则「临时取消补课」就表达不出来
         assertFalse(cal.isSchoolDay(saturday))
@@ -76,16 +76,32 @@ class AcademicCalendarTest {
     @Test
     fun `a makeup day makes a weekend a school day`() {
         val saturday = firstMonday + 5
-        val cal = AcademicCalendar(semester(), makeupDays = mapOf(saturday to MakeupShift(1)))
+        val cal = AcademicCalendar(semester(), makeupDays = mapOf(saturday to MakeupShift(firstMonday)))
         assertTrue("补课日即使是周六也要上课", cal.isSchoolDay(saturday))
-        assertEquals(1, cal.makeupFor(saturday))
-        assertNull(cal.makeupFor(saturday + 1))
+        assertEquals(1, cal.makeupDayOfWeek(saturday))
+        assertNull(cal.makeupDayOfWeek(saturday + 1))
+    }
+
+    /**
+     * 来源日是唯一真源：补周几由它推出来，不需要、也不允许另存一份。
+     *
+     * 周六补的课要写「补周五」，来源日就得是一个周五 —— 这正是这条约束的形状：
+     * 只要周几是算出来的，「写着补周五、来源日却是周三」这种矛盾就写不进去了。
+     */
+    @Test
+    fun `the makeup weekday is derived from the source day`() {
+        val friday = firstMonday + 4
+        val saturday = firstMonday + 5
+        val cal = AcademicCalendar(semester(), makeupDays = mapOf(saturday to MakeupShift(friday)))
+
+        assertEquals("补周几由来源日推出来", 5, cal.makeupDayOfWeek(saturday))
+        assertEquals(6, EpochDays.dayOfWeek1To7(saturday))
     }
 
     @Test
     fun `effective day of week returns the makeup target, not the real weekday`() {
         val saturday = firstMonday + 5
-        val cal = AcademicCalendar(semester(), makeupDays = mapOf(saturday to MakeupShift(1)))
+        val cal = AcademicCalendar(semester(), makeupDays = mapOf(saturday to MakeupShift(firstMonday)))
         // 10 月 10 日（周六）补周一的课 —— 课表上就该出周一的课
         assertEquals(1, cal.effectiveDayOfWeek(saturday))
         assertEquals(6, EpochDays.dayOfWeek1To7(saturday))
@@ -167,7 +183,7 @@ class AcademicCalendarTest {
         val to = EpochDays.parse("2026-10-17")!!     // 周六
         val cal = AcademicCalendar(
             semester = semester(),
-            makeupDays = mapOf(to to MakeupShift(5, from))
+            makeupDays = mapOf(to to MakeupShift(from))
         )
 
         assertEquals("来源日那周", 4, cal.teachingWeekOf(to))
@@ -176,16 +192,61 @@ class AcademicCalendarTest {
     }
 
     /**
-     * 不知道来源日（v1 旧文档、弹层手工填的行）时退回按补课当天算。
+     * 来源日未知的那行**整条作废**，而不是退回按补课当天算。
      *
-     * 这条是兼容路径：宁可沿用旧行为，也不能因为新字段缺失就让课全都不出现。
+     * 早先的兜底是「来源日未知就按补课当天的星期几与周次算」，看着向后兼容，
+     * 实际是往课表里塞一条说不清的搬运：它不知道补的是哪一天的课，排出来的课
+     * 也就落不进任何一周，而界面上看不出任何异常。现在来源日是必填的
+     * （导入与手工填写两处都已拦下），老库残留的行宁可不认。
      */
     @Test
-    fun `an unknown source day falls back to the makeup day itself`() {
-        val to = EpochDays.parse("2026-10-17")!!
-        val cal = AcademicCalendar(semester(), makeupDays = mapOf(to to MakeupShift(5)))
+    fun `a shift without a known source day is not a shift at all`() {
+        val saturday = EpochDays.parse("2026-10-17")!!
+        val cal = AcademicCalendar(
+            semester(),
+            makeupDays = mapOf(saturday to MakeupShift(sourceEpochDay = 0L))
+        )
 
-        assertEquals(0L, cal.shiftFor(to)!!.sourceEpochDay)
-        assertEquals(cal.weekOf(to), cal.teachingWeekOf(to))
+        assertFalse(cal.isMakeup(saturday))
+        assertNull(cal.shiftFor(saturday))
+        assertNull(cal.makeupDayOfWeek(saturday))
+        assertFalse("周六不会因为一条无效的搬运就变成上课日", cal.isSchoolDay(saturday))
+    }
+
+    @Test
+    fun `a weekday erroneously marked as makeup for a weekend is ignored and treated as vacated`() {
+        val sun = EpochDays.parse("2026-09-20")!! // Sunday
+        val tue = EpochDays.parse("2026-10-06")!! // Tuesday
+        // 模拟历史脏数据：老版本在处理对调时双向写入了 MakeupDayEntity
+        val cal = AcademicCalendar(
+            semester = semester(),
+            makeupDays = mapOf(
+                sun to MakeupShift(tue),
+                tue to MakeupShift(sun)
+            )
+        )
+        // 09-20（周日）是真正的补课日，补周二的课
+        assertTrue(cal.isMakeup(sun))
+        assertEquals(2, cal.effectiveDayOfWeek(sun))
+        assertTrue(cal.isSchoolDay(sun))
+
+        // 10-06（周二）是法定调休让出日，绝不能被当成补课日
+        assertFalse("工作日不能补周末课，脏数据被丢弃", cal.isMakeup(tue))
+        assertTrue("10-06 课被挪到 09-20，属于让出日", cal.isVacatedForShift(tue))
+        assertFalse("让出日不上课", cal.isSchoolDay(tue))
+    }
+
+    @Test
+    fun `mutual weekday exchange is preserved`() {
+        val mon = EpochDays.parse("2027-01-04")!! // Monday
+        val thu = EpochDays.parse("2026-12-31")!! // Thursday
+        val cal = AcademicCalendar(
+            semester = semester(),
+            makeupDays = mapOf(
+                mon to MakeupShift(thu)
+            )
+        )
+        assertTrue(cal.isMakeup(mon))
+        assertEquals(4, cal.effectiveDayOfWeek(mon))
     }
 }

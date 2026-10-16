@@ -96,20 +96,21 @@ data class NoClassRangeBundle(
 )
 
 /**
- * v1 形态的补课日。
+ * v1 形态的补课日。**[fromDate] 是唯一真源**。
  *
- * [makeupForDayOfWeek] 是「这天上星期几的课」，[fromDate] 是「课原本属于哪一天」。
- * 两者回答的不是同一个问题：前者决定界面上出哪门课，后者决定它算第几周。
+ * 补周几和「这节课算第几周」都由 [fromDate] 推出来（补课时 From 与 To 常常差两周
+ * 以上：2026 国庆把 10-02 的周五课补到 10-17），所以 [makeupForDayOfWeek] 只在
+ * **导出**时写（v1 格式要求有它），导入时已经不再读。
  *
- * 补课时 From 与 To 常常差两周以上（2026 国庆：10-02 的周五课补到 10-17），
- * 只留 [makeupForDayOfWeek] 会把补上的课算进补课当天的周次，单双周课就集体判错。
- * [fromDate] 为 null 表示「来源日未知」（v1 文档没有这个字段），
- * 此时退回按补课当天的日期算周次——这是旧有的、也是仅有的兼容路径。
+ * [fromDate] 为 null 表示「来源日未知」——那条记录**会被导入层拒掉并报 issue**：
+ * 早先的兜底是「退回按补课当天的日期算周次」，看着向后兼容，实际是把一条说不清
+ * 补的是哪一天的课的搬运塞进课表，而界面上看不出任何异常。
  */
 data class MakeupDayBundle(
     val date: String?,
+    /** 导出用的派生值；导入不读它（见上）。 */
     val makeupForDayOfWeek: Int?,
-    /** `YYYY-MM-DD`；null = 未知。 */
+    /** `YYYY-MM-DD`；null = 来源日未知，该条会被拒。 */
     val fromDate: String? = null,
     val note: String? = null
 )

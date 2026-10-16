@@ -26,7 +26,6 @@ import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -47,6 +46,7 @@ import com.example.data.local.TaskEntity
 import com.example.data.model.TaskType
 import com.example.ui.components.IslandBottomInset
 import com.example.ui.components.TaskItemCard
+import com.example.ui.components.WeatherBlock
 import com.example.ui.components.formatPeriodRange
 import com.example.ui.components.todayCalendar
 import com.example.ui.components.todayStatusLabel
@@ -65,6 +65,7 @@ import com.example.ui.theme.glassSurface
 import com.example.ui.theme.LocalCardRevealProgress
 import com.example.ui.viewmodel.MainUiState
 import java.text.SimpleDateFormat
+import java.time.LocalTime
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
@@ -81,10 +82,6 @@ fun DashboardScreen(
     onOpenWeekPicker: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val completedCount = state.tasks.count { it.isCompleted }
-    val totalCount = state.tasks.size
-    val completionRatio = if (totalCount > 0) completedCount.toFloat() / totalCount.toFloat() else 0f
-
     val todayCalendar = remember { todayCalendar() }
     val todayDateStr = remember {
         val sdf = SimpleDateFormat("yyyy年M月d日 EEEE", Locale.CHINESE)
@@ -228,30 +225,19 @@ fun DashboardScreen(
 
                         Spacer(modifier = Modifier.width(12.dp))
 
-                        // Modern Circular Progress Ring
-                        Box(contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(
-                                progress = { completionRatio },
-                                modifier = Modifier.size(56.dp),
-                                color = MaterialTheme.colorScheme.primary,
-                                trackColor = MaterialTheme.colorScheme.outline,
-                                strokeWidth = 5.dp
-                            )
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    text = "${(completionRatio * 100).toInt()}%",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontSize = 13.sp
-                                )
-                                Text(
-                                    text = "完成率",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = TextSecondary,
-                                    fontSize = 8.5.sp
-                                )
-                            }
-                        }
+                        // 这里原来是一个显示「完成率」的圆环，现在换成当天的天气。
+                        //
+                        // 完成率并没有丢：待办清单每张卡左侧就有勾选圈，
+                        // 清单一页的进度本来也是从那里读出来的。为了一个
+                        // 已经在别处表达过的比例，把主卡右上角这块最好的位置占掉不划算。
+                        WeatherBlock(
+                            state = state.weather,
+                            // 每次重组现读，不 remember。规则本身（几点算夜里）在
+                            // DailyWeather.textAt 里；只是当前的数据源给的是逐日聚合，
+                            // 昼夜值恒为空，所以这一行眼下怎么读结果都一样。
+                            // 不 remember 是为了将来换上分昼夜的数据源时不用回头改这里。
+                            hourOfDay = LocalTime.now().hour
+                        )
                     }
                 }
             }
@@ -282,15 +268,13 @@ fun DashboardScreen(
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 val now = System.currentTimeMillis()
-                val coursesHeader = if (todaySlots.isEmpty()) {
-                    "今日课程 · 0 堂"
-                } else {
-                    val status = todayStatusLabel(todayCalendar, todaySlots, now, state.periodTable)
-                    "今日课程 · ${todaySlots.size} 堂 · $status"
-                }
+                val coursesHeader = todayStatusLabel(todayCalendar, todaySlots, now, state.periodTable)
                 Text(
                     text = coursesHeader,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )

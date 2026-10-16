@@ -13,6 +13,7 @@ import com.example.data.model.CategoryRule
 import com.example.data.model.CustomTaskType
 import com.example.data.model.TaskType
 import com.example.data.source.zju.ZjuFailureKind
+import com.example.data.source.weather.WeatherService
 import com.example.data.sync.SyncFailure
 import com.example.data.timetable.PeriodTable
 import com.example.data.transfer.ImportPreview
@@ -172,7 +173,6 @@ data class MainUiState(
      * 去掉「全部」入口；「已完成」「待完成」同时选中语义等同「全部」。
      */
     val statusFilters: Set<TaskStatusFilter> = setOf(TaskStatusFilter.PENDING),
-    val selectedScheduleDay: Int = 1, // 1 = Monday ... 7 = Sunday
     val scheduleViewMode: ScheduleViewMode = ScheduleViewMode.WEEK_GRID,
 
     // Dialog & Sheet states
@@ -200,6 +200,14 @@ data class MainUiState(
     val deletingCourse: CourseWithSlots? = null,
     val candidateTasksForPreview: List<TaskEntity> = emptyList(),
     val isQuickGenerateDialogOpen: Boolean = false,
+    /**
+     * 预览弹层里那批候选待办**实际属于第几周**。
+     *
+     * 不能拿 [selectedWeek] 顶替：生成永远落在真今天所在的周，而浏览周次可以随便翻，
+     * 两者在弹层打开的那一瞬间就可能不同步。按点击那一刻解析出来的周存下来，
+     * 弹层文案和生成结果才必然说同一件事。
+     */
+    val quickGenerateWeek: Int? = null,
 
     val isCategoryRulesDialogOpen: Boolean = false,
     /** 课程 × 类型的生成规则弹层。 */
@@ -253,6 +261,14 @@ data class MainUiState(
     val isRememberCredentials: Boolean = false,
     val isDemoMode: Boolean = false,
     val isCloudAccountDialogOpen: Boolean = false,
+
+    /**
+     * 总览页当天那块天气。
+     *
+     * 默认 [WeatherState.Loading] 而不是 null：「还没读到」和「压根没这个功能」
+     * 是两件事，共用一个可空字段的话，界面上分不出该显示骨架还是该显示「未配置」。
+     */
+    val weather: WeatherService.WeatherState = WeatherService.WeatherState.Loading,
 
     val userMessage: String? = null
 )

@@ -347,6 +347,27 @@ class ScheduleBundleValidatorTest {
     }
 
     @Test
+    fun `exchange between weekday and weekend makes up weekend and vacates weekday`() {
+        // 2026-10-06 是周二，2026-09-20 是周日
+        val b = valid(
+            ScheduleBundle(
+                calendar = CalendarBundle(
+                    termConfigs = listOf(TermConfigBundle("2026-2027", 0, 20260907, 20270124, 1)),
+                    tweaks = listOf(TweakBundle(TweakKind.EXCHANGE, "国庆调休", 20261006, 20260920))
+                ),
+                timetable = timetable(course(), ref = null)
+            )
+        )
+        // 只有周末（09-20）作为补课日落库，工作日（10-06）借调公休让出课，不进 makeupDays
+        assertEquals(1, b.makeupDays.size)
+        val makeup = b.makeupDays.single()
+        assertEquals(day(20260920), makeup.epochDay)
+        assertEquals(2, makeup.makeupForDayOfWeek)
+        assertEquals(day(20261006), makeup.sourceEpochDay)
+        assertTrue("对调不写进 noClassDays", b.noClassDays.isEmpty())
+    }
+
+    @Test
     fun `a tweak entirely outside the term is ignored`() {
         val b = valid(
             ScheduleBundle(
@@ -398,21 +419,32 @@ class ScheduleBundleValidatorTest {
         assertEquals(5, b.noClassDays.size)
     }
 
+    /**
+     * v1 旧文档的补课：**来源日必填**，缺了整条拒掉并报 issue。
+     *
+     * 早先是拿 `makeupForDayOfWeek` 当唯一依据、来源日缺失就退回「按补课当天算」，
+     * 那等于把一条说不清补的是哪一天的课的搬运塞进课表 —— 界面上看不出任何异常，
+     * 直到单双周的课集体判错。现在补周几由来源日算出来，这条路被堵死了。
+     */
     @Test
-    fun `a legacy makeup day with an out-of-range weekday is dropped`() {
+    fun `a legacy makeup day without a source date is rejected`() {
         val b = valid(
             ScheduleBundle(
                 calendar = CalendarBundle(
                     legacyMakeupDays = listOf(
-                        MakeupDayBundle("2026-10-10", 1, "补周一"),
-                        MakeupDayBundle("2026-10-11", 9, "补周日"),
-                        MakeupDayBundle("2026-10-12", null, "")
+                        MakeupDayBundle("2026-10-17", 5, "2026-10-02", "补周五"),
+                        MakeupDayBundle("2026-10-10", 1, null, "没有来源日"),
+                        MakeupDayBundle("2026-10-11", 9, "不是日期", "来源日解析不了")
                     )
                 )
             )
         )
-        assertEquals(1, b.makeupDays.size)
-        assertEquals(1, b.makeupDays.first().makeupForDayOfWeek)
+
+        assertEquals("只有来源日能用的那条", 1, b.makeupDays.size)
+        assertEquals(day(20261017), b.makeupDays.first().epochDay)
+        assertEquals(day(20261002), b.makeupDays.first().sourceEpochDay)
+        assertEquals("补周几由来源日算出来", 5, b.makeupDays.first().makeupForDayOfWeek)
+        assertEquals(2, b.issues.count { it.detail.contains("来源日") })
     }
 
     // ---------------------------------------------------------------- 课程

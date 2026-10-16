@@ -573,6 +573,9 @@ val FlatGridLineStrong = Color(0xFFDDE6E1)           // 表头与主体之间的
 val FlatGridColumnLine = Color(0xFFF0F4F2)           // 竖向列分隔线（0.5dp）：比横线更淡，竖线一多就成灰墙
 val FlatGridNumber = Color(0xFFA9B5B0)               // 节次水印数字：淡到只在空格里露一下
 val FlatTodayColumn = Color(0xFFEFF5F2)              // 「今天」整列平涂底（冷白），无课格子一眼可辨
+// 「放假整列压一层底」的 FlatOffColumn 已删：一天放假要给整列 624.dp 高的网格铺一层
+// 颜色，才能换来列头旁边一枚 11.dp 的小图标就能说完的事。七列一齐压底时整张表发灰，
+// 而那条信息本身只是一个比特 —— 放在列头的图标上更省、也更像提示而不是状态。
 // 原 FlatTodayHeader（淡抹茶表头底）已删：星期表头改成每列一个独立圆角块，
 // 今天那一块直接填主题绿 LimeGreenPrimary 配深墨字，淡抹茶底这个中间档用不上了。
 // 新增两个 token 见文件末尾「待办勾选圈」。

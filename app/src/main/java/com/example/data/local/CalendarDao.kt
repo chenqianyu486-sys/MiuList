@@ -70,4 +70,7 @@ interface CalendarDao {
 
     @Query("DELETE FROM makeup_days")
     suspend fun clearMakeupDays()
+
+    @Query("DELETE FROM makeup_days WHERE epochDay IN (:epochDays)")
+    suspend fun deleteMakeupDays(epochDays: List<Long>)
 }
