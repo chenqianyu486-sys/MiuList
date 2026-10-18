@@ -18,7 +18,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
@@ -49,6 +48,11 @@ import com.example.ui.theme.readableOn
 fun QuickGenerateDialog(
     candidateTasks: List<TaskEntity>,
     week: Int,
+    /**
+     * 预习覆盖到的最后一周；等于 [week] 表示预习没有跨周（今天是学期最后一周）。
+     * 弹层要靠它说清「为什么列表里有下一周的课」，见下面的文案。
+     */
+    preStudyLastWeek: Int,
     /** 类型徽标解析用。生成出来的待办只会带内置类型，但仍传真实的自定义类型表，
      *  免得这个弹层哪天开始显示手工待办时静默少一个标签。 */
     customTypes: List<CustomTaskType>,
@@ -64,7 +68,7 @@ fun QuickGenerateDialog(
         }
     }
 
-    AlertDialog(
+    GlassOverlayHost(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -92,11 +96,18 @@ fun QuickGenerateDialog(
         },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
+                // 两类待办的视野不同（作业/实验报告看本周，预习看到下周结束），
+                // 这里必须分开说，否则用户看到列表里有下一周的课会以为生成错了。
+                val rangeText = if (preStudyLastWeek > week) {
+                    "作业与实验报告取第 $week 周；预习取今天起至第 $preStudyLastWeek 周末。"
+                } else {
+                    "按第 $week 周课表与规则生成。"
+                }
                 Text(
                     text = if (candidateTasks.isNotEmpty()) {
-                        "按第 $week 周课表与规则生成，可勾选："
+                        "$rangeText 可勾选："
                     } else {
-                        "第 $week 周待办已全部生成。"
+                        "${rangeText}已全部生成。"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant

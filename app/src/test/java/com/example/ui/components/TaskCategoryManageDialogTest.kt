@@ -6,6 +6,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
 import com.example.data.local.TaskEntity
 import com.example.data.model.CustomTaskType
 import com.example.data.model.TaskType
@@ -83,13 +84,58 @@ class TaskCategoryManageDialogTest {
         composeTestRule.onNodeWithText("读书笔记").assertExists()
         composeTestRule.onNodeWithText("1 条待办").assertExists()
 
-        // 点击自定义分类的删除按钮（先滚动到可见位置）
-        composeTestRule.onNodeWithTag("delete_category_button_c1").performScrollTo().performClick()
+        // 点击自定义分类的删除按钮（使用 unmerged tree 定位并先滚动到可见位置）
+        composeTestRule.onNodeWithTag("delete_category_button_c1", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
         assertEquals(customType1, deletedType)
+
+        // 点击「新建分类」按钮
+        composeTestRule.onNodeWithTag("add_custom_type_in_manage_dialog", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
+        assertTrue(isNewTypeOpened)
 
         // 点击完成按钮
         composeTestRule.onNodeWithTag("close_category_manage_dialog_button").performClick()
         assertTrue(isDismissed)
+    }
+
+    @Test
+    fun new_task_type_dialog_stacked_above_category_manage_dialog_is_interactive() {
+        var createdLabel = ""
+        var createdPalette = -1
+        var isNewTypeDismissed = false
+
+        composeTestRule.setContent {
+            androidx.compose.foundation.layout.Box(modifier = androidx.compose.ui.Modifier) {
+                // 模拟 MainActivity 中两层弹窗同存的状态：分类管理在下，新建分类在其上
+                TaskCategoryManageDialog(
+                    customTypes = listOf(customType1),
+                    tasks = listOf(task1),
+                    onDismiss = {},
+                    onDeleteCustomType = {},
+                    onOpenNewTypeDialog = {}
+                )
+                NewTaskTypeDialog(
+                    onDismiss = { isNewTypeDismissed = true },
+                    onCreate = { label, palette ->
+                        createdLabel = label
+                        createdPalette = palette
+                    }
+                )
+            }
+        }
+
+        // 验证上层的「新建待办类型」标题和输入框可见且可正常交互输入
+        composeTestRule.onNodeWithText("新建待办类型").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("new_task_type_label_input", useUnmergedTree = true)
+            .performTextInput("期末复习")
+
+        // 点击创建按钮
+        composeTestRule.onNodeWithText("创建").performClick()
+        assertEquals("期末复习", createdLabel)
+        assertEquals(0, createdPalette)
     }
 
     @Test

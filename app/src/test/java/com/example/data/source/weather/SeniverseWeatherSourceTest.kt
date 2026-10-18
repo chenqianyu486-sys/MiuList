@@ -50,7 +50,32 @@ class SeniverseWeatherSourceTest {
         assertEquals("阴", weather.textNight)
         assertEquals(24, weather.high)
         assertEquals(15, weather.low)
-        assertEquals(45, weather.usAqi)
+        assertEquals(45, weather.aqi)
+        // 等级必须跟着一起解析出来：它和数值是同一份数据里的，
+        // 丢了就得靠 EPA 表去猜一个（见 aqiQuality 优先那条用例）。
+        assertEquals("优", weather.aqiQuality)
+    }
+
+    /**
+     * **等级要和数值一起从托管文件里出来。**
+     *
+     * 托管文件里的 `aqi` 是**心知口径**，而界面上那张等级表是 EPA 的分段 ——
+     * 同一片空气两边能差出一整个等级。所以上游给了 `aqiQuality` 就必须用它，
+     * 不能只取数值、把等级交给本地那张猜出来的表。
+     */
+    @Test
+    fun `托管文件里的等级跟着数值一起解析`() {
+        val json = """
+            {"date":"2026-10-17","textDay":"阴","textNight":"阴","high":24,"low":15,
+             "aqi":132,"aqiQuality":"轻度污染"}
+        """.trimIndent()
+
+        val weather = source().parseToday(json, HANGZHOU)!!
+
+        assertEquals(132, weather.aqi)
+        assertEquals("轻度污染", weather.aqiQuality)
+        // 132 在 EPA 表里也是「轻度污染」，但那是巧合 —— 这里钉的是「用上游的」。
+        assertEquals("空气轻度污染 132", weather.airQualityLabel())
     }
 
     @Test
@@ -68,7 +93,7 @@ class SeniverseWeatherSourceTest {
 
         assertNotNull(weather)
         assertEquals("杭州", weather!!.cityName)
-        assertNull(weather.usAqi)
+        assertNull(weather.aqi)
     }
 
     @Test

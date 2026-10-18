@@ -25,7 +25,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Tune
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -78,7 +77,7 @@ fun TaskRulesDialog(
     }
     val course = courses.firstOrNull { it.id == selectedCourseId }
 
-    AlertDialog(
+    GlassOverlayHost(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {

@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,14 +18,23 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Category
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.ImportExport
 import androidx.compose.material.icons.outlined.RestartAlt
+import androidx.compose.material.icons.outlined.Wallpaper
+import com.example.data.model.WallpaperPresets
+import com.example.data.model.WallpaperType
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -33,11 +43,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.ui.components.IslandBottomInset
 import com.example.ui.theme.CardBlockGap
 import com.example.ui.theme.PageHInset
@@ -64,6 +78,7 @@ fun SettingsScreen(
     state: MainUiState,
     onOpenTransferDialog: () -> Unit,
     onOpenCategoryManageDialog: () -> Unit,
+    onOpenWallpaperDialog: () -> Unit = {},
     onResetDemoData: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -104,6 +119,25 @@ fun SettingsScreen(
                 actionLabel = "管理",
                 actionTestTag = "open_task_category_dialog_button",
                 onAction = onOpenCategoryManageDialog
+            )
+        }
+
+        item {
+            val wallpaperSubtitle = when (state.wallpaperConfig.type) {
+                WallpaperType.DEFAULT -> "默认壁纸 · ${WallpaperPresets.DEFAULT.name}"
+                WallpaperType.PRESET -> {
+                    val preset = WallpaperPresets.find(state.wallpaperConfig.presetId)
+                    "预设壁纸 · ${preset?.name ?: "精选"}"
+                }
+                WallpaperType.CUSTOM -> "自定义图片 · 已应用"
+            }
+            SettingsActionCard(
+                icon = Icons.Outlined.Wallpaper,
+                title = "自定义壁纸",
+                subtitle = wallpaperSubtitle,
+                actionLabel = "更换",
+                actionTestTag = "open_wallpaper_button",
+                onAction = onOpenWallpaperDialog
             )
         }
 
@@ -149,30 +183,203 @@ fun SettingsScreen(
         }
 
         item {
-            // 天气与空气质量的数据署名（用户 2026-10-16 定：从抽屉挪到这里）。
-            //
-            // **这是许可证义务，不是关于这一页的说明文字。** 天气与空气质量都是
-            // CC BY 4.0，Open-Meteo 要求署它的名，空气质量那部分还要求一并署
-            // 数据提供方 CAMS。放这一页是因为它是「关于这个 App」的地方，
-            // 而天气块只有 92.dp 宽、抽屉又是一份操作入口清单 ——
-            // 署名塞进任何一个操作区，都会被当成那一区的附属说明。
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp)
+            val uriHandler = LocalUriHandler.current
+            val clipboardManager = LocalClipboardManager.current
+            val context = LocalContext.current
+
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
-                    text = "天气与空气质量",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "天气与空气质量数据来源于心知天气 (Seniverse)。" +
-                        "通过 GitHub Actions 定时同步静态托管，本软件据此展示。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .glassSurface(shape = RoundedCornerShape(18.dp))
+                        .padding(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Outlined.Code,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "关于与开源仓库",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Text(
+                            text = "GPL-3.0",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "基于课程表的自动化轻量作业待办软件，提供分类清单与日程表双重视图。遵循 GNU GPLv3 协议开源，许可证继承自 Celechron。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .clickable {
+                                try {
+                                    uriHandler.openUri(MIULIST_REPO_URL)
+                                } catch (_: Exception) {}
+                            }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = MIULIST_REPO_URL,
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = {
+                                    clipboardManager.setText(AnnotatedString(MIULIST_REPO_URL))
+                                    Toast.makeText(context, "已复制仓库地址", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.ContentCopy,
+                                    contentDescription = "复制地址",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            IconButton(
+                                onClick = {
+                                    try {
+                                        uriHandler.openUri(MIULIST_REPO_URL)
+                                    } catch (_: Exception) {}
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
+                                    contentDescription = "在浏览器中打开",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            val uriHandler = LocalUriHandler.current
+
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .glassSurface(shape = RoundedCornerShape(18.dp))
+                        .padding(16.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Outlined.Favorite,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "致谢与鸣谢列表",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "本项目在开发过程中参考并受益于以下优秀开源项目与服务，特向原作者及贡献者致敬：",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    AcknowledgementsList.forEachIndexed { index, ack ->
+                        if (index > 0) {
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                                thickness = 0.5.dp,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    try {
+                                        uriHandler.openUri(ack.url)
+                                    } catch (_: Exception) {}
+                                }
+                                .padding(vertical = 4.dp, horizontal = 2.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = ack.project,
+                                    style = MaterialTheme.typography.titleSmall.copy(
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Outlined.OpenInNew,
+                                    contentDescription = "打开项目地址",
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "贡献者：" + ack.contributors,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = ack.note,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -181,6 +388,54 @@ fun SettingsScreen(
         }
     }
 }
+
+private const val MIULIST_REPO_URL = "https://github.com/chenqianyu486-sys/MiuList"
+
+internal data class AcknowledgementInfo(
+    val project: String,
+    val contributors: String,
+    val note: String,
+    val url: String
+)
+
+internal val AcknowledgementsList = listOf(
+    AcknowledgementInfo(
+        project = "Celechron",
+        contributors = "n0sig, Phil-Fan, Quinn-DJ, lelexia0131, bno3bno3 及社区贡献者",
+        note = "本项目 GPLv3 许可证继承自 Celechron，参考其日程与课表功能设计；学在浙大待办同步的登录链路、认证失效判定与助教作业过滤口径亦参照其实现",
+        url = "https://github.com/Celechron/Celechron"
+    ),
+    AcknowledgementInfo(
+        project = "Elychron",
+        contributors = "Elyyyyyyyyxer 及其对应贡献者",
+        note = "校园课表与日程管理相关设计与灵感来源",
+        url = "https://github.com/Elyyyyyyyyxer/Elychron"
+    ),
+    AcknowledgementInfo(
+        project = "zju-ical",
+        contributors = "cxz66666 及其对应贡献者（源自 determ1ne/grsical）",
+        note = "浙大课表日历导出与转换协议参考",
+        url = "https://github.com/cxz66666/zju-ical"
+    ),
+    AcknowledgementInfo(
+        project = "zju-ical-py",
+        contributors = "Xecades 及其对应贡献者",
+        note = "浙大课表抓取解析与 iCal 转换 Python 实现参考",
+        url = "https://github.com/Xecades/zju-ical-py"
+    ),
+    AcknowledgementInfo(
+        project = "心知天气 (Seniverse)",
+        contributors = "心知天气团队 (Seniverse)",
+        note = "提供实时天气与空气质量数据服务支持（GitHub Actions 定时同步静态托管）",
+        url = "https://www.seniverse.com"
+    ),
+    AcknowledgementInfo(
+        project = "破晓壁纸 (PXLab)",
+        contributors = "PXLab 破晓团队",
+        note = "提供精选高质量壁纸资源、设计美学与透光质感参考",
+        url = "https://pxlab.cn/index.html"
+    )
+)
 
 /**
  * 设置页里「图标 + 标题 + 副标题 + 一个按钮」的一行。

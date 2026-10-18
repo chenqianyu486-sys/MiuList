@@ -102,11 +102,17 @@ class WeatherService(
         // 日期对不上 = 昨天的那份，不能当今天显示。
         val today = parsed.takeIf { it.epochDay == today() } ?: return null
         // 空气质量解不出来就当没有这一项 —— 天气本身仍然是今天的，照常显示。
+        // **注意那个 `?: parsed.aqi`**：空气是可选的额外端点，托管源里它本来就
+        // 嵌在天气正文里（airBody 恒为 null）。少了这个回退就会把已经解析出来的
+        // 读数覆盖成 null，于是每次命中缓存都把空气抹掉 —— 症状是「联网那一下有，
+        // 三小时内再进 App 就没了」。
         val airBody = envelope?.airBody
         val aqi = airBody
             ?.let { runCatching { source.parseAirQuality(it) }.getOrNull() }
-            ?: parsed.usAqi
-        return CachedEntry(today.copy(usAqi = aqi), fetchedAt)
+            ?: parsed.aqi
+        // 只换数值，不动 aqiQuality：等级是跟着 parseToday 一起从上游来的，
+        // 单独覆盖数值会让这两个字段来自不同口径。
+        return CachedEntry(today.copy(aqi = aqi), fetchedAt)
     }
 
     /**
@@ -175,9 +181,9 @@ class WeatherService(
                         // 天气照常显示，只是城市名旁边少一段。
                         val airBody = fetchAirQualityBody()
                         writeCache(fetched.text, airBody)
-                        val aqi = airBody?.let(::parseAirQualityOrNull) ?: parsed.usAqi
+                        val aqi = airBody?.let(::parseAirQualityOrNull) ?: parsed.aqi
                         WeatherState.Available(
-                            parsed.copy(usAqi = aqi),
+                            parsed.copy(aqi = aqi),
                             fromCache = false
                         )
                     }

@@ -59,6 +59,7 @@ import com.example.ui.theme.GlassEdgeBottom
 import com.example.ui.theme.PageHInset
 import com.example.ui.theme.LocalCardRevealProgress
 import com.example.ui.theme.StarInk
+import com.example.ui.theme.controlSurface
 import com.example.ui.viewmodel.MainUiState
 import com.example.ui.viewmodel.TaskGroupingMode
 import com.example.ui.viewmodel.TaskStatusFilter
@@ -155,10 +156,18 @@ private const val STAR_GROUP_TITLE = "已标星"
 private const val UNSTARRED_GROUP_TITLE = "未标星"
 
 /**
- * 筛选 chip：选中 = 主题绿平涂 + 深墨字，未选中 = 中性冷灰片 + 一道几乎看不见的发丝边。
+ * 筛选 chip：选中 = 主题绿 + 深墨字，未选中 = 中性冷灰 + 一道几乎看不见的发丝边。
  *
  * 抽出来是因为两行筛选（分组+状态、类型）现在有 10 颗 chip 走同一套语言，
  * 逐个摊开写必然出现两处长得不一样的那份。
+ *
+ * 底色走 [controlSurface]（18.dp 模糊 + 半透明面，见 Mica.kt）而不是实色平涂：
+ * 这十颗 chip 压在页面底上，满不透明度时是一排实色片，和周课表的分段控件、
+ * 顶栏图标按键都不在一套语言里。选中那一档传 `accent = true`（0.72），
+ * 未选中走中性面（0.60）——绿块要靠颜色本身被认出，透明度的余量不能给一样多。
+ *
+ * 发丝边保留：模糊面本身没有边界，未选中的 chip 又只有十几 dp 高，
+ * 去掉描边会读成一片浮在页面上的浅色文字。
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -180,9 +189,10 @@ private fun SelectableChip(
     Box(
         modifier = modifier
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
-            .clip(shape)
-            .background(
-                if (selected) MaterialTheme.colorScheme.primary else ChipSurfaceNeutral
+            .controlSurface(
+                shape = shape,
+                color = if (selected) MaterialTheme.colorScheme.primary else ChipSurfaceNeutral,
+                accent = selected
             )
             .border(
                 width = if (selected) 0.dp else 0.5.dp,

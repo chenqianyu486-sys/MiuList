@@ -63,7 +63,7 @@ class WeatherServiceTest {
          *
          * 因为 [OpenMeteoWeatherSource] 把 `null` 理解成「没注入，去真联网」——
          * 写测试时漏传一个参数，于是这条用例会真的发请求出去。
-         * 实测过一次：断言里写着 `usAqi=null`，实际拿回来的却是真实读数 150，
+         * 实测过一次：断言里写着 `aqi=null`，实际拿回来的却是真实读数 150，
          * 用例红在一个与它要验的东西毫无关系的地方。
          *
          * 所以这里的默认值必须是「一份确定的正文」。要模拟空气拉不到，
@@ -322,7 +322,7 @@ class WeatherServiceTest {
             WeatherService.WeatherState.Available(
                 // 夜间值是空的：逐日聚合不分昼夜，详见 DailyWeather.textAt。
                 // 空气默认注入一份 64，所以它也在这条断言里。
-                DailyWeather("杭州", TODAY, "小雨", "", 25, 19, usAqi = 64),
+                DailyWeather("杭州", TODAY, "小雨", "", 25, 19, aqi = 64),
                 fromCache = false
             ),
             state
@@ -365,7 +365,7 @@ class WeatherServiceTest {
         val state = service(text = response("2026-10-16"), air = AIR_OK, now = T0).refresh()
 
         val w = (state as WeatherService.WeatherState.Available).weather
-        assertEquals(64, w.usAqi)
+        assertEquals(64, w.aqi)
         assertEquals("空气良 64", w.airQualityLabel())
     }
 
@@ -386,7 +386,7 @@ class WeatherServiceTest {
         assertTrue("空气失败不该让整块变成不可用：$state", state is WeatherService.WeatherState.Available)
         val w = (state as WeatherService.WeatherState.Available).weather
         assertEquals(25, w.high)
-        assertNull("空气读数就该是空而不是 0", w.usAqi)
+        assertNull("空气读数就该是空而不是 0", w.aqi)
         assertNull(w.airQualityLabel())
     }
 
@@ -396,7 +396,7 @@ class WeatherServiceTest {
         val state = service(text = response("2026-10-16"), air = """{"current":{}}""", now = T0).refresh()
 
         val w = (state as WeatherService.WeatherState.Available).weather
-        assertNull(w.usAqi)
+        assertNull(w.aqi)
         assertNull(w.airQualityLabel())
     }
 
@@ -408,7 +408,7 @@ class WeatherServiceTest {
         val cached = service(cache = cache, now = T0 + MINUTE).cachedToday()
 
         assertNotNull(cached)
-        assertEquals(64, cached!!.weather.usAqi)
+        assertEquals(64, cached!!.weather.aqi)
     }
 
     /**
@@ -426,7 +426,7 @@ class WeatherServiceTest {
 
         assertNotNull("旧缓存不该被作废：$cached", cached)
         assertEquals(25, cached!!.weather.high)
-        assertNull(cached.weather.usAqi)
+        assertNull(cached.weather.aqi)
     }
 
     @Test
@@ -545,6 +545,9 @@ class DailyWeatherTextTest {
  * 分段抄的是 EPA 那套（0-50 优 / 51-100 良 / …）而不是欧洲那套 ——
  * 界面上写「良」时用户对的就是这套。选错一套，同一个 64 会一个叫「良」
  * 一个叫「较差」，那就不是翻译问题而是撒谎了。
+ *
+ * **但这张表只是兜底。** 托管源给的 `aqi` 是心知口径，与 EPA 分段不是一回事；
+ * 上游自己给了等级（`aqiQuality`）就必须用那个 —— 那下面几条钉的就是优先级。
  */
 class AirQualityLabelTest {
 
@@ -566,8 +569,49 @@ class AirQualityLabelTest {
 
     @Test
     fun `文案是等级加指数`() {
-        assertEquals("空气良 64", DailyWeather("杭州", 0L, "晴", "", 20, 10, usAqi = 64).airQualityLabel())
-        assertEquals("空气优 12", DailyWeather("杭州", 0L, "晴", "", 20, 10, usAqi = 12).airQualityLabel())
+        assertEquals("空气良 64", DailyWeather("杭州", 0L, "晴", "", 20, 10, aqi = 64).airQualityLabel())
+        assertEquals("空气优 12", DailyWeather("杭州", 0L, "晴", "", 20, 10, aqi = 12).airQualityLabel())
+    }
+
+    /**
+     * 上游给了等级就用上游的，**不许拿本地那张 EPA 表去覆盖它**。
+     *
+     * 这是本组最要紧的一条：`aqi` 的口径由数据源决定，托管源给的是心知 AQI。
+     * 同一个 132，心知叫「轻度污染」，EPA 表也算「轻度污染」——
+     * 但 80 在两边就分道扬镳了（心知「良」/ EPA「轻度污染」）。
+     * 一旦等级由本地猜出来，界面上就在说一件数据源从没说过的话。
+     */
+    @Test
+    fun `上游给了等级就用上游的`() {
+        val w = DailyWeather("杭州", 0L, "晴", "", 20, 10, aqi = 80, aqiQuality = "良")
+
+        assertEquals("空气良 80", w.airQualityLabel())
+    }
+
+    /** 挑一个两边一定不同的数，把「不许用本地表」钉死。 */
+    @Test
+    fun `上游的等级与本地表冲突时以上游为准`() {
+        // 80：心知口径是「良」，EPA 表（51-100）也是「良」→ 换个真正冲突的。
+        val conflicting = DailyWeather("杭州", 0L, "晴", "", 20, 10, aqi = 120, aqiQuality = "良")
+
+        assertEquals("空气良 120", conflicting.airQualityLabel())
+        assertEquals("轻度污染", describeAqi(120))
+    }
+
+    /** 等级是空串 / 空白时，等于没给，退回那张兜底表而不是显示成「空气 」。 */
+    @Test
+    fun `等级空白时退回兜底表`() {
+        val blank = DailyWeather("杭州", 0L, "晴", "", 20, 10, aqi = 64, aqiQuality = "   ")
+
+        assertEquals("空气良 64", blank.airQualityLabel())
+    }
+
+    /** 有等级但没有数值时照样不显示 —— 等级自己说明不了是哪一天的空气。 */
+    @Test
+    fun `只有等级没有读数时不产出文案`() {
+        val w = DailyWeather("杭州", 0L, "晴", "", 20, 10, aqiQuality = "良")
+
+        assertNull(w.airQualityLabel())
     }
 
     /** 拉不到就不画这一段 —— 不写「空气未知」，也不写「空气 0」。 */

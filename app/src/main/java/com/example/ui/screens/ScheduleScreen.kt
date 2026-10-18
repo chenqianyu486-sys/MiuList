@@ -58,6 +58,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import dev.chrisbanes.haze.HazeDefaults
+import dev.chrisbanes.haze.hazeEffect
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.CourseEntity
@@ -77,23 +79,25 @@ import com.example.data.calendar.WeekDayPlan
 import com.example.data.timetable.PeriodTable
 import com.example.ui.components.parseColor
 import com.example.ui.theme.CardBlockGap
+import com.example.ui.theme.CardBaseCoatAlpha
 import com.example.ui.theme.CardListGap
 import com.example.ui.theme.PageHInset
 import com.example.ui.theme.ChipSurfaceNeutral
 import com.example.ui.theme.CourseTintAlpha
-import com.example.ui.theme.CourseTintVivid
+import com.example.ui.theme.cardTint
 import com.example.ui.theme.FlatGridColumnLine
 import com.example.ui.theme.FlatGridLine
-import com.example.ui.theme.FlatGridLineStrong
 import com.example.ui.theme.FlatGridNumber
-import com.example.ui.theme.FlatTodayColumn
+import com.example.ui.theme.asGridLine
 import com.example.ui.theme.LimeGreenOnPrimary
 import com.example.ui.theme.LimeGreenPrimary
+import com.example.ui.theme.LocalGlassHazeState
 import com.example.ui.theme.TeaColor
 import com.example.ui.theme.TeaColorBorder
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.isGreenishColor
 import com.example.ui.theme.glassSurface
+import com.example.ui.theme.controlSurface
 import com.example.ui.theme.LocalCardRevealProgress
 import com.example.ui.theme.deepEnoughForWhite
 import com.example.ui.theme.pageChangeSpec
@@ -253,7 +257,7 @@ private val ScheduleTabInset = 3.dp
 private const val ScheduleTabAnimMs = 220
 
 /**
- * 分段控件外框：一层平涂浅底（surfaceVariant），不描边、不加阴影，
+ * 分段控件外框：一层半透明浅底（surfaceVariant），不描边、不加阴影，
  * 里面压一块会滑动的选中块。
  *
  * 选中态由**一整块会动的绿**表示，而不是让两档各自换背景色：两个独立背景在切换瞬间
@@ -262,6 +266,9 @@ private const val ScheduleTabAnimMs = 220
  *
  * 容器宽度**写死**（两段 + 内边距 + 缝），因为外层那一行要用 Arrangement.Center 把它
  * 摆到正中，而按内容自适应的话居中的是内容、控件宽度会随文字抖动。
+ *
+ * 外框和指示块都走 [controlSurface]（18.dp 模糊 + 半透明面，见 Mica.kt）：它们压在
+ * 课表栅格之上，满不透明度的 `surfaceVariant` / `primary` 会把底下的行线和课程卡挡掉。
  */
 @Composable
 private fun FlatSegmentedRow(
@@ -282,8 +289,10 @@ private fun FlatSegmentedRow(
             // 3 = 左右内边距（2）+ 两档之间的缝（1）
             .width(ScheduleTabSegmentWidth * 2 + ScheduleTabInset * 3)
             .height(ScheduleTabHeight)
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .controlSurface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant
+            )
             .padding(ScheduleTabInset)
     ) {
         // 指示器必须**叠在外框上**，不能作为 Row 的子项混进排布：它自己就占一个段宽
@@ -294,8 +303,11 @@ private fun FlatSegmentedRow(
                 .offset(x = indicatorOffset)
                 .width(ScheduleTabSegmentWidth)
                 .fillMaxHeight()
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.primary)
+                .controlSurface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    accent = true
+                )
         )
         // 两档排在指示器之后画：同父级里先画的在下，正好转绿块垫在文字底下。
         Row(
@@ -577,8 +589,12 @@ private fun WeekStrip(
 }
 
 /**
- * 翻周箭头。禁用时用 [FlatGridNumber] 淡到接近隐形而不是 `onSurfaceVariant.copy(alpha=…)`，
- * 因为它压在栅格底上——透明度叠出来的灰会和栅格线混成一种颜色，看不出「不能点」。
+ * 翻周箭头。禁用时用 [FlatGridNumber] 而不是 `onSurfaceVariant.copy(alpha=…)`：
+ * 翻周箭头就压在栅格上，若用别处那套 alpha，叠出来的灰会和栅格线混成一种颜色，
+ * 看不出「不能点」。
+ *
+ * ⚠️ 它跟着栅格线一起降了透明度（[asGridLine]），所以**别**再额外对它调 alpha ——
+ * 上一句说的「和栅格线混成一种颜色」正是要避免的，两者必须是同一个 alpha 档。
  */
 @Composable
 private fun WeekStepButton(
@@ -595,7 +611,7 @@ private fun WeekStepButton(
         Icon(
             imageVector = icon,
             contentDescription = description,
-            tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else FlatGridNumber,
+            tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else FlatGridNumber.asGridLine(),
             modifier = Modifier.size(20.dp)
         )
     }
@@ -607,6 +623,14 @@ private fun WeekStepButton(
  * 星期表头为每列一个独立圆角块：今天填主题绿配深墨字，其余六天是中性冷灰片。
  * 原来在文字旁挂的放假小图标已移至课表对应那一天的列背景中半透明显示，
  * 使周几卡片更加纯粹简洁。
+ *
+ * 底色走 [controlSurface]（18.dp 模糊 + 半透明面，见 Mica.kt）：七块表头横排压在
+ * 壁纸最上面那一带，满不透明度的 `ChipSurfaceNeutral` / `LimeGreenPrimary` 读起来是
+ * 七个实色标签贴片；半透明之后透上来的是背后那片壁纸，模糊把它摊开，这一行于是
+ * 和下面的栅格是同一块玻璃，而不是浮在它上面的一排色块。
+ *
+ * 绿色那一档不透明度更高（[ControlAccentFaceAlpha]）：它承担「今天」的标识职责，
+ * 压到和中性面一样低时，这一格会先于星期几的差别被读没。
  */
 @Composable
 private fun WeekDayHeaderCell(
@@ -619,9 +643,13 @@ private fun WeekDayHeaderCell(
         modifier = modifier
             .padding(horizontal = 2.dp)
             .height(WeekHeaderHeight)
-            .clip(RoundedCornerShape(8.dp))
-            // 主题绿只做填充，上面必须是深色前景（Color.kt 的全局约定）。
-            .background(if (isToday) LimeGreenPrimary else ChipSurfaceNeutral),
+            // 主题绿只做填充，上面必须是深色前景（Color.kt 的全局约定）：
+            // 这次只把「填充」换成半透明玻璃面，前景色一个字都没动。
+            .controlSurface(
+                shape = RoundedCornerShape(8.dp),
+                color = if (isToday) LimeGreenPrimary else ChipSurfaceNeutral,
+                accent = isToday
+            ),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -636,13 +664,50 @@ private fun WeekDayHeaderCell(
 }
 
 /**
+ * 「今天」整列的模糊半径。
+ *
+ * 卡片级模糊（[com.example.ui.theme.GlassBlurRadius] = 28.dp）曾一度被加到 44.dp，
+ * 整列跟着走到 40.dp，随后又一起退回。**它必须和卡片级保持在同一档附近**：
+ * 整列糊得比卡片还平，这一列就会变成整页最「没有质感」的一块，卡片反而比它清楚。
+ * 所以卡片在 25~30 区间里取值时，整列取略高一档的 30.dp（它糊的是整列壁纸，
+ * 半径稍大才盖得住列与列之间那种半截感）。
+ *
+ * ⚠️ 但**别指望模糊能表达「今天」**：壁纸是极平滑的渐变（相邻像素最大差 2/255），
+ * 糊完的列与隔壁普通列对比度只有 1.005:1（壁纸太平，糊了等于没糊）。它负责的是质感，
+ * 不是标识。标识由 [TodayColumnTint] 和表头绿块承担，见调用处的注释。
+ */
+private val TodayColumnBlur = 30.dp
+
+/**
+ * 「今天」整列的淡色染色（半透明）。
+ *
+ * 取主题绿的极淡档：能一眼扫出「整列是今天」，又不会盖住壁纸——
+ * 实测 0.14 不透明度压在壁纸上约 1.06:1，肉眼可辨但不构成色块。
+ *
+ * 为什么不是不透明色：涂色只能靠不透明度表达轻重，压得越明显越像一块贴上去的
+ * 色板（这正是上一轮 `FlatTodayColumn` 的问题），而它是**线索**不是主角——
+ * 星期表头那一列的绿块才是主标识，永远可见、不依赖任何底色。
+ */
+private val TodayColumnTint = LimeGreenPrimary.copy(alpha = 0.14f)
+
+/**
+ * 「今天」整列的 haze 兜底色。必须与 Mica.kt 的 `HazeFallbackBg` 同值。
+ *
+ * 单独写一份是为了让本文件不依赖 Mica.kt 的 private 值；两者不同值时，整列会糊出一块
+ * 和页面底对不上的死色，是最容易被当成「壁纸坏了」的现象。
+ */
+private val HazeFallbackBgForGrid = Color(0xFFF2EDEA)
+
+/**
  * 扁平化周课表栅格（连堂课自动铺满）。
  *
  * 背景怎么从「一堆小方格」改成「一张平面表格」：
  * 1. 取消逐格描边与斑马纹。原来 7×13 个格子各自带 0.5dp 冷灰描边 + 冷灰间隔底色，
  *    在米白页面上就是一片灰扑扑的棋盘；现在格子只剩平涂底，靠 12 条横细线 + 6 条竖细线分层；
- * 2. 栅格线全部改走冷调灰绿（FlatGridLine 系列）。原来的 #F1F5F9 / #E2E8F0 是冷灰蓝，
- *    叠在纯白 + 抹茶主题上会偏蓝；
+ * 2. 栅格线全部改走**中性灰 + 半透明**（FlatGridLine 系列 + asGridLine）。原来的
+ *    #F1F5F9 / #E2E8F0 是冷灰蓝，叠在纯白 + 抹茶主题上会偏蓝；一度改成冷灰绿是因为当时底是
+ *    薄荷青，现在底是暖黄→淡紫的壁纸，带色相的线压在上面会显脏，所以退回不带色相的灰，
+ *    并统一乘 [com.example.ui.theme.FlatGridLineAlpha] 降低存在感。
  * 3. 星期表头改成**每列一个独立圆角块**：今天填主题绿配深墨字（绿只做填充、上面必须配深色前景），
  *    其余六天是中性冷灰片。块与块之间不再画竖分隔线——有了独立圆角块再画竖线就是脏边；
  * 4. **早上/中午/晚上的大节分割线取消**：作息表 section 不同会在第 5/10 节后画出
@@ -677,6 +742,10 @@ fun WeekTimetableGrid13(
     val dayLabels = listOf("一", "二", "三", "四", "五", "六", "日")
     val courseMap = coursesWithSlots.associateBy { it.course.id }
     val cardRevealProgress = LocalCardRevealProgress.current
+    // 「今天」整列的模糊要用页面那层 haze 状态（MainActivity 挂在内容 Box 上的
+    // 进程级实例）。取 Local 是因为弹层在独立窗口里拿不到它——这里正好相反，
+    // 课表就在页面内，走 Local 才和源层指着同一个实例。
+    val hazeState = LocalGlassHazeState.current
     val periodHeight = PeriodRowHeight
     // 行数只认作息表。空表（periodsPerDay = 0）时给 1，免得整列高度算成 0 什么都不出。
     val periodsPerDay = periodTable.periodsPerDay.coerceAtLeast(1)
@@ -691,8 +760,18 @@ fun WeekTimetableGrid13(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            // 栅格动态铺满屏幕宽度，平涂微透底色，避免全屏 recursive hazeEffect 引起的渲染残影与开销
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.88f))
+            // 栅格**不铺自己的底**：让它透出 AppBackgroundLayer 的默认壁纸。
+            //
+            // 这里原来有一层 `surface.copy(alpha = 0.88f)`（近白 #FAFBFC 压 88%），
+            // 注释写的是「平涂微透底色，避免全屏 recursive hazeEffect」——那是纯白页面底
+            // 时代的做法：88% 不透明铺满整个栅格，等于把壁纸挡掉一大层，课表页于是
+            // 成了全 App 唯一一块发灰的底，与其它三页割裂。
+            //
+            // 真正要解决的是「渲染残影与开销」，而那件事的正解是**别用 haze**：
+            // 栅格平涂透底时背后只有壁纸（无 detail、糊了等于没糊），不需要模糊；
+            // 而一旦给整块栅格挂 recursive hazeEffect，才是真会出残影。
+            // 这里改为不铺底，代价是空格子直接透出壁纸，收益是四页底色一致。
+            .background(Color.Transparent)
     ) {
         // 周次条放在栅格**自己**的头部而不是页面上方那一行：它只在周课表视图里有意义
         // （列表页是从今天往后推的，没有「浏览第几周」这回事），跟着栅格走就不用为
@@ -728,11 +807,20 @@ fun WeekTimetableGrid13(
         }
 
         // 表头与课表主体之间的分隔线
+        //
+        // **与行线完全同档**（FlatGridLine，0.5dp）：这条原来两样都加过——1.dp 且深一档色。
+        // 1dp 那份是纯白底时代的逻辑（线越粗越能在近白底上被看见），底换成壁纸后不成立：
+        // 表头七列自己就是玻璃块，边界本来就有。
+        //
+        // 色深那份也一并去掉：**表头与主体的分界不需要另立一档**。这条线要的只是
+        // 「别让表头的块直接贴在第一节课上」，做到这件事就够了；给它更粗或更深的一档，
+        // 等于宣告「这里有个更重要的地方」，可表头并不比别的行更重要，读者却要为此
+        // 停一下。栅格里**所有**横线因此同粗同色，层级不再由某一根线的粗细或深浅暗示。
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(1.dp)
-                .background(FlatGridLineStrong)
+                .height(0.5.dp)
+                .background(FlatGridLine.asGridLine())
         )
 
         // 可纵向滚动的 1-13 节主体
@@ -773,7 +861,7 @@ fun WeekTimetableGrid13(
                             Text(
                                 text = "$period",
                                 modifier = Modifier.padding(end = 7.dp),
-                                color = FlatGridNumber,
+                                color = FlatGridNumber.asGridLine(),
                                 fontSize = 8.5.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1
@@ -781,14 +869,18 @@ fun WeekTimetableGrid13(
                         }
                     }
                 }
-                // 标尺轴：刻度与网格之间的分界，和列分隔线同色同粗，整表只有这一条竖线
-                // 是「结构性」的，其余列分隔线保持更淡
+                // 标尺轴：刻度与网格之间的分界
+                //
+                // 原先它是整表唯一「结构性」的竖线、比列分隔线深一档，这条差异化也去掉了。
+                // 竖线本来就不承担「说明什么」：左边几串节次数字（FlatGridNumber）已经把
+                // 「这里是刻度」说清楚了，线只需要把两块区分开。再给线加一档深浅，
+                // 换来的是一道比左右所有竖线都抢眼的边框，而不是信息。
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .width(0.5.dp)
                         .fillMaxHeight()
-                        .background(FlatGridLineStrong)
+                        .background(FlatGridLine.asGridLine())
                 )
             }
 
@@ -815,7 +907,56 @@ fun WeekTimetableGrid13(
                     modifier = Modifier
                         .weight(1f)
                         .height(totalHeight)
-                        .background(if (isToday) FlatTodayColumn else Color.Transparent)
+                        // 「今天」整列 = **一层真·背景模糊**，不是平涂色块。
+                        //
+                        // 原来是 `.background(FlatTodayColumn)` 硬涂一层冷绿。涂色只能靠
+                        // 不透明度表达「今天」：压得越明显越像一块贴上去的色板，压得越淡
+                        // 越认不出来——上一轮为了在壁纸上还看得见，压到 #B8D2CB 已经是
+                        // 「能看清但确实是一块板」的位置，而它同时把整列 624.dp 高的壁纸
+                        // 一起盖掉了。模糊则是直接作用在壁纸本身，颜色随壁纸走、整列
+                        // 自然融进底子，没有「贴上去」的边。
+                        //
+                        // 为什么用 haze 而不是 Modifier.blur()：后者糊的是**自己这层**
+                        // （连同列内的行线和节次数字一起糊掉），而我们要糊的是**背后**的
+                        // 壁纸。haze 读的是 hazeSource 那层，语义正好对上。
+                        //
+                        // 但光靠模糊**不足以**表达「今天」，这一点必须说清楚，否则下次
+                        // 有人会以为是 bug 又调回去：
+                        //
+                        // 壁纸是极平滑的渐变（相邻像素最大差 2/255），30.dp 糊完
+                        // 颜色几乎不变。实测糊完的今天列是 #EFE8EF，隔壁普通列 #F0EAEE，
+                        // **对比度 1.005:1，等于什么都没画**。模糊负责的是「质感」
+                        // （让这一列不像贴上去的色板），「今天」这件事真正由两处承担：
+                        // 星期表头那一列的绿块，和下面这层淡色染色。
+                        //
+                        // 两者分工：表头绿块是**主标识**（不依赖任何底色，永远可见）；
+                        // 整列淡色是**加强线索**（一眼扫到「整列是今天」）。
+                        // 所以染色必须够淡——它是线索不是主角，压过头就又变回色板。
+                        //
+                        // hazeState 为 null 时（Local 默认值 = 没开 haze）不能挂
+                        // hazeEffect：它要求非空 HazeState，传 null 编译不过；
+                        // 强行兜一个 OverlayHazeState 也不行——那会拿到一个没录过任何
+                        // 内容的空源，糊出一块比周围更平的色块，比不标还糟。
+                        // 那种场合退回纯染色：表头绿块仍在，「今天」不会丢。
+                        .then(
+                            if (isToday) {
+                                val todayBase = Modifier.background(TodayColumnTint)
+                                if (hazeState == null) {
+                                    todayBase
+                                } else {
+                                    todayBase.hazeEffect(
+                                        state = hazeState,
+                                        style = HazeDefaults.style(
+                                            backgroundColor = HazeFallbackBgForGrid,
+                                            tint = HazeDefaults.tint(Color.White.copy(alpha = 0.30f)),
+                                            blurRadius = TodayColumnBlur,
+                                        )
+                                    )
+                                }
+                            } else {
+                                Modifier
+                            }
+                        )
                 ) {
                     // 1. 平涂行底 + 横细线（替代原来逐格描边的方格背景）
                     Column(modifier = Modifier.fillMaxSize()) {
@@ -838,7 +979,7 @@ fun WeekTimetableGrid13(
                                         .align(Alignment.BottomCenter)
                                         .fillMaxWidth()
                                         .height(0.5.dp)
-                                        .background(FlatGridLine)
+                                        .background(FlatGridLine.asGridLine())
                                 )
                             }
                         }
@@ -851,7 +992,7 @@ fun WeekTimetableGrid13(
                                 .align(Alignment.TopEnd)
                                 .width(0.5.dp)
                                 .fillMaxHeight()
-                                .background(FlatGridColumnLine)
+                                .background(FlatGridColumnLine.asGridLine())
                         )
                     }
 
@@ -1170,7 +1311,10 @@ private fun ScheduleCourseCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .glassSurface(shape = RoundedCornerShape(18.dp), tint = courseColor, tintAlpha = CourseTintAlpha, vividness = CourseTintVivid)
+                // 白衬底让这张卡的明度主要由自己决定，换壁纸不会连着变暗；
+                // 染色传 cardTint 解出来的颜色，八门课因此等重——两条理由
+                // 分别见 CardBaseCoatAlpha 和 Color.kt 的「卡片染色」。
+                .glassSurface(shape = RoundedCornerShape(18.dp), tint = cardTint(courseColor, CourseTintAlpha), tintAlpha = CourseTintAlpha, baseCoatAlpha = CardBaseCoatAlpha)
                 .padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
             // Header: 课程名 + 时段

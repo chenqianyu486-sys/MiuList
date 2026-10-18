@@ -16,7 +16,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -62,10 +61,9 @@ fun NewTaskTypeDialog(
 
     val trimmed = label.trim()
 
-    AlertDialog(
+    GlassOverlayHost(
         onDismissRequest = onDismiss,
-        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
-        modifier = Modifier.padding(horizontal = 16.dp),
+        horizontalPadding = 16.dp,
         title = {
             Text(
                 text = "新建待办类型",
@@ -197,7 +195,7 @@ fun DeleteTaskTypeConfirmDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
-    AlertDialog(
+    GlassOverlayHost(
         onDismissRequest = onDismiss,
         title = {
             Text(

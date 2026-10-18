@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.graphics.RectF
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,34 +17,54 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ListAlt
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.School
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import com.example.ui.theme.cardRevealAt
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.local.CourseEntity
 import com.example.data.local.CourseWithSlots
 import com.example.data.local.TaskEntity
 import com.example.data.model.TaskType
+import com.example.data.source.zju.CoursesTodoItem
 import com.example.ui.components.IslandBottomInset
 import com.example.ui.components.TaskItemCard
 import com.example.ui.components.WeatherBlock
@@ -55,13 +76,19 @@ import com.example.data.calendar.ScheduleResolver
 import com.example.ui.components.parseColor
 import com.example.ui.theme.CardBlockGap
 import com.example.ui.theme.PageHInset
+import com.example.ui.theme.CardBaseCoatAlpha
+import com.example.ui.theme.accentBarColor
 import com.example.ui.theme.CourseTintAlpha
-import com.example.ui.theme.CourseTintVivid
+import com.example.ui.theme.cardTint
 import com.example.ui.theme.TeaColor
 import com.example.ui.theme.TeaColorBorder
 import com.example.ui.theme.TeaOnColor
+import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.glassSurface
+import com.example.ui.theme.wallpaperBlur
+import com.example.ui.theme.WallpaperCardFaceTint
+import com.example.ui.theme.WallpaperCardFaceAlpha
 import com.example.ui.theme.LocalCardRevealProgress
 import com.example.ui.viewmodel.MainUiState
 import java.text.SimpleDateFormat
@@ -69,6 +96,8 @@ import java.time.LocalTime
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+
+private val HeroCardHeight = 140.dp
 
 @Composable
 fun DashboardScreen(
@@ -80,6 +109,8 @@ fun DashboardScreen(
     onInspectTask: (TaskEntity) -> Unit,
     onInspectCourse: (CourseWithSlots) -> Unit,
     onOpenWeekPicker: () -> Unit,
+    onRefreshCoursesTodo: () -> Unit = {},
+    onOpenQuickLoginDialog: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val todayCalendar = remember { todayCalendar() }
@@ -150,135 +181,368 @@ fun DashboardScreen(
         item {
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Semester Overview & Progress Hero Card (Clean & Airy Modern)
+            var isHeroFlipped by rememberSaveable { mutableStateOf(false) }
+            val heroFlipRotation by animateFloatAsState(
+                targetValue = if (isHeroFlipped) 180f else 0f,
+                animationSpec = tween(durationMillis = 450, easing = FastOutSlowInEasing),
+                label = "hero_flip_rotation"
+            )
+
+            // Semester Overview & Progress Hero Card (3D Flip: 正面=日期天气，反面=学在浙大待交作业)
+            // 固定 HeroCardHeight = 140.dp，确保卡片翻转过程中与正反两面高度绝对一致，防止下方列表发生跳变。
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .height(HeroCardHeight)
                     .cardRevealAt(cardRevealProgress, 0)
-                    .testTag("dashboard_semester_card"),
+                    .testTag("dashboard_semester_card")
+                    .graphicsLayer {
+                        rotationY = heroFlipRotation
+                        cameraDistance = 14f * density
+                    },
                 shape = RoundedCornerShape(22.dp),
                 colors = CardDefaults.cardColors(containerColor = Color.Transparent),
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .glassSurface(shape = RoundedCornerShape(22.dp))
-                        // 这里原来压了一条抹茶绿渐变做「主卡识别」，是米白页面底时代的做法。
-                        // 页面底换成纯白、面改成半透明冷灰之后，这条渐变只剩两个坏处：
-                        // 一是渐变本身就是一道明暗轴，和这版「面里不藏光影」的扁平原则冲突，
-                        // 二是它把主卡染绿了，整屏唯一的绿本该留给按钮和选中态这些小面积强调。
-                        // 主卡靠 22dp 大圆角和更大的体量已经足够认出来。
-                        .padding(18.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                if (heroFlipRotation <= 90f) {
+                    // 正面：日期与天气卡片（点击卡片主体翻转至背面学在浙大）
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(22.dp))
+                            .wallpaperBlur()
+                            .glassSurface(
+                                shape = RoundedCornerShape(22.dp),
+                                tint = WallpaperCardFaceTint,
+                                tintAlpha = WallpaperCardFaceAlpha,
+                                blurRadius = 0.dp,
+                            )
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() }
+                            ) {
+                                isHeroFlipped = true
+                            }
+                            .padding(horizontal = 18.dp, vertical = 16.dp),
+                        contentAlignment = Alignment.CenterStart
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.primary)
-                                        .clickable { onOpenWeekPicker() }
-                                        .padding(horizontal = 9.dp, vertical = 3.5.dp)
-                                ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(MaterialTheme.colorScheme.primary)
+                                            .clickable { onOpenWeekPicker() }
+                                            .padding(horizontal = 9.dp, vertical = 3.5.dp)
+                                    ) {
+                                        Text(
+                                            text = "第 ${state.currentWeek} 周",
+                                            color = MaterialTheme.colorScheme.onPrimary,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            fontSize = 11.5.sp
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "第 ${state.currentWeek} 周",
-                                        color = MaterialTheme.colorScheme.onPrimary,
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        fontSize = 11.5.sp
+                                        text = state.semester?.name?.ifBlank { null } ?: "本学期",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = TextSecondary
                                     )
                                 }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                // 学期名取自校历，和设置页、顶栏同一个来源。
-                                // 原来这里写死成「2026 秋季学期」：换个学期、或者用户
-                                // 自己改了校历，这张卡和别处就会显示两个不同的学期名。
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
                                 Text(
-                                    text = state.semester?.name?.ifBlank { null } ?: "本学期",
-                                    style = MaterialTheme.typography.labelMedium,
+                                    text = todayDateStr,
+                                    style = MaterialTheme.typography.titleLarge.copy(
+                                        fontWeight = FontWeight.ExtraBold,
+                                        letterSpacing = (-0.3).sp
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                Text(
+                                    text = "${state.courses.size} 门课 · ${weekHoursText}",
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = TextSecondary
                                 )
                             }
 
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
 
-                            Text(
-                                text = todayDateStr,
-                                style = MaterialTheme.typography.titleLarge.copy(
-                                    fontWeight = FontWeight.ExtraBold,
-                                    letterSpacing = (-0.3).sp
-                                ),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-
-                            Spacer(modifier = Modifier.height(4.dp))
-
-                            Text(
-                                text = "${state.courses.size} 门课 · ${weekHoursText}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextSecondary
+                            WeatherBlock(
+                                state = state.weather,
+                                hourOfDay = LocalTime.now().hour
                             )
                         }
+                    }
+                } else {
+                    // 背面：学在浙大待交作业卡片（抵消 180° 水平翻转，恢复正向文字渲染）
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(22.dp))
+                            .wallpaperBlur()
+                            .glassSurface(
+                                shape = RoundedCornerShape(22.dp),
+                                tint = WallpaperCardFaceTint,
+                                tintAlpha = WallpaperCardFaceAlpha,
+                                blurRadius = 0.dp,
+                            )
+                            .graphicsLayer {
+                                rotationY = 180f
+                            }
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() }
+                            ) {
+                                isHeroFlipped = false
+                            }
+                            .padding(horizontal = 18.dp, vertical = 16.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // 第一行：标题栏（点击本行任意空白翻回天气卡片）
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(26.dp)
+                                            .clip(CircleShape)
+                                            .background(TeaColor)
+                                            .border(0.5.dp, TeaColorBorder, CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.School,
+                                            contentDescription = null,
+                                            tint = TeaOnColor,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "学在浙大",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    val todoCount = state.coursesTodoList.size
+                                    val badgeText = if (!state.hasZjuCredentials) "未绑定"
+                                        else if (state.isCoursesTodoLoading) "刷新中..."
+                                        else if (!state.coursesTodoError.isNullOrBlank()) "同步失败"
+                                        else if (todoCount > 0) "$todoCount 篇待交"
+                                        else "已交清"
+                                    val badgeColor = if (!state.hasZjuCredentials) TextSecondary
+                                        else if (state.isCoursesTodoLoading) MaterialTheme.colorScheme.primary
+                                        else if (!state.coursesTodoError.isNullOrBlank()) MaterialTheme.colorScheme.error
+                                        else if (todoCount > 0) MaterialTheme.colorScheme.primary
+                                        else TextSecondary
+                                    val badgeBg = if (!state.hasZjuCredentials) MaterialTheme.colorScheme.surfaceVariant
+                                        else if (state.isCoursesTodoLoading) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                        else if (!state.coursesTodoError.isNullOrBlank()) MaterialTheme.colorScheme.error.copy(alpha = 0.12f)
+                                        else if (todoCount > 0) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                        else MaterialTheme.colorScheme.surfaceVariant
 
-                        Spacer(modifier = Modifier.width(12.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(badgeBg)
+                                            .padding(horizontal = 7.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = badgeText,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                            color = badgeColor,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
 
-                        // 这里原来是一个显示「完成率」的圆环，现在换成当天的天气。
-                        //
-                        // 完成率并没有丢：待办清单每张卡左侧就有勾选圈，
-                        // 清单一页的进度本来也是从那里读出来的。为了一个
-                        // 已经在别处表达过的比例，把主卡右上角这块最好的位置占掉不划算。
-                        WeatherBlock(
-                            state = state.weather,
-                            // 每次重组现读，不 remember。规则本身（几点算夜里）在
-                            // DailyWeather.textAt 里；只是当前的数据源给的是逐日聚合，
-                            // 昼夜值恒为空，所以这一行眼下怎么读结果都一样。
-                            // 不 remember 是为了将来换上分昼夜的数据源时不用回头改这里。
-                            hourOfDay = LocalTime.now().hour
-                        )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    val updateText = remember(state.coursesTodoLastUpdated) {
+                                        formatLastUpdatedTime(state.coursesTodoLastUpdated)
+                                    }
+                                    if (updateText.isNotBlank()) {
+                                        Text(
+                                            text = updateText,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextSecondary,
+                                            fontSize = 10.5.sp
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                    }
+
+                                    // 一键刷新按钮（带加载旋转动效）
+                                    val infiniteTransition = rememberInfiniteTransition(label = "courses_todo_spin")
+                                    val spinAngle by infiniteTransition.animateFloat(
+                                        initialValue = 0f,
+                                        targetValue = 360f,
+                                        animationSpec = infiniteRepeatable(
+                                            animation = tween(900, easing = LinearEasing),
+                                            repeatMode = RepeatMode.Restart
+                                        ),
+                                        label = "courses_todo_spin_angle"
+                                    )
+
+                                    Box(
+                                        modifier = Modifier
+                                            .size(30.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+                                            .clickable(
+                                                indication = null,
+                                                interactionSource = remember { MutableInteractionSource() }
+                                            ) {
+                                                onRefreshCoursesTodo()
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Refresh,
+                                            contentDescription = "一键刷新",
+                                            tint = if (state.isCoursesTodoLoading) MaterialTheme.colorScheme.primary else TextSecondary,
+                                            modifier = Modifier
+                                                .size(16.dp)
+                                                .graphicsLayer {
+                                                    if (state.isCoursesTodoLoading) {
+                                                        rotationZ = spinAngle
+                                                    }
+                                                }
+                                        )
+                                    }
+                                }
+                            }
+
+                            // 第二行：横向待办小卡片栏 (按 DDL 顺序从左往右滑动)
+                            if (!state.hasZjuCredentials) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(64.dp)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                                        .padding(horizontal = 14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "尚未绑定浙大账号，无法同步作业",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextSecondary,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Button(
+                                        onClick = onOpenQuickLoginDialog,
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(32.dp)
+                                    ) {
+                                        Text("填写学号密码", fontSize = 11.5.sp)
+                                    }
+                                }
+                            } else if (state.coursesTodoList.isEmpty()) {
+                                val errorMsg = state.coursesTodoError
+                                if (!errorMsg.isNullOrBlank()) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(64.dp)
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f))
+                                            .padding(horizontal = 14.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.ErrorOutline,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = errorMsg,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error,
+                                            fontSize = 12.sp,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(64.dp)
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "✨ 当前没有未交作业，所有任务已结清",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = TextSecondary,
+                                            fontSize = 12.5.sp
+                                        )
+                                    }
+                                }
+                            } else {
+                                LazyRow(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    items(state.coursesTodoList, key = { it.id }) { item ->
+                                        CoursesMiniCard(
+                                            item = item,
+                                            matchingCourse = courseMap.values.find {
+                                                it.course.name.trim() == item.courseName.trim() ||
+                                                    it.course.name.contains(item.courseName) ||
+                                                    item.courseName.contains(it.course.name)
+                                            }?.course
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
         // Section: Today's Classes & Linked Tasks
-        // 组头只剩标题：原来右侧那颗「全周课表 >」是跳课表页的按钮，已撤。
-        // 切页由底部浮岛承担，组头里再放一个跳转入口就是同一个动作的第二个落点。
+        // 组头只剩标题：原来右侧那颗「全周课表 >」是跳课表页的按钮，已撤；
+        // 标题左侧那颗圆形学士帽图标同轮撤掉——它和茶色圆底把「这是标题」
+        // 说成「这是个可点的入口」，与组头不再承担跳转的事实相矛盾。
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(TeaColor)
-                        .border(0.5.dp, TeaColorBorder, CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.School,
-                        contentDescription = null,
-                        tint = TeaOnColor,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                val now = System.currentTimeMillis()
-                val coursesHeader = todayStatusLabel(todayCalendar, todaySlots, now, state.periodTable)
-                Text(
-                    text = coursesHeader,
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+            val now = System.currentTimeMillis()
+            val coursesHeader = todayStatusLabel(todayCalendar, todaySlots, now, state.periodTable)
+            Text(
+                text = coursesHeader,
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
 
         if (todaySlots.isEmpty()) {
@@ -294,7 +558,9 @@ fun DashboardScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .glassSurface(shape = RoundedCornerShape(18.dp))
+                            // 空态卡同样铺白衬底：它和课程卡、待办卡排在同一屏里，
+                            // 不铺的话换深色壁纸时它会先变成一块发灰的板。
+                            .glassSurface(shape = RoundedCornerShape(18.dp), baseCoatAlpha = CardBaseCoatAlpha)
                             .padding(24.dp),
                         contentAlignment = Alignment.Center
                     ) {
@@ -334,18 +600,27 @@ fun DashboardScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .glassSurface(shape = RoundedCornerShape(18.dp), tint = courseColor, tintAlpha = CourseTintAlpha, vividness = CourseTintVivid)
+                                // 白衬底让这张卡的明度主要由自己决定，换壁纸不会连着变暗；
+                                // 染色传 cardTint 解出来的颜色，八门课因此等重——两条理由
+                                // 分别见 CardBaseCoatAlpha 和 Color.kt 的「卡片染色」。
+                                .glassSurface(shape = RoundedCornerShape(18.dp), tint = cardTint(courseColor, CourseTintAlpha), tintAlpha = CourseTintAlpha, baseCoatAlpha = CardBaseCoatAlpha)
                                 .padding(horizontal = 14.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             // 左侧课程色竖条（一度删掉又按用户要求恢复）：
-                            // 卡面染色只有 20% 的粉彩，扫视时不足以一眼认出课程；
+                            // 卡面染色很淡，扫视时不足以一眼认出课程；
                             // 这根实色竖条是更强的识别线索，不是同一信息的重复表达。
+                            //
+                            // 颜色不是课程原色，而是 accentBarColor 解出来的那一支：
+                            // 八门课的课程色明度跨得很开（黄的 L≈0.86、青的 L≈0.55），
+                            // 直接画原色时黄色的竖条压在黄卡面上等于消失、青的又压得很重。
+                            // 现在它和卡面同一个色相、同一套等重建，只是深一档——
+                            // 竖条指的是「这门课」，而不是「这门课原来是哪个色号」。
                             Box(
                                 modifier = Modifier
                                     .size(4.dp, 44.dp)
                                     .clip(RoundedCornerShape(2.dp))
-                                    .background(courseColor)
+                                    .background(accentBarColor(courseColor))
                             )
                             Spacer(modifier = Modifier.width(12.dp))
 
@@ -405,16 +680,39 @@ fun DashboardScreen(
                                 )
                             }
 
+                            // 右侧状态徽标：跟周课表那一页同一套说法——
+                            // 有未完成待办只给「圆点 + 数字」，全部完成只给一枚 ✓。
+                            //
+                            // 「待办」两个字去掉是有理由的：圆点已经是「还有几件事没做」
+                            // 的形状语言，补两个字就成了一个短语，而短语要在这点
+                            // 余量里塞下，字号就得跟着别的小字降一级。
+                            // 「已结清」换成 ✓ 是同一个道理：勾本身就是完成的形状。
+                            //
+                            // 从没挂过待办的课程**完全不挂徽标**（周课表也是这条规矩）：
+                            // 一枚 ✓ 会把「一件待办都没有」说成「都做完了」，
+                            // 这两件事不是一回事，不能共用一个记号。
                             val pendingCount = linked.count { !it.isCompleted }
+                            val hasLinked = linked.isNotEmpty()
                             if (pendingCount > 0) {
                                 Box(
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.secondaryContainer)
-                                        .border(
-                                            1.dp,
-                                            MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f),
-                                            RoundedCornerShape(8.dp)
+                                        // 底与字跟周课表格子里那枚徽标**同一套**：
+                                        // 磨砂白玻璃面 + 墨黑的点和数字，一枚 1.dp 描边都不要。
+                                        //
+                                        // 之前这里是 secondaryContainer 实色 + secondary 描边和字，
+                                        // 八门课就长出八种底色，而它偏偏是这张卡上最该统一的元件——
+                                        // 课程色已经由左侧竖条和整张卡面表达了，徽标再带一遍颜色
+                                        // 只是把「这门课」重复说三遍，还顺手把数字压成灰绿。
+                                        //
+                                        // blurRadius 传 0，理由和课表那枚一样：背后是这张染色课程卡
+                                        // 而不是壁纸，卡面本身已接近纯白，糊进来等于没糊；
+                                        // 而且 18/28 的核会先把这枚 23dp 高的小徽标自己的边界吃掉，
+                                        // 读出来是一块斑而不是一枚徽标。白面 + 半透已经足够立住。
+                                        .glassSurface(
+                                            shape = RoundedCornerShape(7.dp),
+                                            tint = Color.White,
+                                            tintAlpha = 0.82f,
+                                            blurRadius = 0.dp
                                         )
                                         .padding(horizontal = 9.dp, vertical = 4.5.dp)
                                 ) {
@@ -426,28 +724,39 @@ fun DashboardScreen(
                                             modifier = Modifier
                                                 .size(5.dp)
                                                 .clip(CircleShape)
-                                                .background(MaterialTheme.colorScheme.secondary)
+                                                .background(TextPrimary)
                                         )
                                         Text(
-                                            text = "$pendingCount 待办",
-                                            color = MaterialTheme.colorScheme.secondary,
+                                            // 只剩数字：小圆点已经把「还有几件待办」说完了，
+                                            // 后缀「待办」在这张卡右侧是纯噪声。
+                                            text = "$pendingCount",
+                                            color = TextPrimary,
                                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                             fontSize = 11.sp
                                         )
                                     }
                                 }
-                            } else {
+                            } else if (hasLinked) {
+                                // 全部完成：一枚正圆里一个 ✓，和周课表那枚同一套底与字。
+                                // 从胶囊改成正圆——里面只剩一个字符时，胶囊会在字符两侧
+                                // 空出一段档，看着像多出来的一颗点而不像一枚徽标。
                                 Box(
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                                        .padding(horizontal = 9.dp, vertical = 4.5.dp)
+                                        .glassSurface(
+                                            shape = CircleShape,
+                                            tint = Color.White,
+                                            tintAlpha = 0.82f,
+                                            blurRadius = 0.dp
+                                        )
+                                        .size(20.dp),
+                                    contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        text = "✓ 已结清",
-                                        color = TextSecondary,
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
-                                        fontSize = 11.sp
+                                        text = "✓",
+                                        color = TextPrimary,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        fontSize = 11.sp,
+                                        maxLines = 1
                                     )
                                 }
                             }
@@ -460,31 +769,10 @@ fun DashboardScreen(
         // Section: Urgent / Today's Pending Tasks
         // 同上：右侧「清单 >」跳转按钮已撤，这一组只剩标题。
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(TeaColor)
-                        .border(0.5.dp, TeaColorBorder, CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Outlined.ListAlt,
-                        contentDescription = null,
-                        tint = TeaOnColor,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "待办清单 · ${pendingTasks.size}",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                )
-            }
+            Text(
+                text = "待办清单 · ${pendingTasks.size}",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+            )
         }
 
         if (pendingTasks.isEmpty()) {
@@ -500,7 +788,8 @@ fun DashboardScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .glassSurface(shape = RoundedCornerShape(18.dp))
+                            // 同上：待办区的空态卡与待办卡同屏，衬底保持一致。
+                            .glassSurface(shape = RoundedCornerShape(18.dp), baseCoatAlpha = CardBaseCoatAlpha)
                             .padding(24.dp),
                         contentAlignment = Alignment.Center
                     ) {
@@ -536,3 +825,106 @@ fun DashboardScreen(
         }
     }
 }
+
+@Composable
+private fun CoursesMiniCard(
+    item: CoursesTodoItem,
+    matchingCourse: CourseEntity?,
+    modifier: Modifier = Modifier
+) {
+    val courseColor = remember(matchingCourse) {
+        matchingCourse?.colorHex?.let { parseColor(it) } ?: Color(0xFF8E9BAE)
+    }
+
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        elevation = CardDefaults.cardElevation(0.dp),
+        modifier = modifier
+            .width(156.dp)
+            .height(64.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .glassSurface(
+                    shape = RoundedCornerShape(14.dp),
+                    tint = cardTint(courseColor, 0.08f),
+                    tintAlpha = 0.08f,
+                    baseCoatAlpha = CardBaseCoatAlpha
+                )
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 左侧课程色细条
+            Box(
+                modifier = Modifier
+                    .size(3.5.dp, 36.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(accentBarColor(courseColor))
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center
+            ) {
+                // 主行：作业名称
+                Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.5.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(3.dp))
+
+                // 备注行：DDL（紧急状态突出显示）· 课程名
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = item.dueFormatted,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = if (item.isUrgent) FontWeight.Bold else FontWeight.Normal,
+                            fontSize = 10.sp
+                        ),
+                        color = if (item.isUrgent) Color(0xFFC84238) else TextSecondary,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = " · ",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary,
+                        fontSize = 10.sp
+                    )
+                    Text(
+                        text = item.courseName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary,
+                        fontSize = 10.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatLastUpdatedTime(timestamp: Long): String {
+    if (timestamp <= 0L) return ""
+    val diff = System.currentTimeMillis() - timestamp
+    val minutes = diff / 60000
+    return when {
+        minutes < 1 -> "刚刚更新"
+        minutes < 60 -> "${minutes}分钟前"
+        else -> {
+            val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+            "${sdf.format(Date(timestamp))} 更新"
+        }
+    }
+}
+

@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutLinearInEasing
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -38,6 +40,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +57,8 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
@@ -72,8 +77,9 @@ val GlassSheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
  * 弹层玻璃面的取值。**和页内卡片那套不是同一组参数**，原因有三个：
  *
  * 1. 背后不是纯白页面底，而是**一整屏有字有色的内容**。页内卡片背后可能是空白，
- *    弹层背后永远有东西，所以模糊半径要大得多（40 vs 16），糊到只剩色块为止——
- *    糊到还能认出字就等于没糊。
+ *    弹层背后永远有东西，所以模糊半径要大于页内卡片那一档，糊到只剩色块为止。
+ *    但**居中弹窗和底部弹层不是同一个数**：前者 40.dp（背后是页面底，糊狠一点更稳），
+ *    后者 24.dp（背后是满屏彩色格子，糊狠了就成了白板），见 [GlassSheetBlurRadius]。
  * 2. 必须叠一层洗白（wash）。玻璃面是半透明的，背后压暗过的文字会直接透上来，
  *    而弹层里全是 13~17sp 的正文，它扛不住。洗白是把背光整体往白拉，
  *    等于给正文重新铺了一层底。
@@ -83,33 +89,117 @@ val GlassSheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
  * 面不透明度也高于页内卡片（0.72 vs 0.48）：页内卡片要透，弹层要稳，
  * 这里的取舍是「透出颜色，不透出内容」。
  */
+/**
+ * 弹层遮罩的不透明度。给得很轻：遮罩是**压暗背后那层**的，压重了玻璃面就白做了——
+ * 玻璃的意义就是「透」，背后被压成一片黑就没有可透的东西了。
+ * M3 的 Dialog 默认给 0.32，这里砍掉一半还多。
+ *
+ * 提成文件级常量而不是只放在 [GlassOverlay] 里：还有几处弹窗因为嵌套关系
+ * 仍然是独立窗口（独立窗口里的 haze 读不到页面那层源层，做不了毛玻璃），
+ * 它们拿不到 [GlassOverlayHost]，但遮罩得跟全 App 对齐，只能直接引用这个数。
+ */
+const val GlassOverlayScrimAlpha = 0.14f
+
 private object GlassOverlay {
     const val FACE_ALPHA = 0.72f
     val BLUR_RADIUS = 40.dp
     const val WASH = 0.42f
     const val FLOOR = 0.5f
-    /**
-     * 遮罩。给得很轻：遮罩是**压暗背后那层**的，压重了玻璃面就白做了——
-     * 玻璃的意义就是「透」，背后被压成一片黑就没有可透的东西了。
-     * M3 的 Dialog 默认给 0.32，这里砍掉一半还多。
-     */
-    const val SCRIM = 0.14f
 }
+
+/**
+ * **底部弹层**的玻璃面参数，**和居中弹窗那一套刻意不同**。
+ *
+ * 底部弹层要满足一件居中弹窗不需要的事：**背后那一屏该透的透上来**。
+ *
+ * 上一版的实测把这件事卡得很死（`GlassOverlay` 那一套 0.72 / 0.42）：以周课表上打开课程弹层为例，
+ * 弹层面板覆盖的那块区域里 **30.6% 的采样点背后本来就有彩色内容**（课表格子、FAB、底部浮岛），
+ * 可面板一亮，那 30.6% 全都读成同一个 `(239,241,244)`——背后有东西，可一点都透不出来。
+ *
+ * 于是两件事必须分开记：
+ *
+ * 1. **背后有东西** 是打开位置决定的，不是参数决定的。课表下半屏本来就是空白网格，
+ *    那个画面再怎么调参也透不出花来（见 [GlassSheetBlurRadius]）。
+ * 2. **透不透得出来** 是这两个数决定的：`FACE_ALPHA` 是「不透明面盖住多少」，
+ *    `WASH` 是「糊完之后往白拉多少」。0.72 + 0.42 叠起来只剩 28% 的背光，
+ *    糊过一轮的低频颜色基本归零，于是无论背后有什么都读成一块白板。
+ *
+ * 0.72 → 0.55、0.42 → 0.30：留 45% 背光，把糊过的颜色放回来，又不至于让弹层里
+ * 13~17sp 的正文直接坐在花底上（正文全是深色，落在最浅的一档粉彩上仍有 10:1 以上对比）。
+ * 模糊半径仍走 [GlassSheetBlurRadius]，它管「透出多少结构」，这两个数管「透出多少对比」。
+ */
+private object GlassSheetFace {
+    const val FACE_ALPHA = 0.55f
+    const val WASH = 0.30f
+    const val FLOOR = GlassOverlay.FLOOR
+}
+
+/**
+ * **底部弹层**的模糊半径，24.dp。
+ *
+ * 它和居中弹窗那一档（[GlassOverlay.BLUR_RADIUS] 40.dp）不是同一个数，两个原因：
+ *
+ * 1. **弹层更高、背后更有结构**。居中弹窗只占屏幕中间一小块，两侧露出来的仍是页面底；
+ *    底部弹层从屏幕底部一路铺上来，背后压着的通常是周课表那种满屏彩色格子。
+ * 2. **同一个底不该配两个半径**。全 App 的弹层面只此两处（课程详情 / 待办详情），
+ *    它们共用 [GlassBottomSheetHost]，所以这个数只需要一处真源。
+ *
+ * 别把它当「模糊强度的旋钮」用：2026-10-18 实测，40 → 24 在课表这一屏上面板区域
+ * 取 18000 个采样点，**最大通道差 0**，两个构建逐像素一致——因为弹层底下多半是空白网格，
+ * 糊白底等于没糊。改这个数之前先看背后有没有东西（见 [GlassSheetFace] 的注释）。
+ */
+val GlassSheetBlurRadius = 24.dp
 
 /**
  * 弹层玻璃面。haze 状态必须显式给 [OverlayHazeState]——弹层虽然和页面同窗口了，
  * 但它是 MainApp 里独立的一段 Composition，拿不到页面那层挂的 CompositionLocal。
+ *
+ * @param blurRadius 背景模糊半径。居中弹窗走 [GlassOverlay.BLUR_RADIUS]，
+ *   底部弹层走 [GlassSheetBlurRadius]。
+ * @param faceAlpha / wash 不透明面与洗白的强度。居中弹窗走 [GlassOverlay] 那一档，
+ *   底部弹层走 [GlassSheetFace] 那一档。
  */
 @Composable
-fun Modifier.glassOverlaySurface(shape: Shape): Modifier = glassSurface(
+fun Modifier.glassOverlaySurface(
+    shape: Shape,
+    blurRadius: Dp = GlassOverlay.BLUR_RADIUS,
+    faceAlpha: Float = GlassOverlay.FACE_ALPHA,
+    wash: Float = GlassOverlay.WASH,
+    hazeFloor: Float = GlassOverlay.FLOOR,
+): Modifier = glassSurface(
     shape = shape,
     tint = GlassTintNeutral,
-    tintAlpha = GlassOverlay.FACE_ALPHA,
-    blurRadius = GlassOverlay.BLUR_RADIUS,
-    hazeWash = GlassOverlay.WASH,
-    hazeFloor = GlassOverlay.FLOOR,
+    tintAlpha = faceAlpha,
+    blurRadius = blurRadius,
+    hazeWash = wash,
+    hazeFloor = hazeFloor,
     hazeState = OverlayHazeState,
 )
+
+/**
+ * 把**当前这个独立窗口**的遮罩压暗程度对齐全 App 弹层（[GlassOverlayScrimAlpha]）。
+ *
+ * 给那些因为嵌套关系必须是独立窗口、拿不到 haze 因而做不了玻璃面的弹层用
+ * （`DatePickerDialog`、包时间选择器的裸 `Dialog`）：玻璃做不到，**压暗至少要对齐**，
+ * 否则同一个 App 里会同时存在 0.14 和 0.32 两种遮罩。
+ *
+ * 为什么不能靠 `DialogProperties`：当前 Compose（UI 1.7.x）的 `DialogProperties`
+ * 只有 `dismissOnBackPress` / `dismissOnClickOutside` / `securePolicy` /
+ * `usePlatformDefaultWidth` / `decorFitsSystemWindows`，**没有任何遮罩参数**——
+ * 弹层遮罩是平台按主题给窗口的。只能自己拿到底层 `Window` 设 dimAmount。
+ *
+ * 必须在 `Dialog` 的**内容**里调用：那时 `LocalView.current.parent` 才是那个窗口。
+ */
+@Composable
+fun AlignDialogWindowScrim() {
+    val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+    SideEffect {
+        if (window != null) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            window.setDimAmount(GlassOverlayScrimAlpha)
+        }
+    }
+}
 
 /**
  * 毛玻璃弹层宿主，参数与 M3 的 `AlertDialog` 一致，替换时只需改函数名、删掉 containerColor。
@@ -132,6 +222,14 @@ fun GlassOverlayHost(
     onDismissRequest: () -> Unit,
     confirmButton: @Composable () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * 挂在**面板**（那个 Column）上的 modifier。默认 no-op，不影响任何现有调用点。
+     *
+     * M3 `AlertDialog` 的 `modifier` 挂在面板上，所以从它迁移过来的调用点想挂
+     * testTag 时要走这里，而不是上面的 `modifier`：后者挂在遮罩那个 fillMaxSize 的
+     * Box 上，挂上去 bounds 会变成全屏，语义节点指向的是「点一下就关弹窗」的那一层。
+     */
+    panelModifier: Modifier = Modifier,
     dismissButton: @Composable (() -> Unit)? = null,
     title: @Composable (() -> Unit)? = null,
     text: @Composable (() -> Unit)? = null,
@@ -144,7 +242,7 @@ fun GlassOverlayHost(
      */
     belowContent: @Composable (() -> Unit)? = null,
     shape: Shape = GlassDialogShape,
-    scrimAlpha: Float = GlassOverlay.SCRIM,
+    scrimAlpha: Float = GlassOverlayScrimAlpha,
     horizontalPadding: Dp = 40.dp,
     alignment: Alignment = Alignment.Center,
 ) {
@@ -195,10 +293,11 @@ fun GlassOverlayHost(
         contentAlignment = alignment,
     ) {
         Column(
-            modifier = Modifier
+            modifier = panelModifier
                 .padding(horizontal = horizontalPadding)
                 .padding(bottom = imeCompensation(maxHeight))
                 .widthIn(max = 560.dp)
+                .heightIn(max = maxHeight - 32.dp)
                 .graphicsLayer {
                     alpha = currentProgress
                     val scale = 0.92f + 0.08f * currentProgress
@@ -218,7 +317,7 @@ fun GlassOverlayHost(
                 Box(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)) { it() }
             }
             text?.let {
-                Box(modifier = Modifier.fillMaxWidth()) { it() }
+                Box(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) { it() }
             }
             belowContent?.let {
                 Box(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { it() }
@@ -270,9 +369,15 @@ fun GlassBottomSheetHost(
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier,
     shape: Shape = GlassSheetShape,
-    scrimAlpha: Float = GlassOverlay.SCRIM,
+    scrimAlpha: Float = GlassOverlayScrimAlpha,
     showDragHandle: Boolean = true,
-    content: @Composable () -> Unit,
+    /**
+     * 面板的模糊半径，默认 [GlassSheetBlurRadius]（24.dp）。
+     *
+     * 这一层目前只有课程详情和待办详情两个弹层在用，所以默认值就是这两个弹层的值；
+     * 参数留着是为了以后若有第三种弹层（比如更高的抽屉）需要另一档时，不必再改公共件。
+     */
+    blurRadius: Dp = GlassSheetBlurRadius,    content: @Composable () -> Unit,
 ) {
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
@@ -419,7 +524,14 @@ fun GlassBottomSheetHost(
                     translationY = currentOffsetY
                     alpha = (0.2f + 0.8f * currentFraction).coerceIn(0f, 1f)
                 }
-                .glassOverlaySurface(shape)
+                .glassOverlaySurface(
+                    shape = shape,
+                    blurRadius = blurRadius,
+                    // 底部弹层走自己那一档面参数（比居中弹窗透），理由见 [GlassSheetFace]。
+                    faceAlpha = GlassSheetFace.FACE_ALPHA,
+                    wash = GlassSheetFace.WASH,
+                    hazeFloor = GlassSheetFace.FLOOR,
+                )
                 .nestedScroll(nestedScrollConnection)
                 .clickable(
                     indication = null,

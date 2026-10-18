@@ -20,7 +20,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Upload
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -100,7 +99,7 @@ fun ScheduleTransferDialog(
     var rememberCredentials by remember { mutableStateOf(true) }
     var selectedTermKey by remember { mutableStateOf("") }
 
-    AlertDialog(
+    GlassOverlayHost(
         onDismissRequest = onDismiss,
         title = {
             Text(

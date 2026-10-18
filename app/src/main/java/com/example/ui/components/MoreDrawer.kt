@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,7 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
@@ -34,6 +36,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Rule
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Tune
@@ -41,10 +44,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -82,6 +91,12 @@ import com.example.ui.viewmodel.MainUiState
  * 实测 `TextMuted`（#78827B）压在上面只有 3.48:1，而脚注是 10.5.sp、分区标题 11.sp，
  * 都属普通小字、过不了 AA。`TextTertiary`（#3B433F）实测 8.5:1 ——
  * 层级仍然比标题弱一档，但不靠牺牲可读性换层级。
+ *
+ * **「本学期课程」这一区可折叠**：它是最长的一块，九门课能把「设置」入口顶到屏外，
+ * 而它在这一页里只是「一次性检查一遍」的内容，不是要反复对照着用的东西。
+ * 状态放在 `AnimatedVisibility` **之外**：抽屉面板本身是常驻组合的，只有可见时才组合内容，
+ * 折叠状态写在内容里会在每次关闭抽屉时一起被丢掉，用户收起一次、点开又得重收一遍。
+ * 默认展开：折叠是用户自己按出来的，不该让「第一次打开」先变成一屏标题。
  */
 @Composable
 fun MoreDrawer(
@@ -102,6 +117,12 @@ fun MoreDrawer(
     val termConfigured = semester != null && semester.firstMondayEpochDay > 0L
     val termName = semester?.name?.ifBlank { null }
         ?: if (termConfigured) "本学期" else "未设置学期"
+
+    // 见文件头：写在 AnimatedVisibility 外面，跨「关抽屉→再开」保留。
+    var coursesExpanded by rememberSaveable { mutableStateOf(true) }
+    // 没有课程时不给折叠开关：这时候折起来什么也看不见，只会让「课程不见了」和
+    // 「我收起来了」两种状态长得一模一样，而空态提示（唯一有用的信息）不该跟着折没。
+    val coursesCollapsible = state.coursesWithSlots.isNotEmpty()
 
     // 系统返回键 = 收起这一页，而不是退出 App。
     // 少了这一行，用户在抽屉里按返回会直接回到桌面——这是全屏覆盖层最常见的
@@ -243,7 +264,13 @@ fun MoreDrawer(
                         DrawerSectionLabel(
                             text = "本学期课程 · ${state.coursesWithSlots.size}",
                             actionText = "添加",
-                            onAction = onOpenAddCourse
+                            onAction = onOpenAddCourse,
+                            expanded = coursesExpanded,
+                            onToggleExpand = if (coursesCollapsible) {
+                                { coursesExpanded = !coursesExpanded }
+                            } else {
+                                null
+                            }
                         )
                     }
                 }
@@ -259,14 +286,23 @@ fun MoreDrawer(
                     }
                 }
 
-                items(state.coursesWithSlots, key = { it.course.id }) { cWithSlots ->
-                    CourseDrawerRow(
-                        courseWithSlots = cWithSlots,
-                        onEdit = { onEditCourse(cWithSlots) },
-                        // 这里不直接删：列表密集，删除图标挨着相邻课程，
-                        // 手滑一下就是不可逆的误删。交给二次确认弹层处理。
-                        onDelete = { onDeleteCourse(cWithSlots) }
-                    )
+                // **收起时是「不 emit」而不是把行折成 0 高**：这些行在 `LazyColumn` 里，
+                // 而 `LazyColumn` 只测量可见区，`AnimatedVisibility` 那种「父容器自己长高/变矮」
+                // 的动画在这里无从测量——它会拿不到子项高度，要么不动要么直接塌。
+                // 展开侧用逐行错峰淡入补上过程感（见 [CourseRowReveal]），
+                // 收起侧就是一次性的收起：那本来就是用户主动按下去的动作，干净利落更合适。
+                if (!coursesCollapsible || coursesExpanded) {
+                    itemsIndexed(state.coursesWithSlots, key = { _, cWithSlots -> cWithSlots.course.id }) { index, cWithSlots ->
+                        CourseRowReveal(index = index) {
+                            CourseDrawerRow(
+                                courseWithSlots = cWithSlots,
+                                onEdit = { onEditCourse(cWithSlots) },
+                                // 这里不直接删：列表密集，删除图标挨着相邻课程，
+                                // 手滑一下就是不可逆的误删。交给二次确认弹层处理。
+                                onDelete = { onDeleteCourse(cWithSlots) }
+                            )
+                        }
+                    }
                 }
 
                 item {
@@ -288,16 +324,38 @@ fun MoreDrawer(
     }
 }
 
-/** 抽屉里的分区小标题；带一个可选的右侧动作（课程区的「添加」用它）。 */
+/**
+ * 抽屉里的分区小标题；带一个可选的右侧动作（课程区的「添加」用它）。
+ *
+ * 还可以再带一个**折叠箭头**（`onToggleExpand != null` 时出现）：给了它，整行就是一个
+ * 开关的落点，而不是只把箭头那一小块做成可点——箭头 18dp 不到手指好按的尺寸，
+ * 只让箭头可点等于要瞄准。
+ *
+ * 折叠行额外有 32dp 的最小高度和圆角裁剪：没有圆角，涟漪会铺到整个行宽上像一条色块；
+ * 没有最小高度，这一行（11.sp 文字 + 8.dp 下边距 ≈ 23dp）比页面里其它可点的行都矮一截。
+ */
 @Composable
 private fun DrawerSectionLabel(
     text: String,
     actionText: String? = null,
-    onAction: (() -> Unit)? = null
+    onAction: (() -> Unit)? = null,
+    expanded: Boolean = true,
+    onToggleExpand: (() -> Unit)? = null
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (onToggleExpand != null) {
+                    Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onToggleExpand() }
+                        .defaultMinSize(minHeight = 32.dp)
+                        .testTag("drawer_section_toggle")
+                } else {
+                    Modifier
+                }
+            )
             .padding(start = 4.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -332,6 +390,54 @@ private fun DrawerSectionLabel(
                 )
             }
         }
+        // 箭头放在「添加」右边、整行最末：和这一页其它行的行尾箭头同一位置，
+        // 收起时指向右（还能往下走），展开时朝下（就停在这儿）。
+        if (onToggleExpand != null) {
+            Spacer(modifier = Modifier.width(2.dp))
+            Icon(
+                imageVector = if (expanded) {
+                    Icons.Outlined.KeyboardArrowDown
+                } else {
+                    Icons.AutoMirrored.Outlined.KeyboardArrowRight
+                },
+                contentDescription = if (expanded) "收起课程列表" else "展开课程列表",
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+/**
+ * 课程行逐条错峰淡入。
+ *
+ * **只动不透明度，不动位置**：行与行之间是共享边界的（行高按内容算、间距只有 8dp），
+ * 一旦让它们各自往下滑，九门课就会在展开时依次「掉下来」，读起来像页面在加载。
+ *
+ * 错峰步长 30ms、上限 210ms：九门课最后一行的延迟也仍在 200ms 出头，
+ * 一次展开看完也就 0.4s；再多就不像「展开」而像「在等」。
+ */
+@Composable
+private fun CourseRowReveal(
+    index: Int,
+    content: @Composable () -> Unit
+) {
+    val alpha = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        alpha.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(
+                durationMillis = 170,
+                delayMillis = (index * 30).coerceAtMost(210)
+            )
+        )
+    }
+    Box(
+        modifier = Modifier.graphicsLayer {
+            this.alpha = alpha.value
+        }
+    ) {
+        content()
     }
 }
 

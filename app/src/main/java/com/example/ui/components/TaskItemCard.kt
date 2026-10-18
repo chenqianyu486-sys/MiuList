@@ -41,7 +41,8 @@ import com.example.data.model.TaskStar
 import com.example.data.model.TaskTypeOption
 import com.example.data.model.TaskTypes
 import com.example.ui.theme.CourseTintAlpha
-import com.example.ui.theme.CourseTintVivid
+import com.example.ui.theme.CardBaseCoatAlpha
+import com.example.ui.theme.cardTint
 import com.example.ui.theme.NestedFaceAlpha
 import com.example.ui.theme.TaskCheckIdleFill
 import com.example.ui.theme.accentOnCourse
@@ -106,19 +107,19 @@ fun TaskItemCard(
                 .fillMaxWidth()
                 .glassSurface(
                     shape = RoundedCornerShape(18.dp),
-                    // 整张卡染这门课的粉彩：颜色本身就是「这是哪门课」的标识，
-                    // 不必再靠一条色条去认。被嵌在课程卡里时反过来挖近白，理由见 nestedInCourseCard
-                    tint = if (nestedInCourseCard) Color.White else courseColor,
+                    // 整张卡染这门课的颜色：颜色本身就是「这是哪门课」的标识，
+                    // 不必再靠一条色条去认。染的不是课程原色，而是 cardTint 解出来的那一支——
+                    // 两者按 CourseTintAlpha 叠下去之后落在同一个感知明度上，八门课等重，
+                    // 理由见 Color.kt 的「卡片染色」。被嵌在课程卡里时反过来挖近白，
+                    // 理由见 nestedInCourseCard。
+                    tint = if (nestedInCourseCard) Color.White else cardTint(courseColor, CourseTintAlpha),
                     tintAlpha = if (nestedInCourseCard) NestedFaceAlpha else CourseTintAlpha,
-                    // 内层是近白挖入，本来就没颜色可提；「不关联课程」的中性灰同样不能提饱和——
-                    // vivid() 会把 gray 里那点微弱的蓝偏（#C9D0D8 的 b > r）放大成饱和蓝，
-                    // 实测未关联卡面被推成 #D8EAFF（hue 212°），和高数卡几乎一模一样
-                    vividness = if (nestedInCourseCard || TaskEntity.isUnlinked(task)) {
-                        0f
-                    } else {
-                        CourseTintVivid
-                    },
-                    // 已完成的待办压扁一点（面从 38% 降到 30%），别跟没做完的抢注意力
+                    // 白衬底只铺在**顶层**卡片上：内层待办卡自己就是近白面，
+                    // 再铺一层只会糊掉内外层次（内层靠调实 [NestedFaceAlpha] 达到同样的效果）。
+                    // 顶层铺它的理由见 CardBaseCoatAlpha：待办卡是全屏文字最密的地方，
+                    // 卡面明度必须主要由卡片自己决定，换壁纸时才不会连着变暗。
+                    baseCoatAlpha = if (nestedInCourseCard) 0f else CardBaseCoatAlpha,
+                    // 已完成的待办压扁一点（白衬底和染色一起降），别跟没做完的抢注意力
                     faceAlphaScale = if (task.isCompleted) 0.78f else 1f
                 )
                 .padding(14.dp)

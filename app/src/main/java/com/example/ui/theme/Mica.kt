@@ -1,5 +1,13 @@
 package com.example.ui.theme
 
+import android.graphics.BitmapFactory
+import java.io.File
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import com.example.data.model.WallpaperConfig
+import com.example.data.model.WallpaperPresets
+import com.example.data.model.WallpaperType
+
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.SizeTransform
@@ -13,8 +21,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,18 +42,23 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.R
 import dev.chrisbanes.haze.HazeDefaults
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeStyle
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.hazeSource
 import kotlinx.coroutines.delay
 
 // =========================================================================
-// 纯白底 + 粉彩染色毛玻璃卡片
+// 壁纸底 + 粉彩染色毛玻璃卡片
 //
 // 这一版把「页面底提供颜色、玻璃面只做透光」的老结构整个翻了过来。
 //
@@ -53,35 +66,58 @@ import kotlinx.coroutines.delay
 // 「屏幕对齐重绘」：在自己的 drawBehind 里按本面板在根坐标的偏移，把同一张
 // 背景再画一遍，背后的颜色透过半透明白面显出来。自定义壁纸也是同一套机制。
 //
-// 现在页面底是一张纯白，**重绘一张白底等于没重绘**，这套机制连同 MeshPaint /
-// buildMeshPaint / drawBackdrop / withWallpaper 一起删掉了。颜色的来源从
+// 页面底一度换成纯白，**重绘一张白底等于没重绘**，于是那套机制连同 MeshPaint /
+// buildMeshPaint / drawBackdrop / withWallpaper 一起删掉了，颜色的来源从
 // 「背景」搬到了「面」上：
 //
 //   * 页面底 = 纯白，负责干净和留白；
 //   * 卡片面 = 半透明粉彩，透出底下那片白，于是是「粉彩染色毛玻璃」而不是实色块；
 //   * 课程卡把 tint 换成这门课自己的粉彩，颜色就有了语义来源，不必再靠色条认课。
 //
-// haze 保留，但它的作用变了。页面底纯白，模糊一张白纸等于没模糊，所以卡片
-// 的玻璃感不再指望它——靠的是「材质三件套」：磨砂颗粒、卡压卡时的真模糊、
-// 以及边缘那圈折射高光。三样都不需要背景提供颜色。
+// 现在页面底是**默认壁纸**（见 [AppBackgroundLayer]），上面那三条里第二条第三条原样
+// 成立——卡片面仍是半透明粉彩，透上来的不再是纯白而是壁纸的浅色调，于是玻璃真的
+// 「透」到了背后那张图。这是把壁纸接回来而不把删掉的重绘机制也接回来的原因：
+// **壁纸不需要被重画**，它本来就在玻璃面下面，被正常绘制顺序挡在后面。
+//
+// 但它**必须进 haze 源层**，理由和「重绘」无关，见 [AppBackgroundLayer] 里的注释。
 //
 // haze 真正出效果的地方是**卡片叠卡片**：课表今日页里，内层待办卡是压在
 // 染好色的课程卡上面的，那一层才是货真价实的毛玻璃。底部浮岛压在滚过去的
 // 卡片上同理。
 // =========================================================================
 
-/** 页面底色。纯白，不是「接近白」——所有层次都交给卡片面去挣。 */
+/** 壁纸之下那层永不露面的兜底白。它保证「页面底永远不透明」这条不变量。 */
 val CanvasPureWhite = Color(0xFFFFFFFF)
 
 /**
- * haze 的兜底底色。
+ * 默认壁纸资源。
  *
- * hazeSource 只录自己的内容，页面底在它外面，所以「岛下面没有卡片」的像素在源层里
- * 是全透明的，直接糊会糊出一块透明洞，必须显式给 haze 一个填充色。现在页面底是纯白，
- * 就填纯白。haze 在 backgroundColor 没给时会直接抛 IllegalArgumentException，
- * 所以这里不能给 Color.Unspecified。
+ * **单点真源**：背景层铺它。换成别的壁纸只改这一行。
+ *
+ * 用 `val` 而不是 `const val`：顶层 `const val` 在 Kotlin 侧是编译期常量、
+ * 引用点会被**内联**，但跨文件经由别的类反射/静态取时会去找一个 `getXxx()` 静态方法
+ * 而它不存在，直接 `NoSuchMethodError` 崩在运行时（编译期完全看不出来）。
+ * `val` 在这个项目里没有性能代价，别为了省一个字段去踩这个。
  */
-private val HazeFallbackBg = CanvasPureWhite
+val DefaultWallpaperRes: Int = R.drawable.wp_default_cloudy_knoxville
+
+/**
+ * haze 的兜底底色：源层里没录到内容的像素拿什么填。
+ *
+ * hazeSource 只录自己的内容，源层没覆盖到的地方在纹理里是全透明的，直接糊会糊出
+ * 一块透明洞，必须显式给 haze 一个填充色。haze 在 backgroundColor 没给时会直接抛
+ * IllegalArgumentException，所以这里不能给 Color.Unspecified。
+ *
+ * 取的是壁纸的中心调而不是纯白。壁纸已经进了源层（见 [AppBackgroundLayer]），
+ * 所以主窗口里这个值**几乎不会被看见**；它真正服务的是两类场合：
+ *
+ *   1. 独立窗口里的弹层。它们拿不到主窗口的源层，糊的是自己那块空背景，
+ *      填色若与页面底差太远，玻璃边缘会露出一圈比页面「更白」的框；
+ *   2. 壁纸图加载/解码的那一帧。Image 在首帧才拿到位图，此前这里就是过渡色。
+ *
+ * 填纯白会让弹层在浅黄—浅紫的壁纸上显出一块明显的白，所以取壁纸中段调。
+ */
+private val HazeFallbackBg = Color(0xFFF2EDEA)
 
 /**
  * haze 的共享状态：MainActivity 在包住整个页面的 Box 上 hazeSource，
@@ -347,35 +383,36 @@ val GlassTintNeutral = Color(0xFFEDF1F5)
 private const val GLASS_FACE_ALPHA = 0.48f
 
 /**
- * 课程色的染色强度。
+ * 卡片面下那层**不透明白衬底**的强度，0 = 不铺。
  *
- * 课程色不能原样铺满一张卡：调色板里 #208E9E「粉彩青」的相对亮度只有 0.42，
- * 按 72% 铺出去就是一块重青，压得深色字全糊住，那不是毛玻璃是色块。
+ * 这是「在不同壁纸上都稳定」的那一层。课程卡 / 待办卡的颜色只由 [CourseTintAlpha]
+ * 那么点染色给出，剩下的透光全部来自壁纸——壁纸一变（尤其是深色壁纸），
+ * 卡的明度跟着变，而全 App 的文字色是写死的深色，于是深色壁纸上正文对比度掉到 1:1。
+ * 铺一层白衬底之后，卡片自身的明度主要由这层白决定，壁纸只贡献剩下的那一小部分，
+ * 深色壁纸上的卡片也就仍然是「清新的浅色卡」而不是一块发暗的色板。
  *
- * 现在压到 0.24 才是「染」的效果——朝白合成之后，明度天然被拉平，
- * 八种颜色都落在同一档很浅的区间里：青落到 #CCE5E8，黄落到 #FEFADF，
- * 深色文字在哪种上面都读得出来，颜色本身还在，但只做暗示不做配色。
+ * 数值 0.55 的来历：这张默认壁纸是接近纯白的粉彩渐变（实测 R 232~251），
+ * 0.55 时卡面与卡外的明差从「几乎没有」变成「一眼能认出这是张卡」；
+ * 而换成深色壁纸（实测 #2B2F52）时，0.55 的白衬底把卡面抬到约 #8FA7D0 那一档，
+ * 深色正文仍有 6:1 以上。**别往 0.7 以上加**：那就不是玻璃卡而是一块白板，
+ * 背面完全没有「壁纸在玻璃后面」这回事了。
  *
- * 彩色卡是整屏最「重」的元素（中性卡底色接近白，反而不显眼），
- * 所以「通透」这件事主要靠这一档在扛。往下降还会顺带把正文对比度一起提上来，
- * 因为底越浅，深色字读得越清楚，方向上是双赢的。
- *
- * 注意这两档是分开的：中性面底色本来就淡，要 0.55 才托得住；
- * 课程色底色浓，再压就几乎没颜色了，只留 0.30。
+ * 只给课程卡 / 待办卡用（见各自的调用点）；浮岛、主卡、弹层不铺——
+ * 浮岛背后是会动的内容，白衬底会把它的通透直接吃掉。
  */
-const val CourseTintAlpha = 0.20f
+const val CardBaseCoatAlpha = 0.55f
 
 /**
- * 课程卡是否把染色往「鲜艳」推一档。
+ * 课程色的染色强度。
  *
- * 用户要的是「鲜艳但通透」，这两件事只调 alpha 是打架的：彩度 ≈ alpha × 彩度(源色)，
- * 光降 alpha 会把颜色洗淡，正好和鲜艳相反。所以课程卡一律先过一遍 [vivid]
- * （饱和拉满 + 明度封顶 0.62），再用 0.20 的透明度染上去，
- * 净效果是颜色更足、卡面更透。
+ * ⚠️ 它同时是 [com.example.ui.theme.cardTint] 的**反解输入**：调用处传给
+ * `glassSurface` 的 `tintAlpha` 必须和这里一致，而 `tint` 必须是
+ * `cardTint(课程色, CourseTintAlpha)`。两者对不上，解出来的颜色就不是要的那个颜色。
  *
- * 中性面不走鲜艳：它的底色 `#EDF1F5` 彩度本来就接近 0，过一遍 vivid 只会平白染灰。
+ * 调这一档时**先想清楚要的是浓还是淡**：0.30 之下，卡面主要靠色相认课；
+ * 再往上颜色就压过「清新」，而深色文字的对比度会跟着掉。
  */
-const val CourseTintVivid = 1f
+const val CourseTintAlpha = 0.30f
 
 /**
  * 嵌在染色卡里面的内层卡片，用近白「挖入」时的面不透明度。
@@ -384,10 +421,53 @@ const val CourseTintVivid = 1f
  * #C2DFFD），层次正好反过来。反过来用近白压在染色面上，层次靠「浅在深上」撑。
  *
  * 数值要跟着 [CourseTintAlpha] 一起调：外层越淡，内层就得越白，
- * 否则两层都接近纯白，卡片会糊成一片。现在 0.24 / 0.72 这一对，
- * 内外差出一档能看出来的明度（青课：外层 #C9E4E8，内层 #EFF7F9）。
+ * 否则两层都接近纯白，卡片会糊成一片。现在 0.30 / 0.86 这一对，
+ * 内外差出一档能看出来的明度。
+ *
+ * 0.72 → **0.86**：内层待办卡是整屏文字最密的地方，而它背后的外层课程卡
+ * 在深色壁纸上会被拉暗。不透明度不够高时，内层的深色正文就跟着一起读不出来。
+ * 内层不铺 [CardBaseCoatAlpha]——它本身就是近白，再铺一层白衬底会糊掉内外层次，
+ * 直接把面调实是同一件事里更省一层的做法。
  */
-const val NestedFaceAlpha = 0.72f
+const val NestedFaceAlpha = 0.86f
+
+/**
+ * 周课表格子里**深色档**课程格（有待办那一档）的背景模糊半径。
+ *
+ * 这一档原来是一块 100% 不透明的实色块，**壁纸对它零影响**（实测两张壁纸下
+ * 基线主色逐字节相同），所以挂模糊**不是为了**「跨壁纸稳定」——那件事本来
+ * 就成立。模糊买的是**把壁纸上大尺度的局部色差摊平**：换成自定义照片或带花纹
+ * 的壁纸时，格子里那片壁纸先被抹平，卡面不会跟着壁纸一块亮一块暗。
+ *
+ * 在默认壁纸和预设壁纸上这个收益是**看不出来**的——它们都是极平滑的渐变，
+ * 相邻像素最大差只有 2/255，糊了等于没糊。别拿预设壁纸当「模糊没生效」的证据。
+ *
+ * 取 [ControlBlurRadius] 那一档（18.dp）而不是卡片级的 [GlassBlurRadius] = 28.dp：
+ * 格子只有约 51×48dp（连堂两节约 51×86dp），28.dp 的核会越过格子和邻格之间
+ * 那 1~2dp 的缝，把隔壁课程的色相拉进来，读成一块染错的边。
+ * ⚠️ **已实测 18.dp 不会渗色**：沿第 1~2 节扫一行，格内中心与靠缝那 4px
+ * 逐字节相同（Δ 全 0），基线与新版都一样。缝隙比半径小一个量级这条推理成立。
+ *
+ * ⚠️ 浅色档**不要**跟着用：那一档的底色被 `pushAwayFrom` 钉在固定明度上
+ * （相对亮度 ≈ 0.616），本来就不受壁纸影响，加模糊只会白白引入邻格的干扰。
+ */
+val CourseCellBlurRadius = 18.dp
+
+/**
+ * 深色档课程格**面**的强度，也就是背后有多少透上来：`1 - 0.94` = 6%。
+ *
+ * 它同时是主题色偏移和文字对比度的**同一个旋钮**：透上来的壁纸越多，卡面越容易被
+ * 壁纸带偏，而白字也越读不出来。实测这一档取 0.94 时卡面各通道变亮 3~12 级，
+ * 白字对比度从实色时的 3.8:1 降到约 3.4:1（默认浅色壁纸下算得最不利）。
+ *
+ * 为什么不给 [CardBaseCoatAlpha] 那种白衬底：白衬底是往**上**提亮，而这一档是
+ * 深色底配白字，任何提亮都会直接吃掉白字的对比度。
+ *
+ * **别再往下压**：0.94 已经贴着 3:1 的线，再透一点白字就过线了。要更强的壁纸
+ * 抑制力就去加深 [com.example.ui.theme.deepEnoughForWhite] 的目标，
+ * 而不是把这层面调透——那两个方向的效果相反。
+ */
+const val CourseCellDeepFaceAlpha = 0.94f
 
 // =========================================================================
 // 玻璃的「材质三件套」
@@ -399,22 +479,30 @@ const val NestedFaceAlpha = 0.72f
 //      半透明的卡面就只是一块淡色板，怎么调 alpha 都出不来玻璃感。
 //   2. 模糊（GlassBlurRadius）——背后没东西时看不出来，但卡片压卡片时立刻见效：
 //      课表里内层待办卡叠在染色课程卡上，那层才是真·毛玻璃。
-//   3. 边缘折射高光（GlassRim*）——玻璃的边会聚光，比面本身亮一线。
 //
-// 三样都不碰页面底色，纯白背景不动。
+// 这两样都不碰页面底色，纯白背景不动。
+//
+// 第三样「边缘折射高光」（0.5dp 白内线）**已删**：白边在浅色壁纸上勉强算材质，
+// 在深色或花纹壁纸上是硬邦邦的一圈亮线，而卡片边界现在由两件事承担——
+// 面本身更实（见 CardBaseCoatAlpha）和更大的模糊半径。别再把它加回来。
 // =========================================================================
 
-/** 卡片级真背景模糊半径。卡压卡的地方（课表内层待办卡）靠它出纵深。 */
-val GlassBlurRadius = 16.dp
+/**
+ * 卡片级真背景模糊半径。
+ *
+ * 16.dp → 30.dp → 44.dp → **28.dp**。44.dp 实机看过之后用户判为糊过头（颜色被摊平、
+ * 卡片与卡外的差别被吃掉），回退到 **25~30 区间**，取中值 28.dp。
+ *
+ * 这是手感值，落在 25~30 之间都成立；**用户给的区间不要越到 30 以上去**。
+ *
+ * 真正兜住「卡片看起来还是一张卡」的是白衬底（[CardBaseCoatAlpha]）：卡面与卡外
+ * 那片壁纸的明暗差别由衬底决定，不依赖模糊半径。所以模糊和衬底是两个独立旋钮——
+ * 觉得糊就动这个，觉得「卡片边界不清楚」动衬底，别拿其中一个去补另一个的短板。
+ */
+val GlassBlurRadius = 28.dp
 
 /** 磨砂颗粒强度。之前写死 0f，理由是「像老照片」，现在反过来了——没有颗粒就不是玻璃。 */
 private const val GlassGrain = 0.055f
-
-/** 边缘折射高光的粗细。0.5dp 是发丝级存在感刚好，不至于看起来像画了框。 */
-private val GlassRimWidth = 0.5.dp
-
-/** 边缘高光不透明度。白内线压在染色面上要比面亮一点才看得出来。 */
-private const val GlassRimAlpha = 0.55f
 
 // 形状：现代极简靠大圆角，不靠描边和阴影堆叠
 val GlassCardShape = RoundedCornerShape(20.dp)
@@ -494,27 +582,271 @@ val CardListGap = 4.dp
 val CardBlockGap = 10.dp
 
 /**
- * 页面底层：纯白 + 内容。
+ * 页面底层：默认壁纸 + 内容。
  *
  * 放在 Scaffold 之外、内容之下，且 Scaffold 的 containerColor 必须是透明。
- * 以前这层负责画 Mesh Gradient，现在只有一块白——但仍然保留这层容器，
- * 因为将来若要换页面底色，只需改这一处，不用动每个 screen。
+ *
+ * ### 壁纸为什么不需要「屏幕对齐重绘」
+ *
+ * 早期版本页面底是 Mesh Gradient，玻璃面板得在自己的 drawBehind 里按本面板在根坐标的
+ * 偏移把同一张背景**再画一遍**，颜色才透得出来。现在壁纸是真实位图，被正常的绘制顺序
+ * 挡在玻璃面**下面**，本来就该透过半透明面显出来——重画一遍只会让它对不上位图本身。
+ * 所以那套机制不必接回来。
+ *
+ * ### 但它必须进 haze 源层（这条容易漏）
+ *
+ * `hazeSource` 挂在 MainActivity 里内容那个 Box 上，只录**内容**。壁纸画在它外面，
+ * 于是玻璃面背后那片壁纸在源层里是全透明的，haze 会拿 [HazeFallbackBg] 去填，
+ * 浮岛底下就会浮出一块和壁纸对不上的死板色块。**换壁纸不改这里 = 底部浮岛周围一圈脏边。**
+ *
+ * 代价是壁纸要跟着内容一起被录进模糊源。但壁纸本身是极平滑的渐变（相邻像素最大差 2/255），
+ * 糊它等于没糊，所以这笔开销买不到任何视觉收益，却换来了「岛下看到的就是壁纸」。
+ * 值。
+ *
+ * @param hazeSourceState 整页的 haze 状态。传 null = 不把壁纸录进源层（仅调试用，
+ *   正常入口一律传 MainActivity 那个进程级实例，见 [OverlayHazeState]）。
  */
 @Composable
 fun AppBackgroundLayer(
+    wallpaperConfig: WallpaperConfig = WallpaperConfig(),
+    hazeSourceState: HazeState? = OverlayHazeState,
     modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit
 ) {
+    val customBitmap: ImageBitmap? = remember(wallpaperConfig.type, wallpaperConfig.customPath) {
+        if (wallpaperConfig.type == WallpaperType.CUSTOM && !wallpaperConfig.customPath.isNullOrBlank()) {
+            val file = File(wallpaperConfig.customPath)
+            if (file.exists() && file.canRead()) {
+                try {
+                    BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap()
+                } catch (_: Throwable) {
+                    null
+                }
+            } else {
+                null
+            }
+        } else {
+            null
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(CanvasPureWhite),
-        content = content
-    )
+            // 壁纸之下垫一层不透明白，保证任何一帧（解码前、加载中）页面底都不是透明的。
+            .background(CanvasPureWhite)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(
+                    if (hazeSourceState != null) {
+                        Modifier.hazeSource(hazeSourceState)
+                    } else {
+                        Modifier
+                    }
+                )
+        ) {
+            when {
+                wallpaperConfig.type == WallpaperType.CUSTOM && customBitmap != null -> {
+                    Image(
+                        bitmap = customBitmap,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                wallpaperConfig.type == WallpaperType.PRESET -> {
+                    Image(
+                        painter = painterResource(WallpaperPresets.getResOrDefault(wallpaperConfig.presetId)),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                else -> {
+                    Image(
+                        painter = painterResource(DefaultWallpaperRes),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+
+            // 可选的内容保护遮罩：当自定义壁纸太暗或对比度过高时，淡化底色以提高文字可读性
+            if (wallpaperConfig.dimOpacity > 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.White.copy(alpha = wallpaperConfig.dimOpacity.coerceIn(0f, 0.6f)))
+                )
+            }
+        }
+        content()
+    }
 }
 
 /**
- * 玻璃表面（Glassmorphism），扁平版 + 粉彩染色。
+ * 壁纸真·模糊：把玻璃面**背后那片壁纸**糊开，并提一点饱和度。
+ *
+ * ### 为什么不是「在背后画几团颜色」
+ *
+ * 试过。做法是在卡片后面画三团柔色斑，让 16.dp 的 hazeEffect 有东西可糊
+ * （因为默认壁纸是极平滑渐变，相邻像素最大差 2/255，糊了等于没糊）。
+ * 效果确实出来了，但方向是错的：参考图里那些粉、蓝、青的柔和色晕
+ * **是壁纸本身被糊开的样子**，颜色全部来自壁纸；而画色斑等于自己编了一套颜色，
+ * 换壁纸就对不上——这正是用户否掉它的原因。**色斑是在演，不是真的模糊。**
+ *
+ * ### 那怎么让平滑渐变糊出东西来
+ *
+ * 平滑渐变确实糊不出细节，但模糊仍然有两个可见作用，参考图正是靠这两个：
+ *
+ * 1. **半径够大**：把壁纸上大尺度的色相跨度摊开。这张壁纸左上是暖黄、右下是淡紫，
+ *    半径 16.dp 时这个跨度被压在玻璃面边缘之外，一眼看去还是一块平色；
+ *    半径拉到 64.dp，那条暖黄→淡紫的轴才被真正摊进卡面里。
+ * 2. **提饱和**：模糊会把颜色平均掉、整体变灰糊。参考图那种「色晕仍然是彩的」
+ *    靠的是模糊**之后**再提饱和 —— Windows 的 acrylic 就是这么做的，
+ *    也是它和普通毛玻璃一眼能分辨的原因。
+ *
+ * haze 1.3.1 的 `HazeStyle` 只有 blur / noise / tints，**没有饱和度参数**，
+ * 所以提饱和只能用 Compose 原生的 [RenderEffect] 单独叠一道颜色矩阵。
+ *
+ * ### 为什么面必须压到 0.10（2026-10-22 实测）
+ *
+ * 第一版效果「看不出来」，查下来**不是模糊半径不够，是上面那层面把颜色洗掉了**。
+ * 装机实测同一张截图上取样：
+ *
+ * | 位置 | 取样色 | 饱和度 |
+ * |---|---|---|
+ * | 卡片外侧的壁纸 | `#F7F6E1` | 9.7% |
+ * | 卡片内部（7 个点） | `#F1F3EC` … `#EFEFEF` | **1%~3%** |
+ *
+ * 卡片比它背后的壁纸**更不饱和**——面板在主动洗掉壁纸的颜色。两个叠加原因：
+ *
+ * 1. `glassSurface` 默认那层面是 `#EDF1F5` × alpha 0.48，而模糊已经把壁纸的饱和度
+ *    摊薄过一次。实测这层单独就能把 9.7% 压到约 3.7%（约**砍一半**），
+ *    两层一叠，内层 [WallpaperBlurSaturation] 提上去的饱和度被原样抵消。
+ *    → 配套的面见 [WallpaperCardFaceTint] / [WallpaperCardFaceAlpha]。
+ * 2. `wallpaperBlur` 和 `glassSurface` 各带一个 `hazeEffect`，两个模糊 pass 叠在同一个
+ *    节点上，**后画的 16.dp 那一层会盖住 64.dp 的结果**。→ 调用点必须给
+ *    `glassSurface(blurRadius = 0.dp)` 关掉第二个 pass（磨砂颗粒不会丢，
+ *    它已经挂在 `wallpaperBlur` 的 `noiseFactor` 上）。
+ *
+ * 这两条都不是某张壁纸的特例，换任何壁纸都成立，所以改在 [wallpaperBlur] 的配套参数里，
+ * 而不是把饱和度再往上调去硬凑——那样只会让本来就鲜艳的壁纸过饱和。
+ *
+ * ### 这张默认壁纸的物理上限（别拿它当效果没做好的证据）
+ *
+ * 默认壁纸本身就是一张**接近纯白**的粉彩渐变：全图 R 232~251 / G 222~252 / B 219~250，
+ * **最大饱和度只有 12.7%**（`#FBFCDC`，最大色差 32/255）。
+ * 模糊不会创造颜色，它只能把已有的颜色摊开——壁纸本身没颜色可摊。
+ * 所以在**这张**壁纸上的正确结果就是「一片极淡的暖黄→淡紫的柔光」，
+ * 达不到参考图那种明确的彩色晕染，这不是实现问题，是素材的物理上限。
+ * 换成有颜色的壁纸（实测深色壁纸最大饱和度 79.3%）同一个方案会明显得多。
+ *
+ * 这条接缝是真正管住的：**带色彩度的壁纸才有效果**，而不是「换了壁纸仍然一样」。
+ * 已实测：换成深色壁纸后卡面从 `#F1F3EC` 变成 `#2B2F52`，壁纸的深蓝明显透上来、
+ * 卡片和卡外的明暗差一眼能看出来——模糊本身是通用的。
+ *
+ * ### 但整屏文字可读性**不是**通用的（2026-10-22 实测，已知未解决）
+ *
+ * 同一张深色壁纸上，正文与标题仍是**深色**的：主卡背景亮度约 49，
+ * 大标题「2026年10月17日 星期六」的笔画实测几乎全在亮度 60 以下，
+ * **对比度约 1.1:1，字直接读不出来**（顶栏学期名、卡片副标题、灰色辅助字同样受影响）。
+ *
+ * 也就是说：模糊这一层是壁纸无关的，但**配色方案是按浅色壁纸写死的**。
+ * 真要支持深色壁纸，得让文字色跟着壁纸的亮度走（加一层判定，或给壁纸配遮罩/描边），
+ * 那是整屏的改动，不在这次范围内。**别把这个当作「已经支持任意壁纸」来宣传。**
+ *
+ * @param blurRadius 真实背景模糊半径。必须够大才有效果（见上）。
+ * @param saturation 模糊后的饱和度倍率。1f = 不变。取 1.35~1.6 这个档：
+ *   低于 1.2 看不出 acrylic 味，高于 2.0 壁纸的浅色会糊成一片假荧光。
+ */
+@Composable
+fun Modifier.wallpaperBlur(
+    blurRadius: Dp = WallpaperBlurRadius,
+    saturation: Float = WallpaperBlurSaturation,
+    noiseFactor: Float = GlassGrain,
+    hazeState: HazeState? = LocalGlassHazeState.current,
+): Modifier {
+    val saturationEffect = remember(saturation) {
+        if (saturation == 1f) {
+            null
+        } else {
+            // 亮度加权的饱和度矩阵（Rec.709）：
+            //   out = (1-s)·lum + s·in，其中 lum = 0.2126R + 0.7152G + 0.0722B。
+            // 不做这一步的话模糊会把壁纸洗成一片灰白，参考图那种彩色的晕就没了。
+            //
+            // 用 android.graphics.RenderEffect 再经 asComposeRenderEffect 转过来：
+            // Compose 自带的 RenderEffect 只有 BlurEffect / OffsetEffect，
+            // **没有颜色矩阵**（查过 RenderEffectKt），而 haze 1.3.1 的 HazeStyle
+            // 也只有 blur / noise / tints。所以这里只能走平台 API。
+            val s = saturation
+            val lr = (1f - s) * 0.2126f
+            val lg = (1f - s) * 0.7152f
+            val lb = (1f - s) * 0.0722f
+            android.graphics.RenderEffect.createColorFilterEffect(
+                android.graphics.ColorMatrixColorFilter(
+                    floatArrayOf(
+                        lr + s, lg, lb, 0f, 0f,
+                        lr, lg + s, lb, 0f, 0f,
+                        lr, lg, lb + s, 0f, 0f,
+                        0f, 0f, 0f, 1f, 0f,
+                    )
+                )
+            ).asComposeRenderEffect()
+        }
+    }
+
+    return this
+        .then(
+            if (blurRadius > 0.dp && hazeState != null) {
+                Modifier.hazeEffect(
+                    state = hazeState,
+                    style = HazeDefaults.style(
+                        backgroundColor = HazeFallbackBg,
+                        tint = HazeDefaults.tint(Color.Transparent),
+                        blurRadius = blurRadius,
+                        noiseFactor = noiseFactor,
+                    )
+                )
+            } else {
+                Modifier
+            }
+        )
+        // 提饱和叠在 hazeEffect **之后**：顺序反了就是「先提饱和再糊」，
+        // 而模糊会立刻把刚提上去的饱和度又平均掉，等于白做。
+        .then(
+            if (saturationEffect != null) {
+                Modifier.graphicsLayer { renderEffect = saturationEffect }
+            } else {
+                Modifier
+            }
+        )
+}
+
+/**
+ * 壁纸模糊半径。64.dp 是试出来的下限档：16.dp 时暖黄→淡紫那条色相轴
+ * 完全摊不进卡面，看起来和没模糊一样；64.dp 才看得出「背后是一张被糊开的图」。
+ * 别再往上加——半径过大时卡面与卡外的差别会小到看不出这是一块玻璃。
+ */
+val WallpaperBlurRadius = 64.dp
+
+/** 模糊后的饱和度倍率。1.35~1.6 是 acrylic 味的区间，见 [wallpaperBlur]。 */
+const val WallpaperBlurSaturation = 1.45f
+
+/**
+ * 「壁纸玻璃」那层面的染色与强度。给 [wallpaperBlur] 配套用，见该函数的「为什么面必须压到
+ * 0.10」一节。
+ *
+ * 这里**不能**用 [GlassTintNeutral] 那档 0.48：面是盖在模糊结果**上面**的，
+ * 而模糊已经把壁纸本来的饱和度摊薄过一次，再压一层 0.48 的中性冷灰等于把颜色洗没。
+ */
+val WallpaperCardFaceTint = Color(0xFFFFFFFF)
+const val WallpaperCardFaceAlpha = 0.10f
+
+/** 玻璃表面（Glassmorphism），扁平版 + 粉彩染色。
  *
  * 扁平化：不描边、不投影、不做上亮下暗的受光面，全靠大圆角 + 一块半透明面撑着层次。
  * 面里也没有任何渐变——渐变本身就是一种「光影」，要扁平就别在面里藏一条明暗轴。
@@ -524,10 +856,16 @@ fun AppBackgroundLayer(
  *    浮岛就属于这种）；否则背后只有纯白，不需要糊，直接平涂；
  * 2. 一块半透明的 [tint] 面 —— 纯白从底下透上来，所以是「染色」而不是实色块。
  *
- * @param tint 面的染色。默认中性冷灰；**课程相关的卡片要传这门课自己的粉彩**，
- *   这样颜色本身就是「这是哪门课」的标识，不必再靠一条色条去认。
+ * @param tint 面的染色。默认中性冷灰；**课程卡要传 [cardTint] 解出来的那支颜色**
+ *   （`cardTint(课程色, tintAlpha)`），不是课程原色——理由见 Color.kt 的
+ *   「卡片染色」那一节：直接拿原色按 alpha 叠，八门课的卡面会深浅不齐。
  * @param tintAlpha 染色强度。中性面用 GLASS_FACE_ALPHA（要够实才托得住），
- *   课程色要压到 [CourseTintAlpha]（原色直接铺会变成色块而不是玻璃）。
+ *   课程色用 [CourseTintAlpha]。它同时是 `tint` 的反解输入，两者必须一致。
+ * @param baseCoatAlpha 染色**下面**那层不透明白衬底的强度，默认 0 = 不铺。
+ *   课程卡 / 待办卡传 [CardBaseCoatAlpha]：卡片自身的明度主要由它决定，
+ *   换壁纸才不会连着变（深色壁纸上文字直接读不出来，见该常量的注释）。
+ *   它和 [tintAlpha] 是两件事：白衬底管「这张卡够不够亮」，染色管「它是哪门课」，
+ *   合成顺序固定为 模糊 → 白衬底 → 染色。
  * @param blurRadius 真背景模糊半径。> 0 才生效，且需要祖先上有 hazeSource。
  *   曾经试过把默认值反过来（默认 0，真·需要糊的地方才显式传），
  *   **实测没有任何性能收益，已回退** —— 理由见下面「逐卡模糊不是瓶颈」一节。
@@ -610,18 +948,15 @@ fun Modifier.glassSurface(
     shape: Shape = GlassCardShape,
     tint: Color = GlassTintNeutral,
     tintAlpha: Float = GLASS_FACE_ALPHA,
+    baseCoatAlpha: Float = 0f,
     blurRadius: Dp = GlassBlurRadius,
-    vividness: Float = 0f,
     faceAlphaScale: Float = 1f,
     hazeWash: Float = 0f,
     noiseFactor: Float = GlassGrain,
     hazeFloor: Float = 0f,
     hazeState: HazeState? = LocalGlassHazeState.current,
-    showBorder: Boolean = true,
 ): Modifier {
     val useHaze = blurRadius > 0.dp && hazeState != null
-    // 鲜艳度是往 HSL 里推的，只有二元开关时才付这次计算
-    val faceColor = if (vividness > 0f) vivid(tint) else tint
 
     return this
         .clip(shape)
@@ -641,21 +976,99 @@ fun Modifier.glassSurface(
                 Modifier
             }
         )
-        .background(
-            color = faceColor.copy(alpha = (tintAlpha * faceAlphaScale).coerceIn(0f, 1f)),
-            shape = shape
-        )
-        // C. 边缘折射高光：玻璃的边会聚光，比面本身亮一线。
-        // 这是**白**描边不是深色描边——深色描边是「画了个框」，白色内线是材质本身，
-        // 和之前「取消描边」那条不冲突，也是玻璃感最省力的一条线索。
+        // B. 白衬底（可选）：糊完之后、染色之前。它必须在染色**下面**——
+        // 反过来就成了「在粉彩上再刷一层白」，等于把课程色洗淡。
+        // 也跟着 [faceAlphaScale] 走：已完成待办要整张卡一起变淡，
+        // 只有染色跟着变的话那张卡会一边变白一边还留着原来的色。
         .then(
-            if (showBorder) {
-                Modifier.border(GlassRimWidth, Color.White.copy(alpha = GlassRimAlpha), shape)
+            if (baseCoatAlpha > 0f) {
+                Modifier.background(
+                    color = Color.White.copy(
+                        alpha = (baseCoatAlpha * faceAlphaScale).coerceIn(0f, 1f)
+                    ),
+                    shape = shape
+                )
             } else {
                 Modifier
             }
         )
+        // C. 染色面。纯白（白衬底 + 壁纸）从底下透上来，所以是「染色」而不是实色块。
+        .background(
+            color = tint.copy(alpha = (tintAlpha * faceAlphaScale).coerceIn(0f, 1f)),
+            shape = shape
+        )
+        // 这里原来还挂了一条 0.5dp 的白描边（玻璃边缘折射高光），已删：
+        // 白边在浅色壁纸上勉强算材质，在深色或花纹壁纸上是硬亮的一圈，
+        // 而卡片与卡面的分界现在由白衬底 + 更大的模糊半径承担。
 }
+
+/**
+ * 小控件的模糊半径：顶栏图标按钮、课表分段控件、周几表头共用这一档。
+ *
+ * 这三处原来都是**平涂**的实色（`.background(color)`，alpha 1.0），背后什么都没有参与，
+ * 所以半径 0 就是它们的真实起点，「增加到 18」是从无到有而不是调大。
+ *
+ * 为什么是 18 而不是跟着卡片走 [GlassBlurRadius] = 28：小控件本身只有 30~44dp 高，
+ * 一张 28.dp 的核会把它自己下缘以外的东西全拉进来，控件读起来是「一块模糊的斑」而不是
+ * 「一块磨砂的片」。18.dp 是能看出背后那片壁纸被摊开、又不至于吃掉控件自身边界的档。
+ * 底色同时降到半透明，于是「看得见的东西」从实色块换成了背后的壁纸。
+ *
+ * ⚠️ **不要拿这一档去改浮岛**（[com.example.ui.components.FloatingIslandNav]）：
+ * 浮岛背后是正在滚过去的内容，96.dp 那一档是专门用来压住频闪的，见 Surfaces.kt 的注释。
+ */
+val ControlBlurRadius = 18.dp
+
+/**
+ * 小控件**中性面**的不透明度（搜索按键、分段控件外框、非今天的周几表头）。
+ *
+ * 这些底色本来就是浅冷灰（`#F1F5F9` / `surfaceVariant`），满不透明度时是一块实色片；
+ * 压到 0.60 之后它只负责把控件从壁纸上「托」出来一点，透上来的颜色交给 18.dp 那层模糊。
+ *
+ * 别再往下压：中性色与默认壁纸的色差本身只有 6 个色阶（实测 `#F1F5F9` vs `#F7F6E1`），
+ * alpha 每降 0.1 只剩 2~3 个色阶，到 0.4 附近控件的边界就基本并进壁纸里了。
+ */
+const val ControlNeutralFaceAlpha = 0.60f
+
+/**
+ * 小控件**主色面**的不透明度（生成按键、分段控件的选中块、今天的周几表头）。
+ *
+ * 比中性面高一档，因为这三处要靠颜色本身被认出（尤其「今天」那一格是整列的唯一标识，
+ * 分段控件的选中块是一块会动的色，糊了它就没人知道当前在哪一档），透明度的余量
+ * 不能和「只是托一下」的中性面一样给。
+ *
+ * 浅绿 `#BCE472` 本身亮度很高，压到 0.72 之后仍然是可辨的绿，而深墨前景 `#1E2D0E`
+ * 在其上的对比度几乎不变——透明的是底色，压不透明度不会吃掉文字。
+ */
+const val ControlAccentFaceAlpha = 0.72f
+
+/**
+ * 小控件的玻璃面：[glassSurface] 在「小而扁」这一档上的封装。
+ *
+ * 四个调用点（顶栏图标按钮、课表分段控件、周几表头、清单页的十颗筛选 chip）此前各写各的 `.background(color)`，
+ * 实色、无模糊、alpha 1.0，是全 App 唯一没有参与玻璃语言的几块面。收到这里之后：
+ *
+ *   * 模糊半径统一 [ControlBlurRadius]（18.dp）；
+ *   * 面统一降到 [ControlNeutralFaceAlpha] / [ControlAccentFaceAlpha]；
+ *   * 顺带把磨砂颗粒（[GlassGrain]）带上——它绑在 hazeStyle 上，不走 haze 就没有颗粒，
+ *     而没有颗粒的半透明面只是一块淡色板，怎么调 alpha 都出不来玻璃感。
+ *
+ * 顶栏在内容的 hazeSource **之外**（它属于 Scaffold 的 topBar），但壁纸那一层在源层里，
+ * 所以它糊的正是背后那张壁纸；课表页内那两处在源层**之内**，各自是独立节点、
+ * 不是自绘反馈，因此一样能取到纹理。
+ */
+@Composable
+fun Modifier.controlSurface(
+    shape: Shape,
+    color: Color,
+    accent: Boolean = false,
+    hazeState: HazeState? = LocalGlassHazeState.current,
+): Modifier = glassSurface(
+    shape = shape,
+    tint = color,
+    tintAlpha = if (accent) ControlAccentFaceAlpha else ControlNeutralFaceAlpha,
+    blurRadius = ControlBlurRadius,
+    hazeState = hazeState,
+)
 
 /**
  * 亮度地板的颜色：背光里**比它暗**的像素一律被抬到它，比它亮的像素原样通过。

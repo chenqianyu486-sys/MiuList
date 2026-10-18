@@ -66,9 +66,7 @@ class WeekTaskGenerationEngineTest {
         var built: List<TaskEntity> = emptyList()
         built = engine().build(
             WeekTaskGenerationEngine.Input(
-                week = week,
-                weekMondayEpochDay = monday,
-                slots = slots,
+                scopes = listOf(WeekScope(week = week, weekMondayEpochDay = monday, slots = slots)),
                 coursesById = mapOf(1L to math),
                 courseRules = courseRules,
                 categoryRules = categoryRules
@@ -242,9 +240,7 @@ class WeekTaskGenerationEngineTest {
         var built: List<TaskEntity> = emptyList()
         built = WeekTaskGenerationEngine(periodTable).build(
             WeekTaskGenerationEngine.Input(
-                week = 1,
-                weekMondayEpochDay = week1Monday,
-                slots = listOf(slot(1, 1L, 1, 1)),
+                scopes = listOf(WeekScope(week = 1, weekMondayEpochDay = week1Monday, slots = listOf(slot(1, 1L, 1, 1)))),
                 coursesById = mapOf(1L to off)
             )
         ) { _, _, _, _ -> false }
@@ -264,5 +260,233 @@ class WeekTaskGenerationEngineTest {
     fun `a course with no class this week produces nothing`() = runTest {
         val out = build(slots = emptyList())
         assertTrue(out.isEmpty())
+    }
+
+    // ---------------------------------------------------------------- 按类型划范围
+
+    @Test
+    fun `a scope only produces the types it lists`() = runTest {
+        val out = engine().build(
+            WeekTaskGenerationEngine.Input(
+                scopes = listOf(
+                    WeekScope(
+                        week = 3,
+                        weekMondayEpochDay = mondayOf(3).toEpochDay(),
+                        slots = listOf(slot(1, 1L, 3, 2)),
+                        types = setOf(TaskType.POST_CLASS)
+                    )
+                ),
+                coursesById = mapOf(1L to math)
+            )
+        ) { _, _, _, _ -> false }
+
+        assertEquals(1, out.count { it.taskType == TaskType.POST_CLASS.name })
+        assertTrue("限定了类型就不该出预习", out.none { it.taskType == TaskType.PRE_STUDY.name })
+        assertTrue("限定了类型就不该出实验报告", out.none { it.taskType == TaskType.LAB_REPORT.name })
+    }
+
+    // ---------------------------------------------------------------- 今天起
+
+    @Test
+    fun `a scope with a lower bound drops the days before it`() = runTest {
+        // 周一、周三、周五各一节；下界定在周三 00:00
+        val out = engine().build(
+            WeekTaskGenerationEngine.Input(
+                scopes = listOf(
+                    WeekScope(
+                        week = 3,
+                        weekMondayEpochDay = mondayOf(3).toEpochDay(),
+                        slots = listOf(slot(1, 1L, 1, 2), slot(2, 1L, 3, 2), slot(3, 1L, 5, 4)),
+                        types = setOf(TaskType.PRE_STUDY),
+                        fromStartTimestamp = mondayOf(3).plusDays(2)
+                            .atStartOfDay(zone).toInstant().toEpochMilli()
+                    )
+                ),
+                coursesById = mapOf(1L to math)
+            )
+        ) { _, _, _, _ -> false }
+
+        assertEquals(listOf(3, 5), out.map { it.dayOfWeek })
+    }
+
+    @Test
+    fun `the bound compares the class start instant, not just its date`() = runTest {
+        // 周三两节课：第 1 节 08:00（早于下界）、第 6 节 13:25（晚于下界，ZJU 作息）。
+        // 下界取周三 12:00 —— 按「日期」判会两节都留下，
+        // 而预习的截止是开课前几分钟，上午那节补出来只会是一条当场逾期的待办。
+        val out = engine().build(
+            WeekTaskGenerationEngine.Input(
+                scopes = listOf(
+                    WeekScope(
+                        week = 3,
+                        weekMondayEpochDay = mondayOf(3).toEpochDay(),
+                        slots = listOf(slot(1, 1L, 3, 1), slot(2, 1L, 3, 6)),
+                        types = setOf(TaskType.PRE_STUDY),
+                        fromStartTimestamp = mondayOf(3).plusDays(2).atTime(12, 0)
+                            .atZone(zone).toInstant().toEpochMilli()
+                    )
+                ),
+                coursesById = mapOf(1L to math),
+                courseRules = mapOf(
+                    1L to mapOf(TaskType.PRE_STUDY to CourseRuleSpec("PER_CLASS", 0, 5))
+                )
+            )
+        ) { _, _, _, _ -> false }
+
+        assertEquals("只剩下午那节", 1, out.size)
+        // 截止 = 开课 13:25 前 5 分钟 = 13:20，确实晚于 12:00 那个下界
+        val expected = mondayOf(3).plusDays(2).atTime(13, 20).atZone(zone).toInstant().toEpochMilli()
+        assertEquals(expected, out.first().dueDateTimestamp)
+    }
+
+    @Test
+    fun `the lower bound is applied before the weekly anchor is picked`() = runTest {
+        // 「每周一次」的锚点必须落在**过滤之后**剩下的课里。
+        // 下界之后的范围里只剩周五那节，锚点就该是周五；
+        // 若先锚周一再按时刻丢，锚点会停在已经上过的周一，产出日期也跟着错。
+        val out = engine().build(
+            WeekTaskGenerationEngine.Input(
+                scopes = listOf(
+                    WeekScope(
+                        week = 3,
+                        weekMondayEpochDay = mondayOf(3).toEpochDay(),
+                        slots = listOf(slot(1, 1L, 1, 2), slot(2, 1L, 5, 4)),
+                        types = setOf(TaskType.PRE_STUDY),
+                        fromStartTimestamp = mondayOf(3).plusDays(2).atStartOfDay(zone)
+                            .toInstant().toEpochMilli(),
+                        // 强制「每周一次」，让锚点选择真正参与
+                    )
+                ),
+                coursesById = mapOf(1L to math),
+                courseRules = mapOf(
+                    1L to mapOf(TaskType.PRE_STUDY to CourseRuleSpec("PER_WEEK", 0, 5))
+                )
+            )
+        ) { _, _, _, _ -> false }
+
+        assertEquals(1, out.size)
+        assertEquals("锚点该是过滤后最早那节（周五）", 5, out.first().dayOfWeek)
+        assertEquals(3, out.first().week)
+    }
+
+    @Test
+    fun `a scope whose whole week is before the lower bound produces nothing`() = runTest {
+        // 下界落在下一周：本周整周都早于它，不能为了凑数产出一条待办。
+        val out = engine().build(
+            WeekTaskGenerationEngine.Input(
+                scopes = listOf(
+                    WeekScope(
+                        week = 3,
+                        weekMondayEpochDay = mondayOf(3).toEpochDay(),
+                        slots = listOf(slot(1, 1L, 1, 2), slot(2, 1L, 3, 2)),
+                        fromStartTimestamp = mondayOf(4).atStartOfDay(zone).toInstant().toEpochMilli()
+                    )
+                ),
+                coursesById = mapOf(1L to math)
+            )
+        ) { _, _, _, _ -> false }
+
+        assertTrue(out.isEmpty())
+    }
+
+    // ---------------------------------------------------------------- 跨周
+
+    @Test
+    fun `several scopes coexist and each keeps its own week number`() = runTest {
+        // 本周：作业 + 实验报告；本周与下周：预习（这正是 MainViewModel 装配的形状）
+        val out = engine().build(
+            WeekTaskGenerationEngine.Input(
+                scopes = listOf(
+                    WeekScope(
+                        week = 3,
+                        weekMondayEpochDay = mondayOf(3).toEpochDay(),
+                        slots = listOf(slot(1, 1L, 3, 2)),
+                        types = setOf(TaskType.POST_CLASS, TaskType.LAB_REPORT)
+                    ),
+                    WeekScope(
+                        week = 3,
+                        weekMondayEpochDay = mondayOf(3).toEpochDay(),
+                        slots = listOf(slot(1, 1L, 3, 2)),
+                        types = setOf(TaskType.PRE_STUDY),
+                        fromStartTimestamp = mondayOf(3).plusDays(2).atStartOfDay(zone)
+                            .toInstant().toEpochMilli()
+                    ),
+                    WeekScope(
+                        week = 4,
+                        weekMondayEpochDay = mondayOf(4).toEpochDay(),
+                        slots = listOf(slot(1, 1L, 3, 2)),
+                        types = setOf(TaskType.PRE_STUDY)
+                    )
+                ),
+                coursesById = mapOf(1L to math)
+            )
+        ) { _, _, _, _ -> false }
+
+        val homework = out.filter { it.taskType == TaskType.POST_CLASS.name }
+        assertEquals("作业只在第 3 周出一条", 1, homework.size)
+        assertEquals(3, homework.first().week)
+
+        val prestudy = out.filter { it.taskType == TaskType.PRE_STUDY.name }
+        assertEquals("本周与下周各一条预习", 2, prestudy.size)
+        assertEquals(setOf(3, 4), prestudy.map { it.week }.toSet())
+
+        // 标题里的周次要跟着各自的范围走，否则下周那条会写成「第3周预习」。
+        assertEquals("高等数学 第3周预习", prestudy.first { it.week == 3 }.title)
+        assertEquals("高等数学 第4周预习", prestudy.first { it.week == 4 }.title)
+    }
+
+    @Test
+    fun `tasks from several scopes come out in class-time order`() = runTest {
+        val out = engine().build(
+            WeekTaskGenerationEngine.Input(
+                scopes = listOf(
+                    // 下周的范围先给：范围顺序不该决定列表顺序
+                    WeekScope(
+                        week = 4,
+                        weekMondayEpochDay = mondayOf(4).toEpochDay(),
+                        slots = listOf(slot(1, 1L, 2, 2)),
+                        types = setOf(TaskType.PRE_STUDY)
+                    ),
+                    WeekScope(
+                        week = 3,
+                        weekMondayEpochDay = mondayOf(3).toEpochDay(),
+                        slots = listOf(slot(2, 1L, 5, 4)),
+                        types = setOf(TaskType.PRE_STUDY)
+                    )
+                ),
+                coursesById = mapOf(1L to math)
+            )
+        ) { _, _, _, _ -> false }
+
+        assertEquals(listOf(3, 4), out.map { it.week })
+    }
+
+    @Test
+    fun `the dedup key distinguishes the pre-study of this week from next week's`() = runTest {
+        // 下周预习的去重键带的是它自己的周次（4），不能被本周那条（3）挡掉。
+        val existing = setOf(Triple(1L, TaskType.PRE_STUDY.name, 3))
+        val out = engine().build(
+            WeekTaskGenerationEngine.Input(
+                scopes = listOf(
+                    WeekScope(
+                        week = 3,
+                        weekMondayEpochDay = mondayOf(3).toEpochDay(),
+                        slots = listOf(slot(1, 1L, 3, 2)),
+                        types = setOf(TaskType.PRE_STUDY),
+                        fromStartTimestamp = mondayOf(3).atStartOfDay(zone).toInstant().toEpochMilli()
+                    ),
+                    WeekScope(
+                        week = 4,
+                        weekMondayEpochDay = mondayOf(4).toEpochDay(),
+                        slots = listOf(slot(1, 1L, 3, 2)),
+                        types = setOf(TaskType.PRE_STUDY)
+                    )
+                ),
+                coursesById = mapOf(1L to math)
+            )
+        ) { courseId, type, w, day -> Triple(courseId, type.name, w) in existing }
+
+        assertTrue("本周那条已存在", out.none { it.week == 3 })
+        assertEquals("下周那条该照常产出", 1, out.count { it.week == 4 })
     }
 }

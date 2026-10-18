@@ -26,7 +26,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Star
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DatePicker
@@ -179,12 +178,11 @@ fun TaskEditDialog(
 
     val scrollState = rememberScrollState()
 
-    AlertDialog(
+    GlassOverlayHost(
         onDismissRequest = onDismiss,
         // 关掉平台默认宽度：默认左右各留一大截内边距，这里全是单行控件，
         // 那点宽度换不来任何信息量
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-        modifier = Modifier.padding(horizontal = 16.dp),
+        horizontalPadding = 16.dp,
         title = {
             Text(
                 text = if (initialTask == null) "新建待办" else "编辑待办",
@@ -455,6 +453,9 @@ fun TaskEditDialog(
                 TextButton(onClick = { showDatePicker = false }) { Text("取消") }
             }
         ) {
+            // 独立窗口拿不到 haze，做不了玻璃面，但遮罩得跟全 App 的弹层对齐：
+            // 平台默认给的 0.32 比 GlassOverlayHost 重一倍以上。
+            AlignDialogWindowScrim()
             DatePicker(state = datePickerState)
         }
     }
@@ -467,18 +468,23 @@ fun TaskEditDialog(
         )
         // 必须自己开一个 `Dialog` 窗口，**不能**用 GlassOverlayHost。
         //
-        // 外层这个编辑弹层是 M3 `AlertDialog`，它跑在独立窗口里；而 `GlassOverlayHost`
-        // 是同窗口 overlay（见 GlassOverlays 的注释：毛玻璃要跟页面同窗口才接得上 haze）。
-        // 两者混用时，时间选择器被画在**下面那层**窗口：表盘看着在屏幕上，实际被编辑弹层
-        // 的窗口整个压住，点下去事件全被上层窗口吃掉——表现就是「时间 x 时 x 分改不了」。
-        // 同文件里的日期选择器用 `DatePickerDialog`（自带窗口）所以一直没这个毛病。
-        //
-        // 窗口里不能用玻璃面：haze 读不到别的窗口的源层（同一坑，同一个前提），
-        // 所以这里给实心 surface，面板观感与上面的日期选择器一致。
+        // 外层这个编辑弹层现在是同窗口的 GlassOverlayHost 了，所以「上下窗口把事件吃掉」
+        // 那条已经不成立——独立窗口画在上层反而是正确方向。这里仍然是独立窗口，
+        // 理由是另外两条：
+        // 1. 嵌套层需要自己的栈。同窗口 overlay 只有一层，日期/时间选择器再叠一个
+        //    GlassOverlayHost，返回键、点外面关闭、点击不穿透这三件都会和外层抢，
+        //    而它们互不相识（各自的 BackHandler 谁在上面谁先执行，遮罩也会互相盖住）。
+        //    独立窗口自带独立的返回栈和 scrim，这是 Dialog 白送的东西。
+        // 2. 窗口里也用不了玻璃面：haze 读不到别的窗口的源层（同一坑，同一个前提），
+        //    所以这里给实心 surface，面板观感与上面的日期选择器一致。
         Dialog(
             onDismissRequest = { showTimePicker = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false
+            )
         ) {
+            // 同上：玻璃面做不到，压暗程度至少跟 GlassOverlayHost 对齐。
+            AlignDialogWindowScrim()
             Surface(
                 shape = GlassDialogShape,
                 color = MaterialTheme.colorScheme.surface,

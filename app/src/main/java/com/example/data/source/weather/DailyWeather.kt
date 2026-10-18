@@ -14,12 +14,21 @@ package com.example.data.source.weather
  *   见 [WeatherLocation.name]——坐标接口不回传地名，显示什么由我们声明。
  * @property epochDay 这一份预报对应的**当地日期**。
  *   缓存能不能用、新旧能不能混，全靠它 —— 昨天的高低温不叫今天的天气。
- * @property usAqi 抓取这一份时的**当前**空气质量指数（美国 EPA 口径，0-500）。
+ * @property aqi 抓取这一份时的**当前**空气质量指数。拉不到就是 null。
+ *
+ *   **口径由数据源决定，这一层不统一、不换算。** AQI 有好几套分段
+ *   （心知自己的、EPA 的、中国的），同一片空气在不同口径下能差出一整个等级，
+ *   而换算表只在数据源手里 —— 在这里「顺手按 EPA 解释一遍」等于凭空造一个等级。
+ *   所以数值原样存下来。
  *
  *   它**不是**「当天的 AQI」—— 天气是逐日聚合，空气是抓的那一刻的读数，
  *   两者的有效期本来就不同，所以它可空，而且没有任何「昨天那份」可退回：
  *   拉不到就是拉不到，界面不显示这一段，而不是继续显示几小时前的旧读数。
  *   用户会照着它决定今天戴不戴口罩，旧的比没有更糟。
+ * @property aqiQuality **数据源自己给的等级文字**（如「优」「轻度污染」）。
+ *
+ *   有它就说明这套等级是跟着数值一起从上游来的，配对关系由上游保证；
+ *   没有它才退回 [describeAqi] 按 EPA 分段推 —— 那是一张猜出来的表。
  */
 data class DailyWeather(
     val cityName: String,
@@ -28,7 +37,8 @@ data class DailyWeather(
     val textNight: String,
     val high: Int?,
     val low: Int?,
-    val usAqi: Int? = null
+    val aqi: Int? = null,
+    val aqiQuality: String? = null
 ) {
     /**
      * 现在该显示白天还是夜间的天气文字。
@@ -63,14 +73,21 @@ data class DailyWeather(
     }
 
     /**
-     * 「空气良 64」。拉不到（[usAqi] 为 null）就返回 null，界面直接不画这一段。
+     * 「空气良 64」。拉不到（[aqi] 为 null）就返回 null，界面直接不画这一段。
+     *
+     * 等级**优先用 [aqiQuality]**（上游给的，和数值同一份、同一套口径）；
+     * 没有才退回 [describeAqi] 那张 EPA 分段表 —— 那是猜的，
+     * 所以只在真的没有上游等级时才用。
      *
      * 只写等级 + 数值，不写「AQI」三个字母：那一块就 92dp 宽，
      * 而「良 64」已经足够让人判断今天要不要戴口罩 —— 指数这东西对多数人是陌生的，
      * 等级才是他们真正会用的。
      */
-    fun airQualityLabel(): String? =
-        usAqi?.let { "空气${describeAqi(it)} $it" }
+    fun airQualityLabel(): String? {
+        val value = aqi ?: return null
+        val word = aqiQuality?.takeIf { it.isNotBlank() } ?: describeAqi(value)
+        return "空气$word $value"
+    }
 
     companion object {
         /** 18:00 起算夜间。 */
@@ -116,12 +133,23 @@ sealed interface WeatherFetch {
 enum class WeatherFailureKind { OFFLINE, REJECTED }
 
 /**
- * 美国 EPA 的 AQI 分段（0-500）→ 中文等级。
+ * **美国 EPA 的 AQI 分段（0-500）→ 中文等级。**
  *
  * 分段抄自 EPA 自 2024 年起用的那套（`0-50 优`、`51-100 良`、
- * `101-150 轻度污染`……）。选它而不是欧洲那套，是因为界面上写「良」时，
- * 用户脑子里对的就是这套分段 —— 欧洲 AQI 里 64 叫「较差」，
- * 同样的数字换个名字就是骗人。
+ * `101-150 轻度污染`……）。
+ *
+ * ## 它只对 EPA 口径成立
+ *
+ * 这是一张**猜出来的表**：把一个整数映射成等级，而那个整数是哪套口径的
+ * 取决于数据源。当前静态托管源给的是**心知 AQI**，心知有自己的一套分段，
+ * 两者同一片空气能差出一整个等级 —— 所以这条路径只在数据源没给等级
+ * （[DailyWeather.aqiQuality] 为空）时兜底用。
+ *
+ * 一旦拿到上游自己的等级文字，就该用那个：它是和数值同一份数据里出来的，
+ * 配对关系由上游保证，这里推出来的不是。
+ *
+ * 选 EPA 这张表当初是因为界面上写「良」时用户脑子里对的就是这套分段
+ * —— 欧洲 AQI 里 64 叫「较差」，同样的数字换个名字就是骗人。
  *
  * 超上限一律算「严重污染」：真出现 >500 说明这一片已经不能呼吸了，
  * 给它一个单独的名字没有意义，它该触发的是别的东西（不是本项目的活）。

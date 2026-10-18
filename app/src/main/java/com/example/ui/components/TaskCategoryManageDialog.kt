@@ -22,7 +22,6 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -39,7 +38,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.DialogProperties
 import com.example.data.local.TaskEntity
 import com.example.data.model.CustomTaskType
 import com.example.data.model.TASK_TYPE_NONE
@@ -96,12 +94,12 @@ fun TaskCategoryManageDialog(
         )
     )
 
-    AlertDialog(
+    GlassOverlayHost(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-        modifier = Modifier
-            .padding(horizontal = 16.dp)
-            .testTag("task_category_manage_dialog"),
+        horizontalPadding = 16.dp,
+        // testTag 挂在面板上：挂到遮罩层的话 bounds 会是全屏，
+        // 语义节点指向的是「点一下就关弹窗」的那一层，测试根本点不到内容。
+        panelModifier = Modifier.testTag("task_category_manage_dialog"),
         title = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,

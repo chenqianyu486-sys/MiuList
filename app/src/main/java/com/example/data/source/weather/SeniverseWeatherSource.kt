@@ -78,7 +78,11 @@ class SeniverseWeatherSource(
             textNight = dto.textNight.orEmpty(),
             high = dto.high,
             low = dto.low,
-            usAqi = dto.aqi
+            aqi = dto.aqi,
+            // **等级要连着数值一起用。** 托管文件里的 aqi 是心知口径，
+            // 拿 describeAqi 那张 EPA 表去解释它，等于凭空造一个等级
+            // （同一片空气两边能差一整档）。心知自己给的 quality 才是配套的。
+            aqiQuality = dto.aqiQuality?.takeIf { it.isNotBlank() }
         )
     }
 

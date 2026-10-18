@@ -12,8 +12,11 @@ import com.example.data.repository.CourseRepository
 import com.example.data.repository.ScheduleSettingsRepository
 import com.example.data.repository.TaskRepository
 import com.example.data.repository.TaskTypeRepository
+import com.example.data.repository.WallpaperRepository
 import com.example.data.source.zju.CalendarUpdateService
+import com.example.data.source.zju.CoursesTodoCache
 import com.example.data.source.zju.ZjuCalendarSource
+import com.example.data.source.zju.ZjuCoursesClient
 import com.example.data.source.zju.ZjuImportService
 import com.example.data.source.weather.SeniverseWeatherSource
 import com.example.data.source.weather.WeatherCache
@@ -68,6 +71,10 @@ class AppContainer(context: Context) {
         AcademicCalendarRepository(database, database.calendarDao())
     }
 
+    val wallpaperRepository: WallpaperRepository by lazy {
+        WallpaperRepository(appContext)
+    }
+
     val codec: ScheduleCodec by lazy { JsonScheduleCodec() }
 
     val validator: ScheduleBundleValidator by lazy { ScheduleBundleValidator() }
@@ -117,6 +124,14 @@ class AppContainer(context: Context) {
             calendarSource = zjuCalendarSource,
             calendarUpdates = calendarUpdateService
         )
+    }
+
+    val zjuCoursesClient: ZjuCoursesClient by lazy {
+        ZjuCoursesClient()
+    }
+
+    val coursesTodoCache: CoursesTodoCache by lazy {
+        CoursesTodoCache(appContext)
     }
 
     /**

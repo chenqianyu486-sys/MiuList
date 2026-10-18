@@ -5,13 +5,14 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-// MiuList Theme：纯白页面底 + 抹茶绿强调 + 粉彩染色卡片
+// MiuList Theme：默认壁纸底 + 抹茶绿强调 + 粉彩染色卡片
 //
-// 页面底不再由 colorScheme 决定，而是 AppBackgroundLayer 铺的那张纯白（见 Mica.kt）。
+// 页面底不再由 colorScheme 决定，而是 AppBackgroundLayer 铺的那张默认壁纸（见 Mica.kt）。
+// colorScheme.background 仍留作纯白，给真正需要实底的地方（弹层背后的独立窗口）。
 // 卡片面的颜色也不走这里——glassSurface 自己带 tint，课程卡传课程粉彩，其余用中性色。
 //
 // 所以这一组 surface 全部改成**不透明**的冷灰阶：它们真正服务的是对话框和底部弹层，
-// 那些东西跑在独立窗口里压在纯白上，半透明的浅色会直接和底融掉、看不出是弹层。
+// 那些东西跑在独立窗口里压在浅色壁纸上，半透明的浅色会直接和底融掉、看不出是弹层。
 private val LightColorScheme = lightColorScheme(
     primary = LimeGreenPrimary,                          // 主题色：#BCE472
     onPrimary = LimeGreenOnPrimary,                      // 深色文字 (#1E2D0E)，确保浅绿底色上拥有极高清晰度与对比度

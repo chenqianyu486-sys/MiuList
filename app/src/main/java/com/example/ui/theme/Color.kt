@@ -132,40 +132,257 @@ fun readableOn(color: Color): Color = lerp(color, Color(0xFF1E2320), 0.55f)
 fun accentOnCourse(color: Color): Color =
     if (isGreenishColor(color)) TeaOnColor else readableOn(color)
 
+// =========================================================================
+// 卡片染色：不是「调 alpha」，是**解出该叠哪支颜色**
+//
+// 原来的做法是两件事叠在一起各调各的：先把课程粉彩用 [vivid] 提饱和、压明度，
+// 再拿一个写死的 alpha（0.30）盖到卡面上。那样做有四个说不清的地方：
+//
+//   1. **HSL 的 L 不是感知明度**。L 同样是 0.62，黄仍然明显比蓝亮，
+//      「统一明度」这个目标根本没达成——八门课的卡面深浅差一档，
+//      扫列表时重的课比轻的课更抢眼，而这门课并没有更重要。
+//   2. **同一个 alpha 在不同色相上不是同一件事**。同一明度下能承载的彩度上限是
+//      1-|2L-1|，于是黄被洗成近白、蓝还留着重色，一屏卡片像出自两套配色。
+//   3. **结果依赖衬底**。alpha 是「叠多少」而不是「叠成什么」，
+//      衬底是壁纸时（白衬底 0.55 + 壁纸 0.45），换壁纸就换一批卡面色。
+//   4. **正文对比度逐课不同**。底色深浅不齐，深色字压上去的对比度自然也不齐。
+//
+// 现在的做法反过来了：先定「卡面最终要长成什么样」（固定的感知明度与彩度），
+// 再**反解**出在给定 alpha 下要叠哪支颜色。
+//
+//   感知上近似成立（OKLab 对小比例混合足够线性）：final = α·source + (1-α)·backing
+//   ⇒ source = (final - (1-α)·backing) / α
+//
+// 解不出来的那部分（彩度超出 sRGB 色域）二分降下来，于是每门课都是
+// 「同一个明度、同一个彩度上限内的那支最饱和的颜色」——色相各不相同，
+// 但**重量一致**。这也让卡面上的深色正文在八门课上拿到同一个对比度。
+// =========================================================================
+
+/** 卡面最终落点：OKLab 明度。八门课共用，这是「等重」的唯一来源。 */
+private const val CARD_TARGET_L = 0.905f
+
+/** 卡面最终落点：OKLab 彩度。压得很低——卡面要的是暗示色，不是色块。 */
+private const val CARD_TARGET_C = 0.085f
+
 /**
- * 把粉彩往「鲜艳」推一档，**明度和饱和度两个维度一起动**：
- * 饱和度拉到上限，明度封顶 0.62。
+ * 染色下面的衬底，用于反解时的底。
  *
- * 只提饱和是没用的——这 8 个粉彩的 HSL 饱和度本来就有 0.66~0.96，蓝紫甚至已经
- * 接近满值。它们「粉」的原因是**明度高**（0.62~0.86），而同一明度下能承载的
- * 彩度上限是 (1-|2L-1|) 决定的：L=0.78 的蓝最多只有 0.43 的彩度空间，
- * 提到满饱和也只从 106 走到 110。把 L 压到 0.62 之后彩度空间涨到 0.76，
- * 同一个透明度下能染出接近两倍的彩色。
- *
- * 为什么必须同时降 alpha：彩度 ≈ alpha × 彩度(源色)。只降 alpha 会把颜色往白里洗，
- * 正好和「鲜艳」相反；只提源色彩度又会把卡面染重。两件事一起做才是
- * 「颜色更足、但卡面更透」。
- *
- * 明度封顶而不是压暗到固定值：调色板里 #208E9E 本身就暗（L≈0.37），
- * 再乘一个固定系数只会更闷。按上限截断才是一视同仁的。
+ * 真底 = 白衬底（0.55）叠壁纸（0.45），壁纸会变。真底一变卡面就变，
+ * 而那正是要消除的东西——所以这里**按最坏情况取一个偏暖的近白**当定值：
+ * 它和真底的偏差不超过几个色阶，换来的是卡面颜色不再跟着壁纸漂。
  */
-fun vivid(color: Color): Color {
-    val r = color.red
-    val g = color.green
-    val b = color.blue
-    val maxC = maxOf(r, g, b)
-    val minC = minOf(r, g, b)
-    if (maxC == minC) return color // 纯灰没有色相可提
-    val l = (maxC + minC) / 2f
-    if (l <= VIVID_L_MAX) {
-        // 明度本来就不高，只需要把饱和度拉满
-        return fromHsl(hue(r, g, b, maxC, minC), 1f, l)
-    }
-    return fromHsl(hue(r, g, b, maxC, minC), 1f, VIVID_L_MAX)
+private val CardTintBacking = Color(0xFFF6F3EF)
+
+/**
+ * 近中性色的彩度阈值：低于它就不参与任何按彩度反解的重建。
+ *
+ * 反解是「按目标彩度解出源色」，对本来就没有彩度的颜色执行它等于凭空造一个色相：
+ * 待办卡里「不关联课程」那一档的 #C9D0D8 看着是灰，实际 b > r（chroma ≈ 0.014），
+ * 反解后会变成一整块饱和蓝，认起来像有关联课程。
+ * 0.03 高于任何一支真·粉彩（最低约 0.08），只拦中性色。
+ */
+private const val NEUTRAL_CHROMA = 0.03f
+
+/** 课程卡左侧竖条的落点明度：卡面的「加浓档」，比卡面低一档就该看得清。 */
+private const val ACCENT_BAR_L = 0.70f
+
+/**
+ * 暖色相（橙→黄）竖条的落点明度，比其余色相高一大截。
+ *
+ * 原因是**黄和橙在低明度下会掉进橄榄/棕褐的死区**，这不是审美偏好而是物理事实：
+ * 同一个 OKLab 明度、同一个彩度请求，八个色相解出来的结果差别很大——
+ *
+ * | 课程色 | L 0.70 时解出的竖条 | 抬亮后（L 0.80） |
+ * |---|---|---|
+ * | #FCA5A5 红 | `#E8777A` 干净的珊瑚红 | 不抬 |
+ * | #FDBA74 橙 | `#D88B2B` 正常橙 | `#F1A248` |
+ * | #FDE047 黄 | **`#B69E16` 土黄 / 橄榄褐** | **`#D6BE45` 干净的金黄** |
+ *
+ * 同一档明度下红是红的、黄是土的——因为黄的可感知亮度本来就高，
+ * 压到 0.70 就已经是很深的一支黄。**所以明度不能一刀切**，
+ * 暖色相要往上抬（这条和 [deepenCourse] 里 [hueCorrectForDeepen] 是同一个道理，
+ * 那边处理的是压深方向，这里处理的是同一现象的另一半）。
+ *
+ * 代价：竖条和卡面是同一个色相，抬亮之后两者的明差必然变小（黄从 2.3:1 掉到 1.48:1）。
+ * 这笔不靠把竖条压回去补（压回去又是土黄），而是靠**把卡面按用户要求加白**——
+ * 暖色相卡面的彩度砍掉一半（`#EAE0A7` → `#EEE6C6`），竖条才浮得出来。
+ */
+private const val ACCENT_BAR_L_WARM = 0.80f
+
+/** 竖条的彩度：比卡面（0.085）高一档，让它是识别线索而不是装饰线。 */
+private const val ACCENT_BAR_C = 0.14f
+
+/** 暖色相带：橙→黄（色相 40°~115°）。 */
+private const val WARM_HUE_LO = 40f
+private const val WARM_HUE_HI = 115f
+
+/** 暖色相带上侧收口：绿（实测 154°）不能被算进暖色，否则它会跟着一起变亮。 */
+private const val WARM_HUE_OUT_HI = 150f
+
+/** 卡面在暖色相上的明度补偿。卡面本来就浅，补偿只需一小档。 */
+private const val CARD_WARM_LIFT = 0.018f
+
+/** 卡面在暖色相上的彩度补偿（往白里减一点彩度）。 */
+private const val CARD_WARM_C_DROP = 0.045f
+
+/**
+ * 暖色相补偿强度，0 = 不补偿，1 = 全额补偿。**是一个窗口，不是一条半轴**。
+ *
+ * ⚠️ 这里踩过一次坑：第一版写成 `hue > 40° 就开始补偿、到 115° 封顶`，
+ * 结果 115° 以上的色相全部拿满额补偿——绿课（实测色相 154°）的竖条
+ * 从 `#48B776` 变成 `#79E5A1`，跟这次要修的黄色毫无关系却跟着变亮了。
+ * 「黄需要抬明度」不等于「比黄更绿的东西也要抬」。
+ *
+ * 形状：40°→75° 线性爬升，75°~115° 满额，115°→150° 线性回落，之后归零。
+ * 实测色相（OKLCh，度）：红 19.6 / 粉 -14 / 绿 154.4 / 青 -150 / 蓝 -108 /
+ * 紫 -54 / **橙 66.3 / 黄 98.1**——窗口正好罩住橙黄两支，其余六支拿 0。
+ */
+private fun warmLift(hueDeg: Float): Float = when {
+    hueDeg <= WARM_HUE_LO -> 0f
+    hueDeg >= WARM_HUE_OUT_HI -> 0f
+    hueDeg < 75f -> (hueDeg - WARM_HUE_LO) / (75f - WARM_HUE_LO)
+    hueDeg <= WARM_HUE_HI -> 1f
+    else -> (WARM_HUE_OUT_HI - hueDeg) / (WARM_HUE_OUT_HI - WARM_HUE_HI)
 }
 
-/** [vivid] 的明度上限。再往下彩度虽高，卡面就不像「薄雾」而像色块了。 */
-private const val VIVID_L_MAX = 0.62f
+/**
+ * 取色相（度）。**近中性色返回 null**——它没有色相可谈，理由见 [NEUTRAL_CHROMA]。
+ */
+private fun hueDegreesOf(color: Color): Float? {
+    val src = oklab(color)
+    if (kotlin.math.hypot(src.a, src.b) < NEUTRAL_CHROMA) return null
+    return Math.toDegrees(kotlin.math.atan2(src.b, src.a).toDouble()).toFloat()
+}
+
+/**
+ * 课程卡左侧那根圆角竖条的颜色。
+ *
+ * 原来直接画课程原色，于是八门课的竖条**轻重差一大截**：调色板里
+ * #FDE047（黄）的 OKLab 明度约 0.86，压在同样是黄的卡面上几乎看不见；
+ * #208E9E（青）约 0.55，就是一道压得很重的深条。同一条竖条在两个屏幕上
+ * 一个消失、一个抢眼——这不是设计选择，是把课程色当成「已经可用」的颜色直接搬了过来。
+ *
+ * 现在它和卡面走同一个色相、同一套等重建：卡面固定落在 L 0.905，竖条固定落在 L 0.70，
+ * **暖色相额外往上抬一档到 0.84**（见 [ACCENT_BAR_L_WARM]：不抬的话黄色会变成土黄）。
+ * 八门课的竖条于是等重，而且和各自的卡面是「同一个颜色、深一档」的关系——
+ * 扫列表时那道竖条指的是这门课，而不是「这门课原来是哪个色号」。
+ *
+ * 0.70 / 0.14 这一对是量出来的：竖条压在卡面上要能一眼分开，
+ * 又不能深到把整张卡的注意力都拉走。实测冷色相 1.85~2.09:1，
+ * 暖色相因为抬亮只到 1.48~1.62:1——**这条下限是刻意分色的**，理由见 [ACCENT_BAR_L_WARM]。
+ */
+fun accentBarColor(courseColor: Color): Color {
+    val hueDeg = hueDegreesOf(courseColor) ?: return courseColor
+    val lift = warmLift(hueDeg)
+    return oklchToColor(
+        ACCENT_BAR_L + lift * (ACCENT_BAR_L_WARM - ACCENT_BAR_L),
+        ACCENT_BAR_C,
+        Math.toRadians(hueDeg.toDouble()).toFloat()
+    )
+}
+
+/**
+ * 课程色叠到卡片上时要用的那一支**实色**。
+ *
+ * @param alpha 叠上去的不透明度，和调用处传给 [glassSurface] 的 `tintAlpha` 必须是同一个值——
+ *   这里是按这个 alpha 反解的，两者对不上，解出来的颜色就不是想要的颜色。
+ * @return 叠上去之后卡面落在 [CARD_TARGET_L] / [CARD_TARGET_C] 那一档的颜色。
+ *   近灰（无色相可解）原样返回。
+ */
+fun cardTint(courseColor: Color, alpha: Float): Color {
+    val a = alpha.coerceIn(0.02f, 1f)
+    val hueDeg = hueDegreesOf(courseColor) ?: return courseColor
+    // 近中性色原样叠，理由见 [NEUTRAL_CHROMA]。
+
+    val back = oklab(CardTintBacking)
+    val backChroma = kotlin.math.hypot(back.a, back.b)
+
+    // 暖色相（橙/黄）补偿：卡面已经够浅，所以只抬一小档明度、并减一点彩度。
+    // 减彩度就是用户说的「加多一点白」——黄是八支里最艳的一支
+    // （原色 C 0.166，而红 0.103、蓝 0.096），同样的彩度目标落在黄色相上
+    // 出来的 `#EAE0A7` 是米卡其，不是奶油黄。冷色相不受影响。
+    val lift = warmLift(hueDeg)
+    val targetL = CARD_TARGET_L + lift * CARD_WARM_LIFT
+    val targetC = (CARD_TARGET_C - lift * CARD_WARM_C_DROP).coerceAtLeast(0f)
+
+    val needL = ((targetL - (1f - a) * back.l) / a).coerceIn(0f, 1f)
+    val needC = ((targetC - (1f - a) * backChroma) / a).coerceAtLeast(0f)
+    return oklchToColor(needL, needC, Math.toRadians(hueDeg.toDouble()).toFloat())
+}
+
+/**
+ * OKLCh → sRGB，**超出色域就二分降彩度**而不是直接截断。
+ *
+ * 直接逐通道 clamp 会让颜色偏色相：请求的蓝紫会被拉成偏红的紫，降彩度则保持色相不变、
+ * 只少一点鲜艳度——而彩度本来就是「少一点更好」的那个量（卡面要暗示不要色块）。
+ */
+private fun oklchToColor(l: Float, c: Float, h: Float): Color {
+    var lo = 0f
+    var hi = c
+    if (oklchInGamut(l, c, h)) lo = c
+    else {
+        repeat(14) {
+            val mid = (lo + hi) / 2f
+            if (oklchInGamut(l, mid, h)) lo = mid else hi = mid
+        }
+    }
+    val (rl, gl, bl) = linearRgbFromOklch(l, lo, h)
+    return Color(
+        red = encodeSrgb(rl.coerceIn(0f, 1f)),
+        green = encodeSrgb(gl.coerceIn(0f, 1f)),
+        blue = encodeSrgb(bl.coerceIn(0f, 1f))
+    )
+}
+
+private fun oklchInGamut(l: Float, c: Float, h: Float): Boolean {
+    val (r, g, b) = linearRgbFromOklch(l, c, h)
+    return r >= -0.0008f && r <= 1.0008f &&
+            g >= -0.0008f && g <= 1.0008f &&
+            b >= -0.0008f && b <= 1.0008f
+}
+
+/** OKLab 三元组。 */
+private class Oklab(val l: Float, val a: Float, val b: Float)
+
+/** sRGB（Compose 的 0..1 分量）→ OKLab。矩阵取 Björn Ottosson 的标准值。 */
+private fun oklab(color: Color): Oklab {
+    val r = linearize(color.red)
+    val g = linearize(color.green)
+    val b = linearize(color.blue)
+    val l = cbrtF(0.4122214708f * r + 0.5363325363f * g + 0.0514459929f * b)
+    val m = cbrtF(0.2119034982f * r + 0.6806995451f * g + 0.1073969566f * b)
+    val s = cbrtF(0.0883024619f * r + 0.2817188376f * g + 0.6299787005f * b)
+    return Oklab(
+        l = 0.2104542553f * l + 0.7936177850f * m - 0.0040720468f * s,
+        a = 1.9779984951f * l - 2.4285922050f * m + 0.4505937099f * s,
+        b = 0.0259040371f * l + 0.7827717662f * m - 0.8086757660f * s
+    )
+}
+
+/** OKLCh → 线性 sRGB（未做 gamma 编码，供色域判定用）。 */
+private fun linearRgbFromOklch(l: Float, c: Float, h: Float): Triple<Float, Float, Float> {
+    val a = c * kotlin.math.cos(h)
+    val bb = c * kotlin.math.sin(h)
+    val l3 = (l + 0.3963377774f * a + 0.2158037573f * bb).let { it * it * it }
+    val m3 = (l - 0.1055613458f * a - 0.0638541728f * bb).let { it * it * it }
+    val s3 = (l - 0.0894841775f * a - 1.2914855480f * bb).let { it * it * it }
+    return Triple(
+        4.0767416621f * l3 - 3.3077115913f * m3 + 0.2309699292f * s3,
+        -1.2684380046f * l3 + 2.6097574011f * m3 - 0.3413193965f * s3,
+        -0.0041960863f * l3 - 0.7034186147f * m3 + 1.7076147010f * s3
+    )
+}
+
+private fun linearize(c: Float): Float =
+    if (c <= 0.04045f) c / 12.92f else
+        Math.pow(((c + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
+
+/** 立方根。`kotlin.math.cbrt` 只有 Double 重载，Float 侧得自己过一道。 */
+private fun cbrtF(v: Float): Float = Math.cbrt(v.toDouble()).toFloat()
+
+private fun encodeSrgb(c: Float): Float =
+    if (c <= 0.0031308f) 12.92f * c else
+        (1.055 * Math.pow(c.toDouble(), 1.0 / 2.4) - 0.055).toFloat()
 
 /**
  * 按比例压明度、按倍数提饱和，得到一个更深的同色相颜色。
@@ -527,14 +744,19 @@ private fun fromHsl(h: Float, s: Float, l: Float): Color {
  * 深浅本身就成了「有没有待办」的信号，不需要第三档——「已结清」归到无待办那一档，
  * 只在徽标上留一个 ✓ 区分。
  *
- * 放在 theme 层而不是各自的 Composable 里，是为了让课表图例和课程块本体
- * 引用同一份定义——以前两边各写各的 alpha，改了一边另一边就悄悄对不上。
+ * **这一档不再有任何 alpha 常量**，两档的底色各自由一道**实色**算出来，
+ * 调用处见 `CourseTimetableCell`：
  *
- * 未完成那一档不是「透明度更实」，而是走 [deepEnoughForWhite] 真正压深，
- * 因为白字压不住浅粉彩（#93C5FD 配白字只有 1.6:1）。
+ *   * 有待办（深色档）= [deepEnoughForWhite] 压深，白字。因为白字压不住浅粉彩
+ *     （#93C5FD 配白字只有 1.6:1）。面上另有一层 [CourseCellDeepFaceAlpha] 的玻璃，
+ *     它只让 6% 的模糊壁纸透上来，不参与配色。
+ *   * 无待办（浅色档）= [pushAwayFrom] 把上面那支深色朝白推到固定明度，字色退到下限。
+ *
+ * ⚠️ 这里原来有 `CourseCellPendingAlpha = 1.0f` / `CourseCellIdleAlpha = 0.70f`，
+ * 注释还写着「让课表图例和课程块本体引用同一份定义」，但**两处都没有读者**：
+ * 图例早已撤掉，格子也早就改走上面那两道实色算法。留着它们只会让人以为深色档
+ * 的 alpha 仍然钉在 1.0，从而把玻璃面「修」回实色。已删，别加回来。
  */
-const val CourseCellPendingAlpha = 1.0f  // 有待办（未完成）：压深配白字
-const val CourseCellIdleAlpha = 0.70f    // 无待办：原本浅粉彩配墨炭字
 
 // 6. 课程粉彩色系 (8 种粉彩色：红、粉、绿、青、蓝、紫、橙、黄)
 val PastelRed = Color(0xFFFCA5A5)                    // 粉彩红 (Pastel Red #FCA5A5)
@@ -564,15 +786,68 @@ val AlertRed = Color(0xFFEF4444)                     // 紧急截止/告警
 val AlertRedText = Color(0xFFB91C1C)                 // 告警文字专用（红-700）
 
 // 7. 扁平化课表栅格色 (Flat Timetable Grid)
-// 栅格线全部转冷调：网格现在画在冷色玻璃面板上，原来那套暖米灰（#EDE9E1/#D9D2C2）
-// 在薄荷青背景上会显脏，是「复古感」的一大来源。
-// 极简化之后栅格只剩**一种线**：早上/中午/晚上的大节分割线整条删掉，
-// 所以原来的 FlatGridLineStrong 沉一档不再有第二档可对应，留给表头那条分隔线复用。
-val FlatGridLine = Color(0xFFE8EEEB)                 // 行分隔细线（0.5dp）：冷灰绿，只做节奏不抢戏
-val FlatGridLineStrong = Color(0xFFDDE6E1)           // 表头与主体之间的分隔线：比行线沉一档就够
-val FlatGridColumnLine = Color(0xFFF0F4F2)           // 竖向列分隔线（0.5dp）：比横线更淡，竖线一多就成灰墙
-val FlatGridNumber = Color(0xFFA9B5B0)               // 节次水印数字：淡到只在空格里露一下
-val FlatTodayColumn = Color(0xFFEFF5F2)              // 「今天」整列平涂底（冷白），无课格子一眼可辨
+// 栅格线全部转**中性灰 + 半透明**：网格画在默认壁纸上，壁纸本身就是暖黄→淡紫的一整条色带，
+// 冷灰绿的线压在暖调上会显脏（当初在薄荷青底上显脏，所以从暖米灰改成冷灰绿——
+// 底色换了，这条理由就不成立了：现在该退回不带色相的灰，让线只做「分隔」不做「配色」）。
+// 极简化之后栅格只剩**一种横线**：早上/中午/晚上的大节分割线整条删掉，表头那条
+// 分隔线与标尺轴那条竖线也都并回 FlatGridLine，于是原「FlatGridLineStrong 沉一档」
+// 这个色值**已删除**，别再加回来。
+//
+// 判据：栅格线只做「分隔」，不承担「说明什么」。给其中某几条单独加粗或加深，
+// 换来的是「这里更重要」的暗示，可表头并不比别处重要、标尺轴左边的节次数字也
+// 已经说清了自己的身份——那点差异化买的只是一道更抢眼的线，不是信息。
+// 于是规律变成：**同一种线就同粗同色**，需要区分的地方靠位置与内容区分。
+//
+// ### 这几档的可见度是靠**底色**给的，不是靠自身深浅
+//
+// 栅格线压得越深，在壁纸上越显眼——但它们的作用只是「分隔」，不是「信息」，
+// 太深就成了压在淡雅壁纸上的脏线。所以这里用的是**半透明**：线本身保持中性灰，
+// 由 alpha 决定它在**任何底色**上留多少存在感，于是换壁纸也不用重算色值。
+//
+// ⚠️ 两轮改动留下的经验，别退回：
+//
+// 1. 纯白页面底时代这批线是 #E8EEEB 一档的「近白线画在近白底上」，可见度全靠底色当参照。
+//    底换成壁纸后实测只剩 1.00~1.16:1 —— 数学上等于不存在，整张表读不出「几节课」。
+// 2. 压深到不透明灰能救（1.32~1.50:1），但那是拿「更重的线」换可见度，
+//    代价正好和「降低栅格线透明度」这条要求相反。
+//
+// 现在这一档是两头都要的解：**中性灰 + alpha 0.55**，实测 1.16~1.24:1 ——
+// 比不透明灰明显轻，又还没掉进「线消失」的那一档。
+// **下限在 1.15 左右**：再往下（alpha 0.35 → 1.10~1.15:1）线就贴回第 1 条那个坑。
+// 判据不是 WCAG——栅格线不是文字，3:1 那套是给要读的信息用的；
+// 这里要的是「能数清行」，所以按壁纸最亮处（左上暖黄）取参照。
+val FlatGridLine = Color(0xFFC6C6C6)                     // 行分隔细线（0.5dp）：中性灰 + alpha 0.55
+val FlatGridColumnLine = Color(0xFFD4D4D4)               // 竖向列分隔线：比横线更淡，竖线一多就成灰墙
+val FlatGridNumber = Color(0xFF949494)                   // 节次水印数字：淡到只在空格里露一下
+
+/**
+ * 栅格线的统一不透明度。**所有** Flat* 线都在各自色值上乘这一档，而不是把 alpha
+ * 写进各自的色值里——四条线的深浅关系（横线 / 表头线 / 竖线 / 数字）由色值决定，
+ * 「整体多淡」由这一档决定，改透明度时只动这一个数。
+ *
+ * 0.55 是实测出来的：装机截图量到的线色是 #DAD8D7，压在壁纸上 1.20~1.22:1，
+ * 比不透明灰（1.44~1.47:1）明显轻，又还没掉进「线消失」的那一档
+ * （纯白底时代的原值 #E8EEEB 在壁纸上只有 1.01:1，等于不存在）。
+ * **下限约 1.15**，再淡就数不清行了；实测 alpha 0.35 会掉到 1.10 左右，别再往下试。
+ */
+const val FlatGridLineAlpha = 0.55f
+
+/**
+ * 给栅格线套上统一的不透明度。
+ *
+ * 为什么不把 alpha 直接写进上面那四个色值（`Color(0xFFC6C6C6C6)`）：
+ * 那样子看着更省事，但「线有多淡」就被焊死进每个色值里了，
+ * 以后调透明度要改四处、且很容易漏掉某一处，导致四条线不再同步变淡。
+ * 这里把「深浅关系」（谁更沉）和「整体多淡」（[FlatGridLineAlpha]）分开管：
+ * 改色值调层级，改一个 alpha 调整体。
+ */
+fun Color.asGridLine(): Color = copy(alpha = FlatGridLineAlpha)
+// ⚠️ FlatTodayColumn **已不再用作平涂底色**。「今天」那一列改成挂真·背景模糊
+// （hazeEffect，见 ScheduleScreen 的 DayColumn），不再是硬涂一层色——
+// 涂色只能靠不透明度表达「今天」，而压得越明显越像一块贴上去的色板、越不像
+// 底子上的雾。模糊则是直接作用在壁纸上，颜色随壁纸走，整列自然融进去。
+// 这个 token 保留仅为记录原值与来由，别再拿去当背景色用。
+val FlatTodayColumn = Color(0xFFB8D2CB)              // 已废弃：原「今天」整列平涂底
 // 「放假整列压一层底」的 FlatOffColumn 已删：一天放假要给整列 624.dp 高的网格铺一层
 // 颜色，才能换来列头旁边一枚 11.dp 的小图标就能说完的事。七列一齐压底时整张表发灰，
 // 而那条信息本身只是一个比特 —— 放在列头的图标上更省、也更像提示而不是状态。

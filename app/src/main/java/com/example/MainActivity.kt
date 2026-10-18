@@ -95,11 +95,13 @@ import com.example.ui.components.MoreDrawer
 import com.example.ui.components.DeleteTaskTypeConfirmDialog
 import com.example.ui.components.NewTaskTypeDialog
 import com.example.ui.components.QuickGenerateDialog
+import com.example.ui.components.QuickZjuLoginDialog
 import com.example.ui.components.ScheduleTransferDialog
 import com.example.ui.components.TaskCategoryManageDialog
 import com.example.ui.components.TaskDetailSheet
 import com.example.ui.components.TaskEditDialog
 import com.example.ui.components.TaskRulesDialog
+import com.example.ui.components.WallpaperSettingDialog
 import com.example.ui.components.WeekPickerDialog
 import com.example.ui.screens.ChecklistScreen
 import com.example.ui.screens.DashboardScreen
@@ -112,6 +114,7 @@ import com.example.ui.theme.PageHInset
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TopBarActionSize
 import com.example.ui.theme.TopBarHeight
+import com.example.ui.theme.controlSurface
 import com.example.ui.theme.rememberCardRevealProgress
 import com.example.ui.theme.pageChangeSpec
 import com.example.ui.viewmodel.ImportSource
@@ -254,7 +257,8 @@ private fun TopBarStrip(
             containerColor = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary,
             iconSize = 18.dp,
-            testTag = "topbar_generate_tasks_button"
+            testTag = "topbar_generate_tasks_button",
+            accent = true
         )
 
         Spacer(modifier = Modifier.width(4.dp))
@@ -406,7 +410,17 @@ private fun SearchFieldStrip(
     }
 }
 
-/** 顶栏右侧的动作按钮：圆角色块 + 图标，尺寸见 [TopBarActionSize]。 */
+/**
+ * 顶栏右侧的动作按钮：圆角色块 + 图标，尺寸见 [TopBarActionSize]。
+ *
+ * 底色走 [controlSurface]（18.dp 模糊 + 半透明面）而不是实色平涂：顶栏直接压在壁纸上，
+ * 满不透明度的色块在一张浅色壁纸上就是两块贴上去的胶带。这一档让按钮底下那片壁纸
+ * 透上来并被轻微糊开，于是它和页面里其它玻璃面是同一套材质。
+ *
+ * [accent] 只决定面的不透明度档位（[ControlAccentFaceAlpha] / [ControlNeutralFaceAlpha]），
+ * **不决定前景色**：写操作仍是主题绿配深墨字、读操作仍是中性底配 onSurface，
+ * 「一深一浅分主次」那条约定不变，变的只是这两块面各自有多透。
+ */
 @Composable
 private fun TopBarAction(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -415,13 +429,17 @@ private fun TopBarAction(
     containerColor: Color,
     contentColor: Color,
     iconSize: androidx.compose.ui.unit.Dp,
-    testTag: String
+    testTag: String,
+    accent: Boolean = false
 ) {
     Box(
         modifier = Modifier
             .size(TopBarActionSize)
-            .clip(RoundedCornerShape(10.dp))
-            .background(containerColor)
+            .controlSurface(
+                shape = RoundedCornerShape(10.dp),
+                color = containerColor,
+                accent = accent
+            )
             .clickable { onClick() }
             .testTag(testTag),
         contentAlignment = Alignment.Center
@@ -503,11 +521,11 @@ fun MainApp(viewModel: MainViewModel) {
     // 拿不到这里挂的 CompositionLocal，源和效果必须指着同一个实例才接得上。
     val hazeState = OverlayHazeState
 
-    AppBackgroundLayer {
+    AppBackgroundLayer(wallpaperConfig = state.wallpaperConfig) {
         CompositionLocalProvider(LocalGlassHazeState provides hazeState) {
         Scaffold(
         modifier = Modifier.fillMaxSize(),
-        // 不铺不透明底，让 Mesh Gradient 露出来
+        // 不铺不透明底，让下面 AppBackgroundLayer 的默认壁纸露出来
         containerColor = Color.Transparent,
         // 刻意**不**在这里挂 snackbarHost：这一层之下还有满屏的同窗口 overlay
         // （抽屉、各类弹层），Scaffold 里的 SnackbarHost 会被它们整个盖住。
@@ -548,8 +566,9 @@ fun MainApp(viewModel: MainViewModel) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
-                    // 页面底由外层 MeshBackgroundLayer 提供：它同时把那张网格渐变
-                    // 下发给所有玻璃面板做屏幕对齐重绘
+                    // 页面底（默认壁纸）由外层 AppBackgroundLayer 提供：
+                    // 它自己也挂了一份 hazeSource，把壁纸录进模糊源，
+                    // 否则浮岛底下那片壁纸在源层里是空的，会被兜底色填出一圈脏边。
                     .hazeSource(hazeState)
             ) {
             if (state.isLoading) {
@@ -596,7 +615,9 @@ fun MainApp(viewModel: MainViewModel) {
                                     onToggleTaskStar = { viewModel.toggleTaskStar(it) },
                                     onInspectTask = { viewModel.inspectTask(it) },
                                     onInspectCourse = { viewModel.inspectCourse(it) },
-                                    onOpenWeekPicker = { viewModel.openWeekPicker() }
+                                    onOpenWeekPicker = { viewModel.openWeekPicker() },
+                                    onRefreshCoursesTodo = { viewModel.refreshCoursesTodos(silent = false) },
+                                    onOpenQuickLoginDialog = { viewModel.setQuickZjuLoginDialogOpen(true) }
                                 )
                             }
 
@@ -629,6 +650,7 @@ fun MainApp(viewModel: MainViewModel) {
                                     state = state,
                                     onOpenTransferDialog = { viewModel.openTransferDialog() },
                                     onOpenCategoryManageDialog = { viewModel.openTaskCategoryManageDialog() },
+                                    onOpenWallpaperDialog = { viewModel.openWallpaperDialog() },
                                     onResetDemoData = { viewModel.resetDemoData() }
                                 )
                             }
@@ -795,15 +817,6 @@ fun MainApp(viewModel: MainViewModel) {
             )
         }
 
-        // 新建待办类型。放在编辑弹层**之上**：类型是在「给一条待办选类型」的
-        // 过程中被意识到缺的，所以建完必须能直接回到那一步，不该把编辑弹层一起关掉。
-        if (state.isNewTaskTypeDialogOpen) {
-            NewTaskTypeDialog(
-                onDismiss = { viewModel.closeNewTaskTypeDialog() },
-                onCreate = { label, paletteIndex -> viewModel.createTaskType(label, paletteIndex) }
-            )
-        }
-
         if (state.isTaskCategoryManageDialogOpen) {
             TaskCategoryManageDialog(
                 customTypes = state.customTaskTypes,
@@ -811,6 +824,18 @@ fun MainApp(viewModel: MainViewModel) {
                 onDismiss = { viewModel.closeTaskCategoryManageDialog() },
                 onDeleteCustomType = { viewModel.confirmDeleteTaskType(it) },
                 onOpenNewTypeDialog = { viewModel.openNewTaskTypeDialog() }
+            )
+        }
+
+        // 新建待办类型。放在编辑弹层与待办分类管理弹层**之上**：
+        // 1. 类型可以在「给一条待办选类型」时新增，建完回到编辑弹层；
+        // 2. 也可以在「待办分类管理」中新建分类，建完回到分类管理。
+        // 因为 GlassOverlayHost 是同窗口 overlay，兄弟节点里排得靠后的画在上面，
+        // 必须放在它们俩之后绘制，否则会被下层弹层遮罩与面板盖住导致无法交互。
+        if (state.isNewTaskTypeDialogOpen) {
+            NewTaskTypeDialog(
+                onDismiss = { viewModel.closeNewTaskTypeDialog() },
+                onCreate = { label, paletteIndex -> viewModel.createTaskType(label, paletteIndex) }
             )
         }
 
@@ -868,6 +893,19 @@ fun MainApp(viewModel: MainViewModel) {
             )
         }
 
+        // 自定义壁纸设置
+        if (state.isWallpaperDialogOpen) {
+            val contentResolver = LocalContext.current.contentResolver
+            WallpaperSettingDialog(
+                currentConfig = state.wallpaperConfig,
+                onDismiss = { viewModel.closeWallpaperDialog() },
+                onSelectPreset = { presetId -> viewModel.applyPresetWallpaper(presetId) },
+                onSelectCustom = { uri -> viewModel.applyCustomWallpaper(uri, contentResolver) },
+                onResetDefault = { viewModel.resetToDefaultWallpaper() },
+                onUpdateDimOpacity = { opacity -> viewModel.setWallpaperDimOpacity(opacity) }
+            )
+        }
+
         // 教务网账户与云端同步弹层
         if (state.isCloudAccountDialogOpen) {
             CloudAccountDialog(
@@ -888,6 +926,17 @@ fun MainApp(viewModel: MainViewModel) {
                 onQuickSync = { viewModel.syncWithSavedCredentials() },
                 onClearAccount = { viewModel.clearSavedAccount() },
                 onDismiss = { viewModel.closeCloudAccountDialog() }
+            )
+        }
+
+        // 快速绑定浙大账号弹窗（从总览页翻面卡触发）
+        if (state.isQuickZjuLoginDialogOpen) {
+            QuickZjuLoginDialog(
+                initialStudentId = state.boundStudentId ?: "",
+                onConfirm = { id, pass ->
+                    viewModel.saveZjuCredentialsAndSyncTodos(id, pass)
+                },
+                onDismiss = { viewModel.setQuickZjuLoginDialogOpen(false) }
             )
         }
 
@@ -923,6 +972,9 @@ fun MainApp(viewModel: MainViewModel) {
             QuickGenerateDialog(
                 candidateTasks = state.candidateTasksForPreview,
                 week = state.quickGenerateWeek ?: state.currentWeek,
+                preStudyLastWeek = state.quickGeneratePreStudyLastWeek
+                    ?: state.quickGenerateWeek
+                    ?: state.currentWeek,
                 customTypes = state.customTaskTypes,
                 onDismiss = { viewModel.closeQuickGenerateDialog() },
                 onConfirm = { viewModel.confirmGenerateTasks(it) }

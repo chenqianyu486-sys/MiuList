@@ -12,6 +12,8 @@ import com.example.data.local.TaskEntity
 import com.example.data.model.CategoryRule
 import com.example.data.model.CustomTaskType
 import com.example.data.model.TaskType
+import com.example.data.model.WallpaperConfig
+import com.example.data.source.zju.CoursesTodoItem
 import com.example.data.source.zju.ZjuFailureKind
 import com.example.data.source.weather.WeatherService
 import com.example.data.sync.SyncFailure
@@ -201,13 +203,22 @@ data class MainUiState(
     val candidateTasksForPreview: List<TaskEntity> = emptyList(),
     val isQuickGenerateDialogOpen: Boolean = false,
     /**
-     * 预览弹层里那批候选待办**实际属于第几周**。
+     * 预览弹层里那批候选待办**实际属于第几周**（课后作业与实验报告的范围）。
      *
      * 不能拿 [selectedWeek] 顶替：生成永远落在真今天所在的周，而浏览周次可以随便翻，
      * 两者在弹层打开的那一瞬间就可能不同步。按点击那一刻解析出来的周存下来，
      * 弹层文案和生成结果才必然说同一件事。
      */
     val quickGenerateWeek: Int? = null,
+
+    /**
+     * 这批候选里**预习**覆盖到第几周（作业与实验报告只看 [quickGenerateWeek] 那一周）。
+     *
+     * 单独存是因为两类待办的视野不同（预习看到下周结束，作业只看本周），
+     * 弹层要如实说明这一点，用户才知道为什么列表里会出现下一周的课。
+     * 等于 [quickGenerateWeek] 表示预习没有跨周（今天是学期最后一周）。
+     */
+    val quickGeneratePreStudyLastWeek: Int? = null,
 
     val isCategoryRulesDialogOpen: Boolean = false,
     /** 课程 × 类型的生成规则弹层。 */
@@ -220,6 +231,10 @@ data class MainUiState(
 
     // 待办分类管理
     val isTaskCategoryManageDialogOpen: Boolean = false,
+
+    // 自定义壁纸
+    val wallpaperConfig: WallpaperConfig = WallpaperConfig(),
+    val isWallpaperDialogOpen: Boolean = false,
 
     // 「ZJU」导入源
     /** 导入来源分段：本地文件 or 直接登录浙大教务网。 */
@@ -270,5 +285,16 @@ data class MainUiState(
      */
     val weather: WeatherService.WeatherState = WeatherService.WeatherState.Loading,
 
+    // 学在浙大 (courses.zju.edu.cn) 待办事项
+    val coursesTodoList: List<CoursesTodoItem> = emptyList(),
+    val isCoursesTodoLoading: Boolean = false,
+    val coursesTodoLastUpdated: Long = 0L,
+    val coursesTodoError: String? = null,
+    val isQuickZjuLoginDialogOpen: Boolean = false,
+
     val userMessage: String? = null
-)
+) {
+    /** 是否已保存凭据（用于判断卡片背面是否显示未绑定提示） */
+    val hasZjuCredentials: Boolean
+        get() = !boundStudentId.isNullOrBlank() && isRememberCredentials
+}

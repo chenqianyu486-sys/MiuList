@@ -47,3 +47,9 @@ google-services.json
 /test_screen.png
 # 本地跑 Gradle 时重定向出来的日志（testDebugUnitTest 输出等），不是源码也不是报告。
 /*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+

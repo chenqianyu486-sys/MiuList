@@ -2,12 +2,13 @@ package com.example.data.source.zju
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.FormBody
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Cookie
 import java.util.concurrent.TimeUnit
 
 /**
@@ -33,15 +34,25 @@ import java.util.concurrent.TimeUnit
  * 「没有 xh」是最容易踩的一处：新接口靠 CAS 会话识别学生，
  * 再传一个 `xh` 上去并不会更安全，只会让后端拿不准该信哪个。
  *
- * 登录成功后的落点是 `zdbk.zju.edu.cn/jwglxt/xtgl/index_initMenu.html?jsessionid=…`，
- * 这也是 [login] 判断成败的依据（见那里的注释）。
+ * ## 登录是三段，不是一次密码提交（2026-10-18 修正）
+ *
+ * 早先这里是「GET 登录页（**带** `service`）→ POST 密码（**不带** `service`）」。
+ * `execution` 与 `service` 绑定，POST 少了这个必填参数，CAS **必回 HTTP 400**，
+ * 且 400 的正文不解释原因 —— 界面上只剩一句「浙大登录返回了 HTTP 400，原因未说明」。
+ *
+ * 现在分三段，每段都有明确判据（与上游 Celechron 的 `Zdbk._doLogin` 同构）：
+ *
+ * 1. [ZjuSsoLogin] 用学号密码换全局 TGC —— **与学在浙大共用同一次密码登录**；
+ * 2. 带 TGC 请求 zdbk 的 service，CAS 回一张带 `ticket` 的回调地址；
+ * 3. 访问回调地址，zdbk **成对**签发 `JSESSIONID` + `route`。
+ *
+ * ⚠️ 密码提交那一跳必须**关掉自动跳转**：TGC 是下在 302 上的，
+ * 跟着跳完只剩最后一跳的响应头，而那张头里没有 TGC。
  *
  * 错误文案借鉴上游的措辞：浙大在密码错时返回的是 **HTTP 200 + 一段 HTML**，
  * 所以**光看状态码什么都判断不出来**，必须去读正文。
  * 但也不能反过来说「非 200 就是密码错」——网关超时、回跳异常也走同一条路，
  * 一律报「学号或密码错误」会让用户去反复改密码、撞上锁号。
- * 下面 [login] 的分支就是按这条分界写的：**只有正文明确说是凭据问题才这么说**，
- * 其余各归各类，真实原因见 [casFailureReason]。
  */
 open class ZjuCasClient(
     private val client: OkHttpClient = defaultClient()
@@ -62,113 +73,240 @@ open class ZjuCasClient(
         }
     }
 
+    /**
+     * 教务网登录：**密码登一次 → TGC → 向教务网换票 → 建立 zdbk 会话**。
+     *
+     * ## 为什么不再直接 POST 密码
+     *
+     * 原来这里是「GET 登录页（**带** `service=教务网`）→ POST `/cas/login`（**不带** `service`）」。
+     * 这个错配是**必挂**的：`execution` 是与 `service` 绑定的一次性令牌，
+     * POST 少了这个必填参数，CAS 直接回 **HTTP 400**；而 400 的正文通常不解释原因，
+     * 于是界面上只剩一句「浙大登录返回了 HTTP 400，原因未说明」——
+     * 用户既不知道是网络、是浙大、还是自己的密码，只能反复重试。
+     *
+     * 现在与学在浙大共用 [ZjuSsoLogin]：GET/POST 都是不带 `service` 的 `/cas/login`，
+     * 天然配对，先拿到全局 TGC；再拿 TGC 去教务网的 service 换票。
+     * 三段各有明确的失败判据，不再有「静默成功」那回事。
+     *
+     * 与上游 Celechron 的 `Zdbk._doLogin` 同构。
+     *
+     * ## TGC 是复用还是重输（2026-10-18 修正）
+     *
+     * 罐里已经有 TGC 就**不再走密码登录**；换票/建会话被拒时才丢掉它重登一次。
+     * 这两条都是被一次真实故障逼出来的：
+     *
+     * - **不重取**：已认证的 CAS 拿 TGC 打一个不带 `service` 的 `/cas/login` 时不给登录页、
+     *   只回 302。而原代码把 302 一律当成「登录页打不开」——
+     *   于是**上一次留下的 TGC 把这一次的真实失败原因盖掉**，界面永远显示
+     *   「浙大登录页打不开（HTTP 302）」，真正出问题的那一跳反倒没留下任何线索。
+     * - **不重登**：陈旧 TGC 不丢掉的话，「重试一次」会拿着同一个去换票、被同样地拒，
+     *   无限循环，而界面却一直提示「请重新登录」，重试走的还是那条旧路。
+     *
+     * 罐由 [ZjuImportService] 长期持有，所以「上一次」就是同一次运行里的前一下。
+     */
     private suspend fun loginImpl(studentId: String, password: String) {
-        val loginUrl = LOGIN_PAGE_URL.toHttpUrl()
+        // 换票这两跳都要自己读 Location，所以这一段**不能**自动跟跳转。
+        //
+        // ⚠️ 密码登录也必须关掉自动跳转：TGC 是下在 302 上的，跟着跳完
+        // 只剩最后一跳的响应头，而那张头里没有 TGC —— 这正是「登录成功却什么都拿不到」。
+        val noRedirect = client.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
 
-        val page = client.newCall(Request.Builder().url(loginUrl).get().build()).execute()
-        val pageBody = page.use { it.body?.string().orEmpty() }
-        val execution = extractExecution(pageBody)
-            ?: throw ZjuException("浙大登录页结构变了，请稍后再试", ZjuFailureKind.SERVER)
-        // 页面上的 <input name="ys" value="5">：认证方式标记（5 = 密码）。
-        // 缺了它 CAS 仍可能放行，但带上更贴近浏览器真实提交，少一分不确定性。
-        val authType = LoginPageParser().input(pageBody, "ys") ?: "5"
+        val jar = client.cookieJar as? InMemoryCookieJar
+            ?: throw ZjuException(
+                "课表客户端的 Cookie 罐类型不对，无法建立教务网会话",
+                ZjuFailureKind.UNKNOWN
+            )
 
-        val pubKeyJson = client.newCall(
-            Request.Builder().url(PUBLIC_KEY_URL.toHttpUrl()).get().build()
-        ).execute().use { it.body?.string().orEmpty() }
-
-        val modulus = extractJsonString(pubKeyJson, "modulus")
-        val exponent = extractJsonString(pubKeyJson, "exponent")
-        if (modulus == null || exponent == null) {
-            throw ZjuException("浙大登录公钥取不到，请稍后再试", ZjuFailureKind.SERVER)
-        }
-        val encrypted = ZjuRsa.encryptPassword(password, modulus, exponent)
-
-        val response = client.newCall(
-            Request.Builder()
-                .url(LOGIN_URL.toHttpUrl())
-                .post(
-                    FormBody.Builder()
-                        .add("username", studentId)
-                        .add("password", encrypted)
-                        .add("authcode", "")
-                        .add("execution", execution)
-                        .add("_eventId", "submit")
-                        .add("ys", authType)
-                        .build()
-                )
-                .build()
-        ).execute()
-
-        val body = response.use { it.body?.string().orEmpty() }
-        // 走完重定向之后的最终地址。**这是判断登录成败唯一可靠的信号**（见下）。
-        val finalUrl = response.request.url.toString()
-
-        // 浙大登录失败时返回的是 200 + 一段错误提示 HTML，HTTP 状态码一律是 200。
-        when {
-            body.contains("账号被锁定") || body.contains("账号已被暂时锁定") ->
-                throw ZjuException("密码错误次数过多，账号被暂时锁定，请等解锁后再试", ZjuFailureKind.LOCKED)
-
-            body.contains("用户名或密码错误") || body.contains("异常登录") ->
-                throw ZjuException("学号或密码错误", ZjuFailureKind.CREDENTIAL)
-
-            // 5xx 一律**不**报「学号或密码错误」：execution 被解析坏时 CAS 同样回 500，
-            // 那是我们的请求有问题，让用户去改密码只会把人带偏。
-            response.code >= 500 ->
-                throw ZjuException(
-                    "浙大登录服务出错（HTTP ${response.code}），请稍后再试",
-                    ZjuFailureKind.SERVER
-                )
-
-            // 403 在浙大这里是**账号被暂时锁定**（连续输错密码后的反制页），
-            // 不是「没权限」。归到「密码错误」会让用户以为自己密码被改了。
-            response.code == 403 ->
-                throw ZjuException("密码错误次数过多，账号被暂时锁定，请等解锁后再试", ZjuFailureKind.LOCKED)
-
-            // 剩下的 4xx（400/404/429…）**不是**凭据问题。
-            // 早先这里一律报「学号或密码错误（HTTP xxx）」，与本类注释里那条
-            // 「只有正文明确说是凭据问题才这么说」自相矛盾：用户会去反复改密码直到撞上锁号，
-            // 而状态码从一开始就没说密码有任何问题。分类留 UNKNOWN，让界面别把矛头指向凭据。
-            !response.isSuccessful ->
-                throw ZjuException("浙大登录返回了 HTTP ${response.code}，原因未说明", ZjuFailureKind.UNKNOWN)
+        // ── 第一步：拿到全局 TGC ──
+        //
+        // ⚠️ 罐里已经有 TGC 就**不要再走密码登录**（2026-10-18 修正）。
+        // 已认证的 CAS 拿到 TGC 打一个不带 `service` 的 `/cas/login` 时不会给登录页，
+        // 而是回 **302**；而原代码把 302 一律当成「登录页打不开」——
+        // 于是**上一次尝试留下的 TGC 会把这一次的真实失败原因盖掉**，
+        // 用户看到的永远是「浙大登录页打不开（HTTP 302）」，
+        // 真正出问题的那一跳（换票 / 建会话）反而没有留下任何线索。
+        // 罐由 [ZjuImportService] 长期持有，所以「上一次」就在几个小时前的同一次运行里。
+        if (jar.findCookie(ZjuSsoLogin.TGC_NAME) == null) {
+            jar.addCookie(ZjuSsoLogin(noRedirect).login(studentId, password))
         }
 
-        /**
-         * 登录成功时 CAS 会 302 跳到我们请求里的 `service`，落到 zdbk 的
-         * `index_initMenu.html`（带 jsessionid）；失败时它把登录页原样再吐一遍，
-         * 最终地址原地不动停在 `/cas/login`。
-         *
-         * **必须有这一步**：只靠「响应里没有『密码错误』这几个字」判断是不够的 ——
-         * CAS 还有别的失败形态（execution 过期、页闲置、会话不匹配…），
-         * 都会以「200 + 一张长得正常的登录页」回来。那时 [login] 静默返回、
-         * 上层接着去调课表接口，拿到的是一个莫名其妙的空课表或 404，
-         * 把排查方向整个带偏 —— 这正是之前踩过的坑。
-         */
-        if (finalUrl.contains("/cas/login") || !finalUrl.contains("zdbk.zju.edu.cn")) {
-            throw ZjuException(casFailureReason(body), ZjuFailureKind.CREDENTIAL)
+        // ── 第二步 + 第三步：换票，再用票换教务网自己的会话 ──
+        establishZdbkSession(noRedirect, jar, studentId, password)
+    }
+
+    /**
+     * 换票 + 建会话；被拒就丢掉旧 TGC、重新输一次密码，再试一次。
+     *
+     * ## 为什么这两步要一起兜着重试
+     *
+     * 换票拿回来的 **302 + ticket** 和建会话时的 **200** 都不能单独说明会话是好的，
+     * 而且「服务端已经不认这个 TGC」在两步上表现不同：
+     * - 换票那步：CAS 不认 TGC，就把登录页又吐一遍（**HTTP 200**，没有 ticket）；
+     * - 建会话那步：票是换到了，但教务网没下发成对的 `JSESSIONID` + `route`。
+     *
+     * 只在第三步重试的话，第一种情况会漏掉 —— 而它恰恰是**卡死循环**的成因：
+     * 陈旧 TGC 留在罐里，用户点几次「重试一次」都拿着同一个去换票、每次都被同样地拒，
+     * 界面上却一直提示「请重新登录」，而重试走的还是那条旧路。
+     */
+    private suspend fun establishZdbkSession(
+        noRedirect: OkHttpClient,
+        jar: InMemoryCookieJar,
+        studentId: String,
+        password: String
+    ) {
+        try {
+            establishZdbkSession(noRedirect, jar, requestZdbkTicket(noRedirect))
+        } catch (first: ZjuException) {
+            jar.removeCookie(ZjuSsoLogin.TGC_NAME)
+            jar.addCookie(ZjuSsoLogin(noRedirect).login(studentId, password))
+            try {
+                establishZdbkSession(noRedirect, jar, requestZdbkTicket(noRedirect))
+            } catch (second: ZjuException) {
+                // 重登过还是不行，报第二次的：第一次那条已经被换掉的动作覆盖了。
+                throw second
+            }
         }
     }
 
     /**
-     * 从「又吐回来」的登录页里抠出 CAS 的真实原因。
+     * 带 TGC 请求教务网的 service，CAS 应当 302 回一张带 `ticket` 的回调地址。
      *
-     * 页面里真正的原因在 `class="error text-left"` 那个 div 里；拿不到就退回
-     * URL 上的 `exception.message` 参数（CAS 会把错误码塞在回跳地址里）。
-     * 两者都拿不到时**不要编一个「密码错误」**，如实说不知道。
+     * 拿到 200 而不是 302，意味着 CAS 没认这次登录 —— 它把登录页又吐了一遍。
+     * 这种情况下**继续往下走只会拿到一张空课表**，必须在这里停。
      */
-    private fun casFailureReason(body: String): String {
-        ERROR_DIV_REGEX.find(body)?.groupValues?.get(1)?.let { raw ->
-            val text = raw.replace(Regex("<[^>]+>"), " ").replace(Regex("\\s+"), " ").trim()
-            if (text.isNotBlank()) return text
+    private fun requestZdbkTicket(noRedirect: OkHttpClient): HttpUrl {
+        val response = noRedirect.newCall(
+            Request.Builder().url(ZDBK_CAS_LOGIN_URL.toHttpUrl()).get()
+                .header("User-Agent", ZjuSsoLogin.USER_AGENT)
+                .build()
+        ).execute()
+        val status = response.code
+        val location = response.header("Location")
+        val body = response.use { it.body?.string().orEmpty() }
+
+        if (status !in 300..399) {
+            val gotLoginPage = CoursesAuthGuard.bodyIsLoginPage(body)
+            throw ZjuException(
+                if (gotLoginPage) "统一身份认证没有认出这次登录，请重新登录"
+                else "换取教务网登录票据失败（HTTP $status）",
+                if (gotLoginPage) ZjuFailureKind.SESSION else ZjuFailureKind.SERVER
+            )
         }
-        EXCEPTION_PARAM_REGEX.find(body)?.groupValues?.get(1)?.let { encoded ->
-            val decoded = runCatching {
-                java.net.URLDecoder.decode(encoded, "UTF-8")
-            }.getOrNull()
-            if (!decoded.isNullOrBlank()) return decoded
+        if (location.isNullOrBlank()) {
+            throw ZjuException("换取教务网登录票据失败：跳转缺少目标地址", ZjuFailureKind.SERVER)
         }
-        return "浙大登录未通过，请确认学号与密码"
+
+        val callback = ZDBK_CAS_LOGIN_URL.toHttpUrl().resolve(location)
+            ?: throw ZjuException("教务网回调地址无效", ZjuFailureKind.SERVER)
+
+        // ticket 必须落在教务网上。放任任意地址跳转等于把会话令牌发给它指的地方。
+        if (callback.host != ZDBK_HOST || callback.queryParameter("ticket").isNullOrBlank()) {
+            throw ZjuException(
+                "教务网返回的票据回调不对（${callback.host}），请稍后再试",
+                ZjuFailureKind.SERVER
+            )
+        }
+        return callback
     }
+
+    /**
+     * 用票据访问教务网，zdbk 会**成对**签发 `JSESSIONID` 与 `route`。
+     *
+     * ## 为什么不能只打一跳（2026-10-18 实测修正）
+     *
+     * 活体实测拿到的真实形态是：
+     *
+     * ```
+     * GET /jwglxt/xtgl/login_ssologin.html?ticket=ST-…
+     *   → 302  Location=/jwglxt/xtgl/index_initMenu.html?jsdm=06&_t=…
+     *   → 本跳 **不**下发任何 Cookie
+     * ```
+     *
+     * `index_initMenu.html` 是**教务网首页**（`jsdm=06` 是本科生院系代码）——
+     * 票被接受了，这只是流程里的下一步，会话在**下一跳**才下发。
+     * 原实现把回调这一跳的 302 当成失败，于是「票明明换到了，会话也建得起来」
+     * 被报成「教务网登录失败（HTTP 302）」。
+     *
+     * 所以这里走一个**有界的同主机跳转游走**：成对的 `JSESSIONID` + `route`
+     * 到手就算成功，不看状态码。反过来，CAS 拒票时会跳去 `zjuam/cas/filtererr.jsp`
+     * 或登录页——那是**跨主机**，游走会立刻停下并报错，两种情形因此不会混淆。
+     */
+    private fun establishZdbkSession(
+        noRedirect: OkHttpClient,
+        jar: InMemoryCookieJar,
+        ticketUrl: HttpUrl
+    ) {
+        var current = ticketUrl
+        var hop = 0
+        while (hop < MAX_SESSION_HOPS) {
+            hop++
+            val response = noRedirect.newCall(
+                Request.Builder().url(current).get()
+                    .header("User-Agent", ZjuSsoLogin.USER_AGENT)
+                    .build()
+            ).execute()
+            val status = response.code
+            val location = response.header("Location")
+            val body = response.use { it.body?.string().orEmpty() }
+
+            // 显式入库，不依赖 OkHttp 的自动 Cookie 存档。
+            //
+            // 自动存档确实也会存，但那是**链式副作用**：一旦响应不是经由正常的
+            // BridgeInterceptor 产生（测试替身、被中间件短路），cookie 就凭空消失，
+            // 而症状是「明明拿到了会话却说没有」——极难往回找。
+            // 显式存一次，行为就只取决于这段代码本身。
+            for (cookie in Cookie.parseAll(current, response.headers)) {
+                jar.addCookie(cookie)
+            }
+
+            if (status == 401 || status == 403) {
+                throw ZjuException("教务网拒绝了这次登录（HTTP $status），请重新登录", ZjuFailureKind.SESSION)
+            }
+            // 会话被顶掉时 zdbk 回的是 200 + 一张登录页，状态码完全正常，只能靠正文认。
+            if (CoursesAuthGuard.bodyIsLoginPage(body) || body.contains("login_ssologin")) {
+                throw ZjuException("教务网会话没建立，请重新登录", ZjuFailureKind.SESSION)
+            }
+
+            // 成对签发是硬要求：只拿到其中一个，后续课表接口的会话校验就过不去，
+            // 而症状是「登录成功但课表 404/空」——看起来像接口坏了，其实差一个 cookie。
+            //
+            // ⚠️ 按**教务网这个域名**找，不要只按名字：统一认证也签发一个同名 JSESSIONID，
+            // 不限定主机就会捡到那个，导致真正该有的 zdbk 会话缺着也判成通过。
+            val missing = listOf(ZDBK_SESSION_COOKIE, ZDBK_ROUTE_COOKIE)
+                .filter { jar.findCookie(it, ZDBK_HOST) == null }
+            if (missing.isEmpty() && status in 200..299) return
+
+            if (status !in 300..399) break
+            val next = location?.takeIf { it.isNotBlank() }?.let { current.resolve(it) }
+            if (next == null) break
+            // 跨主机 = 教务网不要这条会话了（多半是 CAS 拒票或要求重新登录）。
+            // 这里绝不跟：跟过去就是把会话令牌发给别的地方。
+            if (next.host != ZDBK_HOST) {
+                throw ZjuException(
+                    "教务网把会话建立转到了 ${next.host}（${next.encodedPath}），请重新登录",
+                    ZjuFailureKind.SESSION
+                )
+            }
+            current = next
+        }
+
+        val missing = listOf(ZDBK_SESSION_COOKIE, ZDBK_ROUTE_COOKIE)
+            .filter { jar.findCookie(it, ZDBK_HOST) == null }
+        val at = current.encodedPath
+        if (missing.isNotEmpty()) {
+            throw ZjuException(
+                "教务网没有下发会话（缺 ${missing.joinToString("、")}），停在 $at，请重新登录",
+                ZjuFailureKind.SESSION
+            )
+        }
+        throw ZjuException("教务网会话没有稳定下来（走了 $hop 跳仍停在 $at），请重新登录", ZjuFailureKind.SESSION)
+    }
+
+    // 旧实现（GET 登录页带 service、POST 不带 → CAS 回 HTTP 400）已整段移除；
+    // 新流程见 loginImpl / requestZdbkTicket / establishZdbkSession。
 
     /**
      * 取课表。返回的是教务网的原始 JSON，交由 [ZjuScheduleMapper] 解。
@@ -200,7 +338,14 @@ open class ZjuCasClient(
                 .add("xnm", academicYear)
                 .add("xqm", termQuery)
                 .build()
-            val response = client.newCall(
+            // 不自动跟跳转：会话被顶掉时 zdbk 会 302 到登录页，
+            // 跟着跳完只会拿到一张 200 的登录页 HTML，被当成「没返回课表」——
+            // 而真实原因是会话没了。停在 302 上才看得出它到底想跳去哪。
+            val noRedirect = client.newBuilder()
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .build()
+            val response = noRedirect.newCall(
                 Request.Builder()
                     .url(SCHEDULE_API_URL.toHttpUrl())
                     .post(body)
@@ -208,6 +353,11 @@ open class ZjuCasClient(
             ).execute()
 
             val text = response.use { it.body?.string().orEmpty() }
+            if (response.code in 300..399 ||
+                CoursesAuthGuard.locationIndicatesAuthFailure(response.header("Location"))
+            ) {
+                throw ZjuException("教务网会话已失效，请重新获取课表", ZjuFailureKind.SESSION)
+            }
             if (!response.isSuccessful) {
                 throw ZjuException(scheduleFailureReason(response.code), scheduleFailureKind(response.code))
             }
@@ -296,37 +446,32 @@ open class ZjuCasClient(
         return ZjuException(networkFailureReason(e), kind)
     }
 
-    /**
-     * 从登录页里切出 CSRF 值 `execution`。见 [LoginPageParser]。
-     */
-    private fun extractExecution(pageBody: String): String? =
-        LoginPageParser().execution(pageBody)
-
-    /** 公钥接口返回的就是 `{"modulus":"<hex>","exponent":"<hex>"}`。 */
-    private fun extractJsonString(json: String, key: String): String? {
-        val marker = "\"$key\""
-        val idx = json.indexOf(marker)
-        if (idx < 0) return null
-        val colon = json.indexOf(':', idx + marker.length)
-        if (colon < 0) return null
-        val open = json.indexOf('"', colon)
-        if (open < 0) return null
-        val close = json.indexOf('"', open + 1)
-        if (close < 0) return null
-        return json.substring(open + 1, close).takeIf { it.isNotBlank() }
-    }
-
     companion object {
         /**
          * CAS 的 service 指向 zdbk。**不是 appservice** —— 那是已退役的老路径，
          * 见类注释。老 service 下即使登录成功，课表接口也只会 504。
+         *
+         * 这个值**整条链必须原样带在每一次请求上**：`service` 是 CAS 认票的凭据，
+         * 少了它会直接回 HTTP 400 且不解释原因（这正是本次修掉的坑）。
          */
-        private const val ZDBK_SERVICE_URL =
-            "https%3A%2F%2Fzdbk.zju.edu.cn%2Fjwglxt%2Fxtgl%2Flogin_ssologin.html"
-        private const val LOGIN_PAGE_URL =
-            "https://zjuam.zju.edu.cn/cas/login?service=$ZDBK_SERVICE_URL"
-        private const val LOGIN_URL = "https://zjuam.zju.edu.cn/cas/login"
-        private const val PUBLIC_KEY_URL = "https://zjuam.zju.edu.cn/cas/v2/getPubKey"
+        private const val ZDBK_CAS_LOGIN_URL =
+            "https://zjuam.zju.edu.cn/cas/login?service=" +
+                "https%3A%2F%2Fzdbk.zju.edu.cn%2Fjwglxt%2Fxtgl%2Flogin_ssologin.html"
+
+        private const val ZDBK_HOST = "zdbk.zju.edu.cn"
+
+        /**
+         * 建立教务网会话时最多跟几跳。
+         *
+         * 实测真实形态是「回调 → 302 → 教务网首页（这里才下发会话）」，两跳够用；
+         * 留一点余量是因为不同院系入口页数可能不同，但**同主机**才有资格跟，
+         * 跨主机一律立即报错。
+         */
+        private const val MAX_SESSION_HOPS = 6
+
+        /** zdbk 成对签发的两个会话 Cookie，缺一不可。 */
+        private const val ZDBK_SESSION_COOKIE = "JSESSIONID"
+        private const val ZDBK_ROUTE_COOKIE = "route"
 
         /** 课表（本科）。学号由 CAS 会话带，请求体里**只有**学年与学期两个参数。 */
         private const val SCHEDULE_API_URL =
@@ -346,19 +491,6 @@ open class ZjuCasClient(
             .readTimeout(20, TimeUnit.SECONDS)
             .cookieJar(InMemoryCookieJar())
             .build()
-
-        /**
-         * CAS 把失败原因渲染在这个 div 里。
-         *
-         * 注意 Kotlin 的枚举名是 `DOT_MATCHES_ALL`，`DOT_ALL` 那是 `java.util.regex.Pattern`
-         * 的叫法 —— 抄 Java 代码时会顺手写错，而且整个属性会连带变成错误类型，
-         * 报出来的却是使用处「Unresolved reference groupValues」，很难往回找。
-         */
-        private val ERROR_DIV_REGEX =
-            Regex("""class="error text-left"[^>]*>(.*?)</div>""", RegexOption.DOT_MATCHES_ALL)
-
-        /** CAS 也会把错误码塞在回跳 URL 的 `exception.message` 参数里。 */
-        private val EXCEPTION_PARAM_REGEX = Regex("""exception\.message=([^&"]+)""")
     }
 }
 
@@ -394,6 +526,9 @@ internal class LoginPageParser {
         fun attributesOf(tag: String): Map<String, String> =
             ATTR_REGEX.findAll(tag)
                 .associate { it.groupValues[1].lowercase() to it.groupValues[2] }
+
+        private val ERROR_DIV_REGEX =
+            Regex("""class="error text-left"[^>]*>(.*?)</div>""", RegexOption.DOT_MATCHES_ALL)
     }
 
     fun input(page: String, name: String): String? =
@@ -403,6 +538,13 @@ internal class LoginPageParser {
             ?.get("value")
             ?.trim()
             ?.takeIf { it.isNotBlank() }
+
+    fun errorDivReason(page: String): String? {
+        val match = ERROR_DIV_REGEX.find(page) ?: return null
+        val raw = match.groupValues.getOrNull(1) ?: return null
+        val text = raw.replace(Regex("<[^>]+>"), " ").replace(Regex("\\s+"), " ").trim()
+        return text.takeIf { it.isNotBlank() }
+    }
 }
 
 /**
@@ -429,21 +571,74 @@ internal class LoginPageParser {
 internal class InMemoryCookieJar : CookieJar {
     private val store = LinkedHashMap<String, Cookie>()
 
+    /**
+     * 按 **名字 + 域名 + path** 存，不只是名字。
+     *
+     * 只按名字存是原来就有的写法，当时看不出问题 —— 直到统一认证和教务网
+     * **两边都签发一个叫 `JSESSIONID` 的 Cookie**，后者直接顶掉前者。
+     * 罐里于是只剩一个，而 [loadForRequest] 又按域名过滤：教务网要开会话时，
+     * 罐里存着的恰好是统一认证那个（域名对不上，被丢掉），
+     * 表现是「明明换到票了，却报没有下发会话」。
+     */
     override fun saveFromResponse(url: okhttp3.HttpUrl, cookies: List<Cookie>) {
         synchronized(store) {
-            cookies.forEach { store[it.name] = it }
+            cookies.forEach { store[keyOf(it)] = it }
         }
     }
 
     override fun loadForRequest(url: okhttp3.HttpUrl): List<Cookie> =
         synchronized(store) {
-            val host = url.host
-            store.values.filter { cookie ->
-                val domain = cookie.domain.removePrefix(".").lowercase()
-                val h = host.lowercase()
-                h == domain || h.endsWith(".$domain")
-            }
+            store.values.filter { matchesHost(it, url.host) }
         }
+
+    /**
+     * 塞进一个已经构造好的 Cookie。
+     *
+     * 存在的理由：[ZjuSsoLogin] 是**构造**出 TGC 再交回来的，并不会经过一次响应，
+     * 所以 OkHttp 的自动存档钩子看不到它。而 TGC 不入罐，后续所有请求都发不出去。
+     */
+    @Synchronized
+    fun addCookie(cookie: Cookie) {
+        store[keyOf(cookie)] = cookie
+    }
+
+    /**
+     * 按名字取当前有效的 Cookie，取不到返回 null。
+     *
+     * ⚠️ **有同名 Cookie 时必须传 [host]**（2026-10-18）。
+     * 统一认证（zjuam）和教务网（zdbk）**都会**签发一个叫 `JSESSIONID` 的 Cookie，
+     * 罐里两个并存。不限定主机就会撞上「先存进去的那个」——
+     * 教务网该有的那个恰好缺着，而检查照样通过，
+     * 表现为「会话建立成功了，课表接口却一直 302」。
+     */
+    @Synchronized
+    fun findCookie(name: String, host: String? = null): Cookie? =
+        store.values.firstOrNull {
+            it.name == name &&
+                it.expiresAt >= System.currentTimeMillis() &&
+                (host == null || matchesHost(it, host))
+        }
+
+    /**
+     * 丢掉一个 Cookie（按名字，全域名）。
+     *
+     * 存在的理由：罐里的 TGC 是**上一次**登录留下的，服务端可能已经不认它。
+     * 这种陈旧会话不丢掉的话，下一次同步会一直拿着它去换票、一直失败 ——
+     * 表现为「点几次重试都没用」，而真正该做的只是重新输一次密码。
+     */
+    @Synchronized
+    fun removeCookie(name: String) {
+        store.keys.filter { it.startsWith("$name|") }.forEach { store.remove(it) }
+    }
+
+    private fun keyOf(cookie: Cookie) = "${cookie.name}|${cookie.domain}|${cookie.path}"
+
+    /** RFC 6265 的域名匹配：`host == domain || host.endsWith("." + domain)`。 */
+    private fun matchesHost(cookie: Cookie, host: String): Boolean {
+        val domain = cookie.domain.removePrefix(".").lowercase()
+        val h = host.lowercase()
+        return h == domain || h.endsWith(".$domain")
+    }
 }
 
 /**

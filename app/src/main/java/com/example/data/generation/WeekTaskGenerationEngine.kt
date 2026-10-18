@@ -15,31 +15,63 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
+ * 一个「周 × 类型」范围：这一周里，哪些课、为哪些类型产出待办。
+ *
+ * 范围之所以做成一个列表而不是单个 `week`，是因为**三类待办的视野不一样**：
+ * 作业与实验报告是「上完课才交」，看得过去就还来得及，所以只看本周；
+ * 预习是「上课之前」要做的事，只看本周的话周二打开 App 就已经把周三的课预习完了，
+ * 于是它要一路看到**下周结束**。同一周里的课因此会被两个不同类型的范围各用一次。
+ */
+data class WeekScope(
+    val week: Int,
+    /** 该周的周一（epochDay）。整周的日期都从它推。 */
+    val weekMondayEpochDay: Long,
+    /** 已按该周过滤（含单双周 / 停课 / 补课）的时段 */
+    val slots: List<CourseSlotEntity>,
+    /** 本范围只覆盖这些类型；null = 全部自动类型。 */
+    val types: Set<TaskType>? = null,
+    /**
+     * 只保留「**开课时刻**不早于这一刻」的课；null = 整周都要。
+     *
+     * 「今天起至下周结束」由它表达，但比「今天 00:00」更准一档：
+     * 预习的截止就是开课前几分钟（[GenerationRuleResolver] 的 `dueBeforeMinutes`），
+     * 所以下午两点生成时，当天上午那节课的截止时刻**已经过去了** ——
+     * 按日期下界放它进来，产出的是一条一出生就逾期的待办。
+     * 因此这个下界取「现在」，让范围只覆盖还没上的课。
+     *
+     * 它同时是「已经过去就别再补」的判据：本周上过的课、以及今天已经开课的那节，
+     * 都不会产出预习；而作业与实验报告不需要这个界（它们是上完课才交，截止还在未来）。
+     *
+     * 过滤发生在选锚点**之前**：本周只剩周三一节课的课在周四就该一条都不产出，
+     * 而不是锚到已经上过的周一再补一个日期。
+     */
+    val fromStartTimestamp: Long? = null
+)
+
+/**
  * 「一键生成本周待办」的引擎。
  *
  * 改造前这里只处理**某一天**（`generateTasksForDay`），标题是「【作业】高数 习题」，
  * 去重靠 `generatedDate`。现在按**一整周**产出，标题是「高数 第3周作业」，
  * 去重靠「同课程 + 同类型 + 同周次 + 同周几」四元组。
  *
- * 三条关键决定：
+ * 五条关键决定：
  * 1. **时段由调用方先按周过滤好再传进来**（`ScheduleResolver.slotsInWeek`），
- *    所以这里不关心星期几、单双周、停课补课；它只做「一周的这些课要产出哪些待办」。
- * 2. **「每周一次」的锚点取该周最早的那节课**。锚点一旦确定，这条待办的截止日在一周之内
- *    就是稳定的，不会因为多开一次 App、多生成一次就往后漂。
- * 3. 「每周一次」也照常记下锚点那天的周几进 `dayOfWeek`，于是四元组判据天然唯一，
+ *    所以这里不关心星期几、单双周、停课补课；它只做「这些课要产出哪些待办」。
+ * 2. **范围按类型分**（[WeekScope]）：作业与实验报告取本周，预习取今天起至下周结束。
+ * 3. **「每周一次」的锚点取该周最早的那节课**。锚点一旦确定，这条待办的截止日在一周之内
+ *    就是稳定的，不会因为多开一次 App、多生成一次就往后漂。锚点在 [WeekScope.fromStartTimestamp]
+ *    过滤**之后**选，「今天起」才不会锚到已经上过的课。
+ * 4. 「每周一次」也照常记下锚点那天的周几进 `dayOfWeek`，于是四元组判据天然唯一，
  *    不需要为它另开一个特例。
- * 4. **不预置星标**：`priority` 恒为 `STAR_UNMARKED`。星标留给用户手动标。
+ * 5. **不预置星标**：`priority` 恒为 `STAR_UNMARKED`。星标留给用户手动标。
  *
  * 无 Android / Room 依赖，可在普通 JUnit 里直接测。
  */
 class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
 
     data class Input(
-        val week: Int,
-        /** 该周的周一（epochDay）。整周的日期都从它推。 */
-        val weekMondayEpochDay: Long,
-        /** 已按该周过滤（含单双周 / 停课 / 补课）的时段 */
-        val slots: List<CourseSlotEntity>,
+        val scopes: List<WeekScope>,
         val coursesById: Map<Long, CourseEntity>,
         /** 课程 × 类型的课程级规则；缺 key = 用户没配过这一格 */
         val courseRules: Map<Long, Map<TaskType, CourseRuleSpec>> = emptyMap(),
@@ -56,13 +88,31 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
 
     suspend fun build(input: Input, hasExisting: ExistingChecker): List<TaskEntity> {
         val zone = ZoneId.systemDefault()
-        val monday = LocalDate.ofEpochDay(input.weekMondayEpochDay)
+        val out = mutableListOf<TaskEntity>()
+
+        for (scope in input.scopes) {
+            out += buildScope(scope, input, zone, hasExisting)
+        }
+
+        // 跨范围之后按上课时间排：范围一多（作业看本周、预习看到下周），
+        // 不排的话同一个「本次要生成什么」在列表里会分成两截，看着像漏了一部分。
+        return out.sortedWith(compareBy({ it.startTimeTimestamp }, { it.courseId }, { it.id }))
+    }
+
+    private suspend fun buildScope(
+        scope: WeekScope,
+        input: Input,
+        zone: ZoneId,
+        hasExisting: ExistingChecker
+    ): List<TaskEntity> {
+        val monday = LocalDate.ofEpochDay(scope.weekMondayEpochDay)
 
         // 一天里的多个时段按「周几 + 开始节次」排好序；
         // 「每周一次」的锚点就是每门课排完之后的第一个。
-        val ordered = input.slots.sortedWith(
-            compareBy({ it.dayOfWeek }, { it.startPeriod }, { it.id })
-        )
+        val ordered = scope.slots
+            // 「今天起」先砍掉已经过去 / 已经开课的课，再谈锚点。
+            .filter { scope.fromStartTimestamp == null || startTimestampOf(it, classDateOf(it, monday), zone) >= scope.fromStartTimestamp }
+            .sortedWith(compareBy({ it.dayOfWeek }, { it.startPeriod }, { it.id }))
 
         val out = mutableListOf<TaskEntity>()
 
@@ -70,6 +120,7 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
             val course = input.coursesById[courseId] ?: continue
             // 本周没有这门课的时段 —— groupBy 天然不会产生这一组，不用额外判
             for (type in GenerationRuleResolver.AUTO_TYPES) {
+                if (scope.types != null && type !in scope.types) continue
                 if (!GenerationRuleResolver.isEnabled(course, type)) continue
 
                 val rule = GenerationRuleResolver.resolve(
@@ -87,15 +138,33 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
 
                 for (anchor in anchors) {
                     val dayOfWeek = anchor.dayOfWeek.coerceIn(1, 7)
-                    val date = monday.plusDays((dayOfWeek - 1).toLong())
-                    if (hasExisting.exists(courseId, type, input.week, dayOfWeek)) continue
-                    out += buildTask(course, anchor, date, input.week, type, rule, zone)
+                    val date = classDateOf(anchor, monday)
+                    if (hasExisting.exists(courseId, type, scope.week, dayOfWeek)) continue
+                    out += buildTask(course, anchor, date, scope.week, type, rule, zone)
                 }
             }
         }
 
         return out
     }
+
+    /**
+     * 某节课在它所属那一周里的开课时刻（epochMilli）。
+     *
+     * [classDate] 是「那一周的周一 + 周几 - 1」，也就是这节课真正上的那天。
+     * 范围过滤与 [buildTask] 必须用**同一个**算法：过滤按 A 算、写入按 B 算的话，
+     * 会出现「判定还在未来、产出的截止却已经过去」这种自相矛盾的待办。
+     */
+    private fun startTimestampOf(slot: CourseSlotEntity, classDate: LocalDate, zone: ZoneId): Long {
+        val startMinute = periodTable.startMinuteOf(slot.startPeriod)
+        return classDate
+            .atTime((startMinute ?: 8 * 60) / 60, (startMinute ?: 8 * 60) % 60)
+            .atZone(zone).toInstant().toEpochMilli()
+    }
+
+    /** 该周周一 + 周几 - 1：这节课真正落在哪一天。 */
+    private fun classDateOf(slot: CourseSlotEntity, monday: LocalDate): LocalDate =
+        monday.plusDays((slot.dayOfWeek.coerceIn(1, 7) - 1).toLong())
 
     private fun buildTask(
         course: CourseEntity,
@@ -107,11 +176,8 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
         zone: ZoneId
     ): TaskEntity {
         val classroom = anchor.classroom.ifBlank { course.classroom }
-        val startMinute = periodTable.startMinuteOf(anchor.startPeriod)
         val startTimeText = periodTable.slotOf(anchor.startPeriod)?.startTime ?: "08:00"
-        val startTimestamp = date
-            .atTime((startMinute ?: 8 * 60) / 60, (startMinute ?: 8 * 60) % 60)
-            .atZone(zone).toInstant().toEpochMilli()
+        val startTimestamp = startTimestampOf(anchor, date, zone)
 
         // 预习挂在某一节课上（提前 N 分钟），作业与实验是收尾型任务（上课日 + N 天 23:59）。
         val dueTimestamp = when (type) {

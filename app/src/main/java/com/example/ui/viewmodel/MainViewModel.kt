@@ -13,6 +13,7 @@ import com.example.data.calendar.ScheduleResolver
 import com.example.data.codec.AcademicTerm
 import com.example.data.di.AppContainer
 import com.example.data.generation.CourseRuleSpec
+import com.example.data.generation.WeekScope
 import com.example.data.generation.WeekTaskGenerationEngine
 import com.example.data.local.CourseEntity
 import com.example.data.local.CourseSlotEntity
@@ -64,6 +65,9 @@ class MainViewModel(
     private val secureStorage = container.secureAccountStorage
     private val syncManager = container.syncManager
     private val weatherService = container.weatherService
+    private val wallpaperRepo = container.wallpaperRepository
+    private val zjuCoursesClient = container.zjuCoursesClient
+    private val coursesTodoCache = container.coursesTodoCache
 
     private data class RepoState(
         val coursesWithSlots: List<CourseWithSlots>,
@@ -185,6 +189,28 @@ private val ruleFlow = combine(
 
     init {
         viewModelScope.launch { loadWeather() }
+
+        // 瞬间加载学在浙大待办的本地只读缓存（离线优先，零延迟呈现）
+        val (cachedTodos, cachedTime) = coursesTodoCache.load()
+        _uiState.update {
+            it.copy(
+                coursesTodoList = cachedTodos,
+                coursesTodoLastUpdated = cachedTime
+            )
+        }
+
+        // 每次打开软件自动刷新学在浙大待办（若已保存凭据）
+        if (secureStorage.hasSavedCredentials()) {
+            viewModelScope.launch {
+                refreshCoursesTodos(silent = true)
+            }
+        }
+
+        viewModelScope.launch {
+            wallpaperRepo.wallpaperConfig.collect { config ->
+                _uiState.update { it.copy(wallpaperConfig = config) }
+            }
+        }
 
         viewModelScope.launch {
             settingsRepo.ensureDefaultRules(AppContainer.DEFAULT_CATEGORY_RULES)
@@ -582,38 +608,99 @@ private val ruleFlow = combine(
 
     // ------------------------------------------------------------ 自动生成待办
 
+    /** 一批候选待办 + 它的覆盖范围，供弹层文案与提示语如实说明。 */
+    private data class CandidateBatch(
+        val tasks: List<TaskEntity>,
+        /** 作业 / 实验报告所属周次。 */
+        val week: Int,
+        /** 预习覆盖到的最后一周周次；等于 [week] 表示预习没有跨周。 */
+        val preStudyLastWeek: Int
+    )
+
     /**
-     * 造出「第 [week] 周」的全部候选待办。
+     * 造出「一键生成」的全部候选待办。
      *
      * 周次由调用方给，调用方一律传 [resolveRealGenerationWeek] 的结果，**不再取**
      * [MainUiState.selectedWeek]（正在浏览的那一周）。
      *
+     * **三类待办的视野不一样**，这是本函数存在的理由：
+     * - 课后作业、实验报告 = **本周**。它们是「上完课才交」，本周的课上完才几天，
+     *   再往后看就超出了「今天该做」的视野。
+     * - 预习 = **今天起至下周结束**。预习是上课之前要做的事，只看本周的话，
+     *   周二打开 App 就得一次性把周三到周日的课全预习完，而下周才上的课此刻就该有个预告；
+     *   反过来，本周已经上过的课再补一条预习毫无意义（课都上了）。
+     *
+     * 因此预习拆成**两个范围**（本周 `fromStartTimestamp = 现在`、下周整周），
+     * 而作业与实验报告合用**本周整周**这一个范围。
+     *
+     * 边界都由学期裁：下周超出 [SemesterEntity.totalWeeks] 时那个范围整个不产出，
+     * 而不是造出一批不属于任何一周的待办。
+     *
      * 没配置学期时**拒绝生成**：没有学期就没有周次概念，
      * 硬生成出来的去重键全是 0，第二周第三次点就会把第一周那份也当成重复。
      */
-    private suspend fun buildCandidatesForWeek(week: Int): List<TaskEntity> {
+    private suspend fun buildCandidatesForWeek(week: Int): CandidateBatch {
         val calState = calendarRepo.calendarState.first()
-        val semester = calendarRepo.semesterOnce() ?: return emptyList()
+        val semester = calendarRepo.semesterOnce()
+            ?: return CandidateBatch(emptyList(), week, week)
         val resolver = ScheduleResolver(calState.calendar)
         val engine = WeekTaskGenerationEngine(calState.periodTable)
 
-        val weekMonday = semester.firstMondayEpochDay + (week - 1).coerceAtLeast(0) * 7L
-        val slots = resolver.slotsInWeek(
-            week,
-            courseRepo.getAllSlotsOnce(),
-            courseRepo.getWeeksBySlotIdOnce()
-        ).values.flatten()
+        val allSlots = courseRepo.getAllSlotsOnce()
+        val weeksBySlot = courseRepo.getWeeksBySlotIdOnce()
+        val now = System.currentTimeMillis()
 
-        return engine.build(
+        fun mondayOf(w: Int) = semester.firstMondayEpochDay + (w - 1).coerceAtLeast(0) * 7L
+        fun slotsOf(w: Int) = resolver.slotsInWeek(w, allSlots, weeksBySlot).values.flatten()
+
+        // 下周还在学期内才做预习跨周那一段；否则预习只到本周（仍是今天起）。
+        val preStudyLastWeek = if (week + 1 <= semester.totalWeeks) week + 1 else week
+
+        val scopes = buildList {
+            // 作业与实验报告：本周整周，不设下界 —— 上周遗留的作业照样该出现在清单里。
+            add(
+                WeekScope(
+                    week = week,
+                    weekMondayEpochDay = mondayOf(week),
+                    slots = slotsOf(week),
+                    types = setOf(TaskType.POST_CLASS, TaskType.LAB_REPORT)
+                )
+            )
+            // 预习：本周从「现在」起（今天之前那几天的课已经上过了，当天已经开课的
+            // 那节截止时刻也已过去，补出来只会是一条一出生就逾期的待办）。
+            add(
+                WeekScope(
+                    week = week,
+                    weekMondayEpochDay = mondayOf(week),
+                    slots = slotsOf(week),
+                    types = setOf(TaskType.PRE_STUDY),
+                    fromStartTimestamp = now
+                )
+            )
+            // 预习：下周整周（必然还没上，所以同样给同一个下界也不影响）。
+            if (preStudyLastWeek > week) {
+                add(
+                    WeekScope(
+                        week = preStudyLastWeek,
+                        weekMondayEpochDay = mondayOf(preStudyLastWeek),
+                        slots = slotsOf(preStudyLastWeek),
+                        types = setOf(TaskType.PRE_STUDY),
+                        fromStartTimestamp = now
+                    )
+                )
+            }
+        }
+
+        val tasks = engine.build(
             WeekTaskGenerationEngine.Input(
-                week = week,
-                weekMondayEpochDay = weekMonday,
-                slots = slots,
+                scopes = scopes,
                 coursesById = courseRepo.getAllCoursesOnce().associateBy { it.id },
                 courseRules = settingsRepo.getTaskRulesOnce(),
                 categoryRules = settingsRepo.getCategoryRulesOnce().associateBy { it.category }
             )
         ) { courseId, taskType, w, day -> taskRepo.hasWeekTask(courseId, taskType.name, w, day) }
+
+        return CandidateBatch(tasks, week, preStudyLastWeek)
     }
 
     /**
@@ -663,45 +750,60 @@ private val ruleFlow = combine(
     fun openQuickGenerateWeekDialog() = viewModelScope.launch {
         if (!requireSemester()) return@launch
         val week = resolveRealGenerationWeek() ?: return@launch
-        val candidates = buildCandidatesForWeek(week)
+        val batch = buildCandidatesForWeek(week)
         _uiState.update {
             it.copy(
-                candidateTasksForPreview = candidates,
-                quickGenerateWeek = week,
+                candidateTasksForPreview = batch.tasks,
+                quickGenerateWeek = batch.week,
+                quickGeneratePreStudyLastWeek = batch.preStudyLastWeek,
                 isQuickGenerateDialogOpen = true
             )
         }
     }
 
     fun closeQuickGenerateDialog() = _uiState.update {
-        it.copy(isQuickGenerateDialogOpen = false, quickGenerateWeek = null)
+        it.copy(
+            isQuickGenerateDialogOpen = false,
+            quickGenerateWeek = null,
+            quickGeneratePreStudyLastWeek = null
+        )
     }
 
     fun confirmGenerateTasks(selected: List<TaskEntity>) = viewModelScope.launch {
         // 周次取弹层打开那一刻存下的那个，不重算：候选是那会儿按这个周造出来的，
         // 中间跨过了一周一字不改地换个周次报，会出现「说的是 A、生成了 B」。
         val week = _uiState.value.quickGenerateWeek ?: uiState.value.currentWeek
+        val preStudyLastWeek = _uiState.value.quickGeneratePreStudyLastWeek ?: week
         val count = commitCandidates(selected)
         closeQuickGenerateDialog()
         _uiState.update {
-            it.copy(
-                userMessage = if (count > 0) "已生成 $count 项第 $week 周待办"
-                else "第 $week 周待办已全部生成"
-            )
+            it.copy(userMessage = generatedMessage(count, week, preStudyLastWeek))
         }
     }
 
     fun generateTasksDirectlyForWeek() = viewModelScope.launch {
         if (!requireSemester()) return@launch
         val week = resolveRealGenerationWeek() ?: return@launch
-        val candidates = buildCandidatesForWeek(week)
-        val count = commitCandidates(candidates)
+        val batch = buildCandidatesForWeek(week)
+        val count = commitCandidates(batch.tasks)
         _uiState.update {
-            it.copy(
-                userMessage = if (count > 0) "已生成 $count 项第 $week 周待办"
-                else "第 $week 周待办已全部生成"
-            )
+            it.copy(userMessage = generatedMessage(count, batch.week, batch.preStudyLastWeek))
         }
+    }
+
+    /**
+     * 生成结果的提示语。
+     *
+     * 跨周时必须把「作业是本周、预习到下周」说出来：提示只报「第 N 周」，
+     * 用户回头看到清单里多出下一周的预习会以为生成错了。
+     */
+    private fun generatedMessage(count: Int, week: Int, preStudyLastWeek: Int): String {
+        val range = if (preStudyLastWeek > week) {
+            "第 $week 周作业与实验报告，今天起至第 $preStudyLastWeek 周末的预习"
+        } else {
+            "第 $week 周待办"
+        }
+        return if (count > 0) "已生成 $count 项：$range" else "$range 已全部生成"
     }
 
     // ------------------------------------------------------------ 导入 / 导出
@@ -1266,6 +1368,109 @@ private val ruleFlow = combine(
         semester?.let { courseRepo.clampSlotWeeksTo(it.totalWeeks) }
         closeAcademicCalendarDialog()
         _uiState.update { it.copy(userMessage = "学期校历已保存") }
+    }
+
+    // ------------------------------------------------------------ 自定义壁纸
+
+    fun openWallpaperDialog() {
+        _uiState.update { it.copy(isWallpaperDialogOpen = true) }
+    }
+
+    fun closeWallpaperDialog() {
+        _uiState.update { it.copy(isWallpaperDialogOpen = false) }
+    }
+
+    fun applyCustomWallpaper(uri: Uri, contentResolver: ContentResolver) {
+        viewModelScope.launch {
+            val path = wallpaperRepo.setCustomWallpaperFromUri(uri, contentResolver)
+            if (path != null) {
+                _uiState.update { it.copy(userMessage = "已应用自定义壁纸") }
+            } else {
+                _uiState.update { it.copy(userMessage = "导入壁纸失败，请重试") }
+            }
+        }
+    }
+
+    fun applyPresetWallpaper(presetId: String) {
+        wallpaperRepo.setPresetWallpaper(presetId)
+        _uiState.update { it.copy(userMessage = "已应用预设壁纸") }
+    }
+
+    fun resetToDefaultWallpaper() {
+        wallpaperRepo.resetToDefault()
+        _uiState.update { it.copy(userMessage = "已恢复默认壁纸") }
+    }
+
+    fun setWallpaperDimOpacity(opacity: Float) {
+        wallpaperRepo.setDimOpacity(opacity)
+    }
+
+    /**
+     * 刷新学在浙大待办事项。
+     * [silent] 为 true 时代表启动静默刷新，不主动弹出成功/失败 Snackbar。
+     */
+    fun refreshCoursesTodos(silent: Boolean = false) {
+        val studentId = secureStorage.getStudentId()
+        val password = secureStorage.getPassword()
+        if (studentId.isNullOrBlank() || password.isNullOrBlank()) {
+            if (!silent) {
+                _uiState.update {
+                    it.copy(
+                        userMessage = "未保存浙大统一身份认证凭据，请先绑定",
+                        isQuickZjuLoginDialogOpen = true
+                    )
+                }
+            }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCoursesTodoLoading = true, coursesTodoError = null) }
+            try {
+                val todos = zjuCoursesClient.fetchTodos(studentId, password)
+                val now = System.currentTimeMillis()
+                coursesTodoCache.save(todos, now)
+                _uiState.update {
+                    it.copy(
+                        coursesTodoList = todos,
+                        coursesTodoLastUpdated = now,
+                        isCoursesTodoLoading = false,
+                        coursesTodoError = null,
+                        userMessage = if (!silent) "学在浙大待办已更新（共 ${todos.size} 项）" else it.userMessage
+                    )
+                }
+            } catch (e: Exception) {
+                val msg = e.message ?: "刷新学在浙大待办失败"
+                _uiState.update {
+                    it.copy(
+                        isCoursesTodoLoading = false,
+                        coursesTodoError = msg,
+                        userMessage = if (!silent) msg else it.userMessage
+                    )
+                }
+            }
+        }
+    }
+
+    fun setQuickZjuLoginDialogOpen(isOpen: Boolean) {
+        _uiState.update { it.copy(isQuickZjuLoginDialogOpen = isOpen) }
+    }
+
+    fun saveZjuCredentialsAndSyncTodos(studentId: String, password: String) {
+        if (studentId.isBlank() || password.isBlank()) {
+            _uiState.update { it.copy(userMessage = "学号与密码不能为空") }
+            return
+        }
+        secureStorage.saveCredentials(studentId, password, remember = true)
+        _uiState.update {
+            it.copy(
+                boundStudentId = secureStorage.getMaskedStudentId(),
+                isRememberCredentials = true,
+                isQuickZjuLoginDialogOpen = false,
+                userMessage = "已保存浙大统一身份认证凭据"
+            )
+        }
+        refreshCoursesTodos(silent = false)
     }
 }
 

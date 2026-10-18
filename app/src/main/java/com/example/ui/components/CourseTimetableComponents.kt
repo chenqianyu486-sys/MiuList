@@ -68,7 +68,10 @@ import com.example.ui.theme.CourseCellOnIdle
 import com.example.ui.theme.CourseCellOnPending
 import com.example.ui.theme.CourseKhakiMetaOnIdle
 import com.example.ui.theme.CourseTintAlpha
-import com.example.ui.theme.CourseTintVivid
+import com.example.ui.theme.CardBaseCoatAlpha
+import com.example.ui.theme.CourseCellBlurRadius
+import com.example.ui.theme.CourseCellDeepFaceAlpha
+import com.example.ui.theme.cardTint
 import com.example.ui.theme.NestedFaceAlpha
 import com.example.ui.theme.TeaColor
 import com.example.ui.theme.TeaColorBorder
@@ -231,6 +234,34 @@ fun CourseTimetableCell(
     // 撞课的格子被压到半列宽，圆角跟着收一点，否则小格上的圆角会显得笨重
     val cellShape = RoundedCornerShape(if (conflicted) 6.dp else 9.dp)
 
+    // 深色档改成玻璃面，浅色档仍是实色平涂。
+    //
+    // ⚠️ **别把这件事的收益说成「换壁纸颜色不漂」**——实测不成立：
+    // 深色档原本是 100% 不透明的实色块，**壁纸对它零影响**。实测两张完全不同的壁纸
+    // （近白粉彩默认壁纸 vs 饱和珊瑚粉）下，绿格的基线主色逐字节相同，都是 (42,146,80)。
+    // 也就是说「这一格在不同壁纸上显出的深浅不一样」在改动前就不存在。
+    //
+    // 真正买到的是另外两件：
+    //   1. **摊平壁纸上大尺度的局部色差**。默认/预设壁纸都是极平滑的渐变，糊它等于
+    //      没糊，所以这个收益在预设上看不出来；但换自定义照片或有花纹的壁纸时，
+    //      格子里那片壁纸先被摊平，卡面不会跟着壁纸的花纹一块亮一块暗——这才是
+    //      用户要的「颜色显示平滑均衡」。
+    //   2. **材质归位**。这一档此前是全 App 唯一没参与玻璃语言的大色块，卡面上没有
+    //      磨砂颗粒、边缘也不做抗锯齿；挂上 hazeEffect 后两者都跟其余卡片一致。
+    //
+    // 代价有两条，都已量过：卡面各通道**变亮 3~12 级**（6% 的背光透上来），
+    // 白字对比度从 3.8:1 降到约 3.4:1。理由与底线见 [CourseCellDeepFaceAlpha]。
+    val deepFace = if (hasPending) {
+        Modifier.glassSurface(
+            shape = cellShape,
+            tint = cellBg,
+            tintAlpha = CourseCellDeepFaceAlpha,
+            blurRadius = CourseCellBlurRadius,
+        )
+    } else {
+        Modifier
+    }
+
     Card(
         modifier = modifier
             .fillMaxSize()
@@ -239,11 +270,15 @@ fun CourseTimetableCell(
             .testTag("course_slot_${course.id}_${slot.id}"),
         shape = cellShape,
         colors = CardDefaults.cardColors(
-            containerColor = cellBg
+            containerColor = if (hasPending) Color.Transparent else cellBg
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(deepFace)
+        ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -469,7 +504,9 @@ fun CourseLinkageSheet(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .glassSurface(shape = RoundedCornerShape(18.dp), tint = courseColor, tintAlpha = CourseTintAlpha, vividness = CourseTintVivid)
+                        // 和页面上那张课程卡同一套参数：同一门课在弹层里和页面上
+                        // 必须是同一个样子，不能因为背后的底不同就换一档配色。
+                        .glassSurface(shape = RoundedCornerShape(18.dp), tint = cardTint(courseColor, CourseTintAlpha), tintAlpha = CourseTintAlpha, baseCoatAlpha = CardBaseCoatAlpha)
                         .padding(14.dp)
                 ) {
                     val distinctRooms = slots
