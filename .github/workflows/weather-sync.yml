@@ -45,8 +45,13 @@ jobs:
             echo "weather.json 没有变化，无需提交。"
           fi
 
+      # 这里**不能**用 `if: env.GITEE_TOKEN != ''` 来判空：
+      # step 级的 env 不会出现在该 step 自己的 `if` 的 env context 里，
+      # 那个条件恒为 false —— 于是这一步从来没执行过（实测 gitee 上那份
+      # weather.json 一直停滞在加 aqiError 字段之前的版本）。
+      # run 里已经有 `|| true` 兜底，没配 token 时推送失败也不影响天气更新，
+      # 所以这里无条件执行即可。
       - name: Push to Gitee (optional mirror)
-        if: env.GITEE_TOKEN != ''
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
