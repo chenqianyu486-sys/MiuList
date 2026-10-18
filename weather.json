@@ -1,5 +1,5 @@
 {
-  "lastUpdated": 1792322566979,
+  "lastUpdated": 1792324861294,
   "cityName": "杭州",
   "date": "2026-10-18",
   "textDay": "阴",
@@ -7,5 +7,6 @@
   "high": 32,
   "low": 21,
   "aqi": null,
-  "aqiQuality": null
+  "aqiQuality": null,
+  "aqiError": "HTTP 403 · {\"status\":\"You do not have access to this API.\",\"status_code\":\"AP010002\"}"
 }
