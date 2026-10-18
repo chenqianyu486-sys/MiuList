@@ -74,8 +74,53 @@ class SeniverseWeatherSourceTest {
 
         assertEquals(132, weather.aqi)
         assertEquals("轻度污染", weather.aqiQuality)
-        // 132 在 EPA 表里也是「轻度污染」，但那是巧合 —— 这里钉的是「用上游的」。
+        // 132 在那张兜底表里也是「轻度污染」，但那是巧合 —— 这里钉的是「用上游的」。
         assertEquals("空气轻度污染 132", weather.airQualityLabel())
+    }
+
+    /**
+     * **当前真实的托管文件形态：只有 `aqi`，`aqiQuality` 是 null。**
+     *
+     * 空气这一项 2026-10-18 起换成了 Open-Meteo，它只给 `us_aqi`、不给中文等级，
+     * 所以同步脚本写进去的 `aqiQuality` 就是 null。于是等级**必须**由客户端
+     * 那张表算出来 —— 少了这一步，界面上会直接不显示这一段。
+     *
+     * 这条用的是线上真实拿到的形状，别把它简化成「顺手带上 quality」。
+     */
+    @Test
+    fun `没有上游等级时由本地表算出等级`() {
+        val json = """
+            {"lastUpdated":1792324861294,"cityName":"杭州","date":"2026-10-18",
+             "textDay":"阴","textNight":"多云","high":32,"low":21,
+             "aqi":90,"aqiQuality":null,"aqiError":null}
+        """.trimIndent()
+
+        val weather = source().parseToday(json, HANGZHOU)!!
+
+        assertEquals(90, weather.aqi)
+        assertNull(weather.aqiQuality)
+        assertEquals("空气良 90", weather.airQualityLabel())
+    }
+
+    /**
+     * `aqiError` 是同步脚本写下的诊断字段（空气为什么没取到）。
+     *
+     * App 侧**不认识它**（Moshi 忽略未知键），这是有意的：它是给人看的，
+     * 不该让一份诊断信息参与业务解析，更不该因此解析失败把整份天气丢掉。
+     */
+    @Test
+    fun `诊断字段不影响解析`() {
+        val json = """
+            {"date":"2026-10-18","textDay":"晴","textNight":"晴","high":26,"low":16,
+             "aqi":null,"aqiQuality":null,
+             "aqiError":"HTTP 403 · {\"status\":\"You do not have access to this API.\"}"}
+        """.trimIndent()
+
+        val weather = source().parseToday(json, HANGZHOU)
+
+        assertNotNull("空气取不到不该让天气一起作废：$json", weather)
+        assertEquals(26, weather!!.high)
+        assertNull("空气取不到就不画这一段", weather.airQualityLabel())
     }
 
     @Test

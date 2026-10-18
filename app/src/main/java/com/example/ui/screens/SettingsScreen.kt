@@ -426,8 +426,20 @@ internal val AcknowledgementsList = listOf(
     AcknowledgementInfo(
         project = "心知天气 (Seniverse)",
         contributors = "心知天气团队 (Seniverse)",
-        note = "提供实时天气与空气质量数据服务支持（GitHub Actions 定时同步静态托管）",
+        // 只说天气：空气质量那项 2026-10-18 起换成了 Open-Meteo
+        // （心知的 air/now.json 要单独开通产品权限，这把 key 没有，返回 AP010002）。
+        // 署名写多了就是把没用的数据也算进来。
+        note = "提供实时天气数据服务支持（GitHub Actions 定时同步静态托管）",
         url = "https://www.seniverse.com"
+    ),
+    AcknowledgementInfo(
+        project = "Open-Meteo",
+        contributors = "Open-Meteo 团队；空气质量由哥白尼大气监测服务（CAMS）提供",
+        // CC BY 4.0 的署名义务，必须带作者、许可协议、以及「数据可能有误」的免责。
+        // 这一条不是客气话：删掉它就是把别人的数据拿来用而不署名。
+        note = "提供空气质量（AQI）数据，按 CC BY 4.0 授权（creativecommons.org/licenses/by/4.0/）；" +
+            "数据由数值模式生成，可能与地面实测存在偏差，不作为健康决策依据",
+        url = "https://open-meteo.com"
     ),
     AcknowledgementInfo(
         project = "破晓壁纸 (PXLab)",

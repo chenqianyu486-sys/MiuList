@@ -1,9 +1,23 @@
 #!/usr/bin/env python3
 """
-从心知天气 (Seniverse) 拉取指定城市的天气与空气质量，生成静态 weather.json。
-用于 GitHub Actions 定时任务，通过 SENIVERSE_KEY 环境变量注入私钥，彻底避免将私钥打包进 App。
+生成静态 weather.json，由 GitHub Actions 定时提交，App 只拉这个文件。
 
-## 为什么空气失败必须留下痕迹
+**两个数据源，各管一半：**
+
+| 字段 | 来源 | 为什么 |
+|---|---|---|
+| 天气（温度、天气现象） | 心知天气 v3 `weather/daily.json` | 地面观测，用户更信 |
+| 空气质量（AQI） | Open-Meteo `air-quality` | **心知那把 key 没有空气接口权限** |
+
+空气质量为什么不用心知：官方错误码表里 `AP010002` = 「没有权限访问这个 API 接口」，
+而 V3 手册把「天气类」和「空气类」列成**两个并列的产品分类** ——
+只开通天气类的 key 调 `air/now.json` 一律 403。实测就是这个码。
+Open-Meteo 的空气端点不要 key、不要注册，配额也不绑定账号，
+而且它给的 `us_aqi` 正好就是客户端那张等级表（国标 HJ 633-2012 / EPA 六档一致）的口径。
+
+脚本跑在 GitHub Actions 上（美国机房），访问 Open-Meteo 没有可达性问题。
+
+## 空气失败必须留下痕迹
 
 上一版把空气请求整个 except 掉、只往 stderr 打一行，然后照样把 `aqi: null`
 写进 weather.json 提交上去 —— 于是 Actions 连续十次运行 conclusion 全是
@@ -13,7 +27,8 @@ App 里发现城市名旁边少了一段。
 所以现在两件事是硬要求：
 
 1. **HTTP 错误要读正文。** urllib 的 `str(e)` 只有 `HTTP Error 4xx: ...`，
-   而服务端早把原因写在正文里了。只报状态码，等于把答案扔掉。
+   而服务端早把原因写在正文里了。只报状态码，等于把答案扔掉
+   （权限不足 / 参数写错 / 额度用尽，三种在日志里长得一模一样）。
 2. **失败原因写进 weather.json 的 `aqiError`。** 写进日志还不够 ——
    日志要翻 Actions 页面，而这个文件 `open` 一下就能看到。
 """
@@ -28,6 +43,16 @@ import urllib.error
 SENIVERSE_KEY = os.environ.get("SENIVERSE_KEY")
 LOCATION = os.environ.get("WEATHER_LOCATION", "hangzhou")
 CITY_NAME = os.environ.get("WEATHER_CITY_NAME", "杭州")
+
+# 空气端点只认经纬度，不认地名。
+# **必须与客户端 WeatherLocation.DEFAULT 一致**（30.2741, 120.1551）：
+# 天气查杭州、空气查别处，界面上会并排显示两个地方的数据。
+LATITUDE = float(os.environ.get("WEATHER_LATITUDE", "30.2741"))
+LONGITUDE = float(os.environ.get("WEATHER_LONGITUDE", "120.1551"))
+
+# 与客户端 OpenMeteoWeatherSource.TIMEZONE 一致。
+# `current` 本身不分日，但两端时区不一致时排查问题会很难受。
+TIMEZONE = "Asia/Shanghai"
 
 
 class FetchError(Exception):
@@ -66,32 +91,39 @@ def parse_int(v):
 
 def fetch_air_quality():
     """
-    拉实时空气质量。**返回 (aqi, quality, error)**，三者最多有一个非空。
+    从 Open-Meteo 取**当前**空气质量。**返回 (aqi, error)**，最多一个非空。
 
     失败一律降级成 error 字符串而不是抛异常：空气不是天气的前提，
     它挂了不应该让整份天气停止更新 —— 但**必须留下痕迹**。
+
+    ## 故意只取数值、不写等级
+
+    上游没有中文等级，`aqiQuality` 就留 null，让客户端
+    `DailyWeather.airQualityLabel()` 用 `describeAqi()` 那张表算。
+    在这里再实现一遍同样的分段，等于把同一张表抄成两份、等着它们慢慢漂移。
     """
     air_url = (
-        f"https://api.seniverse.com/v3/air/now.json?"
-        f"key={urllib.parse.quote(SENIVERSE_KEY)}&location={urllib.parse.quote(LOCATION)}"
-        f"&language=zh-Hans&scope=city"
+        f"https://air-quality-api.open-meteo.com/v1/air-quality?"
+        f"latitude={LATITUDE}&longitude={LONGITUDE}"
+        f"&current=us_aqi&timezone={urllib.parse.quote(TIMEZONE)}"
     )
-    print(f"正在拉取 {LOCATION} 的空气质量实况...")
+    print(f"正在拉取 {LATITUDE},{LONGITUDE} 的空气质量（Open-Meteo）...")
     try:
         air_data = fetch_json(air_url)
     except FetchError as e:
-        return None, None, str(e)
+        return None, str(e)
 
-    # 下面这三种「拿到了但不是想要的东西」上一版是静默跳过的，
-    # 现在一律当成失败报出来 —— 它们和「请求失败」一样会让 App 上少一段。
-    results = air_data.get("results") or []
-    if not results:
-        return None, None, f"返回里没有 results：{json.dumps(air_data, ensure_ascii=False)[:300]}"
-    city = (results[0].get("air") or {}).get("city") or {}
-    aqi = parse_int(city.get("aqi"))
+    # 下面这三种「拿到了但不是想要的东西」一律当成失败报出来 ——
+    # 它们和「请求失败」一样会让 App 上少一段。
+    if air_data.get("error"):
+        return None, f"接口报错：{air_data.get('reason')}"
+    current = air_data.get("current")
+    if not isinstance(current, dict):
+        return None, f"返回里没有 current：{json.dumps(air_data, ensure_ascii=False)[:300]}"
+    aqi = parse_int(current.get("us_aqi"))
     if aqi is None:
-        return None, None, f"结果里没有 aqi：{json.dumps(results[0], ensure_ascii=False)[:300]}"
-    return aqi, city.get("quality"), None
+        return None, f"current 里没有 us_aqi：{json.dumps(current, ensure_ascii=False)[:300]}"
+    return aqi, None
 
 
 def main():
@@ -115,8 +147,8 @@ def main():
         print(f"Error: 逐日天气拉取失败：{e}", file=sys.stderr)
         sys.exit(1)
 
-    # 2. 抓取实时空气质量 (心知天气 v3 air/now.json) —— 失败只降级、留痕
-    aqi, aqi_quality, aqi_error = fetch_air_quality()
+    # 2. 抓取空气质量 (Open-Meteo) —— 失败只降级、留痕
+    aqi, aqi_error = fetch_air_quality()
     if aqi_error:
         print(f"警告：空气质量拉取失败（天气照常更新）：{aqi_error}", file=sys.stderr)
 
@@ -150,7 +182,8 @@ def main():
         "high": high,
         "low": low,
         "aqi": aqi,
-        "aqiQuality": aqi_quality,
+        # 留 null：Open-Meteo 不给中文等级，由客户端那张表算，别在这儿抄一份。
+        "aqiQuality": None,
         "aqiError": aqi_error
     }
 

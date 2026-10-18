@@ -11,7 +11,7 @@ import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
 /**
- * 静态托管的心知天气 (Seniverse) 数据源。
+ * 静态托管的天气数据源。
  *
  * ## 为什么不直连心知天气
  *
@@ -20,6 +20,17 @@ import java.util.concurrent.TimeUnit
  * 1. 由 GitHub Actions 定时任务在云端读取环境变量 `SENIVERSE_KEY`，拉取心知天气后更新 `weather.json`。
  * 2. 客户端只拉取公开的 `weather.json`（支持 Gitee 与 GitHub 多镜像回退）。
  * 3. 客户端**没有任何密钥**，零安全风险、零被刷配额风险。
+ *
+ * ## 天气来自心知，空气来自 Open-Meteo
+ *
+ * `weather.json` 是**两个上游拼**的：天气本体走心知，空气质量走 Open-Meteo。
+ *
+ * 原因是心知把「天气类」和「空气类」做成两个并列的产品，
+ * 只开通天气类的 key 调 `air/now.json` 会返回 `AP010002`（没有权限访问这个 API 接口）。
+ * Open-Meteo 的空气端点不要 key，配额也不绑定账号。
+ *
+ * 所以这个类名里的 Seniverse 只对**天气**成立；空气是同一份文件里的另一个字段，
+ * 它的口径与上游等级的处理见 [DailyWeather.aqi] 与 [DailyWeather.airQualityLabel]。
  */
 class SeniverseWeatherSource(
     private val client: OkHttpClient = defaultClient(),
@@ -79,9 +90,10 @@ class SeniverseWeatherSource(
             high = dto.high,
             low = dto.low,
             aqi = dto.aqi,
-            // **等级要连着数值一起用。** 托管文件里的 aqi 是心知口径，
-            // 拿 describeAqi 那张 EPA 表去解释它，等于凭空造一个等级
-            // （同一片空气两边能差一整档）。心知自己给的 quality 才是配套的。
+            // **有上游等级就用上游那份。** 当前托管文件里这个字段是 null
+            // （空气来自 Open-Meteo，它只给 us_aqi、不给中文等级），
+            // 于是走 describeAqi 兜底。字段本身留着：换回心知时它就有值了，
+            // 而那时它比本地那张表更权威（等级和数值出自同一份数据）。
             aqiQuality = dto.aqiQuality?.takeIf { it.isNotBlank() }
         )
     }
