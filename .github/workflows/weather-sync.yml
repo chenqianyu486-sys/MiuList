@@ -55,5 +55,6 @@ jobs:
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
-          git push https://zjuchenqianyu:${GITEE_TOKEN}@gitee.com/zjuchenqianyu/MiuList.git main || true
+          git remote set-url gitee "https://zjuchenqianyu:${GITEE_TOKEN}@gitee.com/zjuchenqianyu/MiuList.git"
+          git push gitee main
 
