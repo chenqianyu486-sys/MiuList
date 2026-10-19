@@ -5,7 +5,7 @@ import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.time.LocalDate
+import com.example.data.calendar.AppZone
 
 /**
  * 天气的**决策层**，也是唯一决定「界面上该显示什么」的地方。
@@ -42,8 +42,13 @@ class WeatherService(
     private val cache: WeatherCache,
     /** 查询地点。坐标接口不认地名，所以这里是一个「名字 + 坐标」的成对值。 */
     private val location: WeatherLocation = WeatherLocation.DEFAULT,
-    /** 单测注入：固定「今天」，避免跨天时断言对不上。 */
-    private val today: () -> Long = { LocalDate.now().toEpochDay() },
+    /**
+     * 单测注入：固定「今天」，避免跨天时断言对不上。
+     *
+     * 默认走 [AppZone]（北京时间）：天气是**按天**成立的事实，判「是不是今天」
+     * 必须和课表、待办用同一个时区，否则跨时区时缓存会整天判错。
+     */
+    private val today: () -> Long = { AppZone.todayEpochDay() },
     /** 单测注入：固定当前时刻，20 分钟窗口才测得准。 */
     private val nowMillis: () -> Long = { System.currentTimeMillis() }
 ) {

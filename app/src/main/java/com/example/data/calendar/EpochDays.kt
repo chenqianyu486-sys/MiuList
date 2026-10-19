@@ -21,7 +21,13 @@ object EpochDays {
     /** 该日期所在周的周一（epochDay）。 */
     fun mondayOf(epochDay: Long): Long = epochDay - (dayOfWeek1To7(epochDay) - 1L)
 
-    fun today(): Long = LocalDate.now().toEpochDay()
+    /**
+     * 北京的今天。
+     *
+     * 时区**钉死**在 [AppZone.ZONE]：校历周次、待办分组、天气缓存都以它为「今天」，
+     * 跟着设备走会让 GMT 设备在北京凌晨把昨天当成今天，整套周次判定跟着偏一天。
+     */
+    fun today(): Long = AppZone.todayEpochDay()
 
     fun parse(text: String): Long? =
         runCatching { LocalDate.parse(text).toEpochDay() }.getOrNull()

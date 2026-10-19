@@ -61,6 +61,7 @@ import com.example.ui.theme.LocalCardRevealProgress
 import com.example.ui.theme.StarInk
 import com.example.ui.theme.controlSurface
 import com.example.ui.viewmodel.MainUiState
+import com.example.data.calendar.AppZone
 import com.example.ui.viewmodel.TaskGroupingMode
 import com.example.ui.viewmodel.TaskStatusFilter
 import java.util.Calendar
@@ -228,8 +229,10 @@ private fun urgencyBucketOf(task: TaskEntity, now: Long): String {
     val diff = task.dueDateTimestamp - now
     if (diff < 0) return "已逾期"
 
-    val calNow = Calendar.getInstance()
-    val calDue = Calendar.getInstance().apply { timeInMillis = task.dueDateTimestamp }
+    // 分组用的「今天」必须是北京的那一天，否则 GMT 设备在北京凌晨会把昨天的截止
+    // 归进「今天截止」，已逾期的反而留在「明天」组里。
+    val calNow = AppZone.calendar()
+    val calDue = AppZone.calendar(task.dueDateTimestamp)
     val isSameDay = calNow.get(Calendar.YEAR) == calDue.get(Calendar.YEAR) &&
         calNow.get(Calendar.DAY_OF_YEAR) == calDue.get(Calendar.DAY_OF_YEAR)
 

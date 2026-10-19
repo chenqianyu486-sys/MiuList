@@ -1,13 +1,12 @@
 package com.example.data.source.zju
 
+import com.example.data.calendar.AppZone
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
 import java.time.temporal.ChronoUnit
-import java.util.Date
 import java.util.Locale
 
 /**
@@ -42,7 +41,6 @@ data class CoursesTodoItem(
     }
 
     companion object {
-        private val ZONE_SHANGHAI = ZoneId.of("Asia/Shanghai")
 
         fun fromJson(obj: JSONObject): CoursesTodoItem {
             return CoursesTodoItem(
@@ -81,10 +79,14 @@ data class CoursesTodoItem(
             return runCatching {
                 Instant.parse(raw).toEpochMilli()
             }.getOrElse {
-                // 兼容带空格或不带时区的格式
+                // 兼容带空格或不带时区的格式。
+                // 这种串是**浙大服务器给的墙上时间**（没有时区标记），所以按北京解析：
+                // 按设备时区解析会让 GMT 设备上的截止时刻整整偏 8 小时，
+                // 连带「已逾期 / 今天截止」全都判错。
                 runCatching {
-                    val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault())
-                    sdf.parse(raw)?.time
+                    SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault())
+                        .apply { timeZone = AppZone.TIME_ZONE }
+                        .parse(raw)?.time
                 }.getOrNull()
             }
         }
@@ -94,15 +96,14 @@ data class CoursesTodoItem(
                 return Triple("无截止", "无截止", false)
             }
             val nowMs = System.currentTimeMillis()
-            val dueDate = Instant.ofEpochMilli(dueTimestamp).atZone(ZONE_SHANGHAI).toLocalDate()
-            val nowDate = LocalDate.now(ZONE_SHANGHAI)
+            val dueDate = Instant.ofEpochMilli(dueTimestamp).atZone(AppZone.ZONE).toLocalDate()
+            val nowDate = LocalDate.now(AppZone.ZONE)
             val daysDiff = ChronoUnit.DAYS.between(nowDate, dueDate)
 
-            val timeSdf = SimpleDateFormat("HH:mm", Locale.getDefault())
-            val timeStr = timeSdf.format(Date(dueTimestamp))
-
-            val monthDaySdf = SimpleDateFormat("M月d日 HH:mm", Locale.getDefault())
-            val monthDayStr = monthDaySdf.format(Date(dueTimestamp))
+            // 展示文本必须和上面的日期判定用**同一个**时区：日期按北京算、时间按设备时区
+            // 格式化的话，「今天 23:59」里的那个 23:59 会是另一个钟面读出来的。
+            val timeStr = AppZone.format("HH:mm", dueTimestamp)
+            val monthDayStr = AppZone.format("M月d日 HH:mm", dueTimestamp)
 
             return when {
                 dueTimestamp < nowMs -> {

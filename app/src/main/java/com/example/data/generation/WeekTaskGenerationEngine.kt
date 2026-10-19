@@ -1,5 +1,6 @@
 package com.example.data.generation
 
+import com.example.data.calendar.AppZone
 import com.example.data.calendar.EpochDays
 import com.example.data.local.CourseEntity
 import com.example.data.local.CourseSlotEntity
@@ -87,7 +88,10 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
     }
 
     suspend fun build(input: Input, hasExisting: ExistingChecker): List<TaskEntity> {
-        val zone = ZoneId.systemDefault()
+        // 时区钉死成北京时间：待办的「开课时刻 / 截止时刻」都是浙大的墙上时间。
+        // 用系统时区会让 GMT 设备上的预习截止整体偏 8 小时 —— 界面上写着 09:55，
+        // 算出来却已经是前一天的 17:55，一条刚生成就逾期的待办。
+        val zone = AppZone.ZONE
         val out = mutableListOf<TaskEntity>()
 
         for (scope in input.scopes) {

@@ -46,6 +46,7 @@ import com.example.ui.theme.cardTint
 import com.example.ui.theme.NestedFaceAlpha
 import com.example.ui.theme.TaskCheckIdleFill
 import com.example.ui.theme.accentOnCourse
+import com.example.data.calendar.AppZone
 import com.example.ui.theme.glassSurface
 import com.example.ui.theme.readableOn
 import java.util.Calendar
@@ -297,8 +298,10 @@ fun getRelativeDueDescription(dueTimestamp: Long): String {
     val now = System.currentTimeMillis()
     val diff = dueTimestamp - now
 
-    val nowCal = Calendar.getInstance()
-    val dueCal = Calendar.getInstance().apply { timeInMillis = dueTimestamp }
+    // 「今天 / 明天」是**北京的**今天与明天。跟着设备时区走，
+    // GMT 设备在 北京 00:30 会把昨天当成今天，写出「今天 23:59」——而那条其实已经过去一天了。
+    val nowCal = AppZone.calendar()
+    val dueCal = AppZone.calendar(dueTimestamp)
 
     val isSameDay = nowCal.get(Calendar.YEAR) == dueCal.get(Calendar.YEAR) &&
             nowCal.get(Calendar.DAY_OF_YEAR) == dueCal.get(Calendar.DAY_OF_YEAR)

@@ -1,12 +1,12 @@
 package com.example.ui.components
 
+import com.example.data.calendar.AppZone
 import com.example.data.local.CourseSlotEntity
 import com.example.data.timetable.PeriodSlot
 import com.example.data.timetable.PeriodTable
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.util.Calendar
-import java.util.TimeZone
 
 class PeriodUtilsTest {
 
@@ -24,7 +24,7 @@ class PeriodUtilsTest {
     )
 
     private fun makeCalendar(year: Int = 2026, month: Int = 9, day: Int = 15): Calendar {
-        return Calendar.getInstance(TimeZone.getTimeZone(ScheduleZone)).apply {
+        return AppZone.calendar().apply {
             set(Calendar.YEAR, year)
             set(Calendar.MONTH, month)
             set(Calendar.DAY_OF_MONTH, day)

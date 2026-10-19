@@ -1,5 +1,6 @@
 package com.example.data.source.weather
 
+import com.example.data.calendar.AppZone
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -7,7 +8,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
-import java.time.LocalDate
 
 /**
  * 真联网冒烟测试：拿**今天的上游真实响应**跑一遍解析与判定。
@@ -84,7 +84,7 @@ class OpenMeteoLiveTest {
         // **核心断言**：时区没生效的话，这里会是明天。
         assertEquals(
             "取到的不是今天 —— timezone 很可能没生效（东八区会整体错一天）",
-            LocalDate.now().toEpochDay(),
+            AppZone.todayEpochDay(),
             w.epochDay
         )
         assertTrue("高低温全空，字段名可能变了", w.high != null || w.low != null)

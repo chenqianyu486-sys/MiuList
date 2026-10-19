@@ -71,6 +71,7 @@ import com.example.ui.components.WeatherBlock
 import com.example.ui.components.formatPeriodRange
 import com.example.ui.components.todayCalendar
 import com.example.ui.components.todayStatusLabel
+import com.example.data.calendar.AppZone
 import com.example.data.calendar.EpochDays
 import com.example.data.calendar.ScheduleResolver
 import com.example.ui.components.parseColor
@@ -91,10 +92,6 @@ import com.example.ui.theme.WallpaperCardFaceTint
 import com.example.ui.theme.WallpaperCardFaceAlpha
 import com.example.ui.theme.LocalCardRevealProgress
 import com.example.ui.viewmodel.MainUiState
-import java.text.SimpleDateFormat
-import java.time.LocalTime
-import java.util.Calendar
-import java.util.Date
 import java.util.Locale
 
 private val HeroCardHeight = 140.dp
@@ -115,8 +112,9 @@ fun DashboardScreen(
 ) {
     val todayCalendar = remember { todayCalendar() }
     val todayDateStr = remember {
-        val sdf = SimpleDateFormat("yyyy年M月d日 EEEE", Locale.CHINESE)
-        sdf.format(Date())
+        // 顶部的「2026年10月19日 星期一」是**北京**的日期。
+        // 无参 SimpleDateFormat 走设备时区，GMT 设备在北京凌晨会显示昨天的星期几。
+        AppZone.format("yyyy年M月d日 EEEE", System.currentTimeMillis(), Locale.CHINESE)
     }
 
     // 今日课程：判定权交给 resolver（开课周次 / 停课 / 补课都在它里面）。
@@ -279,7 +277,7 @@ fun DashboardScreen(
 
                             WeatherBlock(
                                 state = state.weather,
-                                hourOfDay = LocalTime.now().hour
+                                hourOfDay = AppZone.hourOfDayNow()
                             )
                         }
                     }
@@ -921,10 +919,7 @@ private fun formatLastUpdatedTime(timestamp: Long): String {
     return when {
         minutes < 1 -> "刚刚更新"
         minutes < 60 -> "${minutes}分钟前"
-        else -> {
-            val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
-            "${sdf.format(Date(timestamp))} 更新"
-        }
+        else -> "${AppZone.format("HH:mm", timestamp)} 更新"
     }
 }
 

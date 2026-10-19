@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.data.calendar.AppZone
 import com.example.data.local.CourseEntity
 import com.example.data.local.TaskEntity
 import com.example.data.model.CustomTaskType
@@ -171,7 +172,7 @@ fun TaskEditDialog(
             initialTask?.dueDateTimestamp?.takeIf { initialHasDue } ?: defaultDueTimestamp()
         )
     }
-    val dueCal = remember(dueMillis) { Calendar.getInstance().apply { timeInMillis = dueMillis } }
+    val dueCal = remember(dueMillis) { AppZone.calendar(dueMillis) }
 
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
@@ -364,8 +365,10 @@ fun TaskEditDialog(
             Button(
                 onClick = {
                     val course = selectedCourse
-                    val cal = Calendar.getInstance().apply { timeInMillis = dueMillis }
-                    val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+                    val cal = AppZone.calendar(dueMillis)
+                    val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).apply {
+                        timeZone = AppZone.TIME_ZONE
+                    }
                     val typeOption = TaskTypes.resolve(selectedTypeKey, customTypes)
                     val resolvedTitle = title.ifBlank {
                         course?.let { autoTitle(selectedTypeKey, it) }
@@ -439,8 +442,7 @@ fun TaskEditDialog(
                 TextButton(onClick = {
                     datePickerState.selectedDateMillis?.let { utcMillis ->
                         val utc = Calendar.getInstance(UTC).apply { timeInMillis = utcMillis }
-                        dueMillis = Calendar.getInstance().apply {
-                            timeInMillis = dueMillis
+                        dueMillis = AppZone.calendar(dueMillis).apply {
                             set(Calendar.YEAR, utc.get(Calendar.YEAR))
                             set(Calendar.MONTH, utc.get(Calendar.MONTH))
                             set(Calendar.DAY_OF_MONTH, utc.get(Calendar.DAY_OF_MONTH))
@@ -521,8 +523,7 @@ fun TaskEditDialog(
                         Spacer(modifier = Modifier.width(4.dp))
                         TextButton(
                             onClick = {
-                                dueMillis = Calendar.getInstance().apply {
-                                    timeInMillis = dueMillis
+                                dueMillis = AppZone.calendar(dueMillis).apply {
                                     set(Calendar.HOUR_OF_DAY, timePickerState.hour)
                                     set(Calendar.MINUTE, timePickerState.minute)
                                     set(Calendar.SECOND, 0)
@@ -539,6 +540,15 @@ fun TaskEditDialog(
     }
 }
 
+/**
+ * Material3 `DatePickerState.selectedDateMillis` 的约定：**UTC 零点**。
+ *
+ * 所以「造初值」和「读回选中的值」这两处**必须**用 UTC，
+ * 换成北京时区会整体偏一天（东八区下偏 8 小时）。
+ *
+ * 但它只是个中间语言，不是墙上的截止时间 —— 真正写进 [dueMillis] 的那一侧
+ * 要用 [AppZone]，否则用户挑了 10/20，存进去的是 10/20 的某个钟面时刻。
+ */
 private val UTC: TimeZone = TimeZone.getTimeZone("UTC")
 
 /**
@@ -706,8 +716,8 @@ private fun autoTitle(typeKey: String, course: CourseEntity): String = when (typ
     else -> "${course.name} 待办"
 }
 
-/** 新建待办时的默认截止：3 天后的 23:59。 */
-private fun defaultDueTimestamp(): Long = Calendar.getInstance().apply {
+/** 新建待办时的默认截止：3 天后的 23:59（北京时间）。 */
+private fun defaultDueTimestamp(): Long = AppZone.calendar().apply {
     add(Calendar.DAY_OF_YEAR, DEFAULT_DUE_DAYS)
     set(Calendar.HOUR_OF_DAY, DEFAULT_DUE_HOUR)
     set(Calendar.MINUTE, DEFAULT_DUE_MINUTE)

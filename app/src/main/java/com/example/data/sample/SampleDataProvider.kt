@@ -1,5 +1,6 @@
 package com.example.data.sample
 
+import com.example.data.calendar.AppZone
 import com.example.data.local.CourseEntity
 import com.example.data.local.CourseSlotEntity
 import com.example.data.local.TaskEntity
@@ -7,7 +8,6 @@ import com.example.data.model.TaskStar
 import com.example.data.model.TaskType
 import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Date
 import java.util.Locale
 
 object SampleDataProvider {
@@ -139,12 +139,17 @@ object SampleDataProvider {
     )
 
     fun createSampleTasks(nowMillis: Long = System.currentTimeMillis()): List<TaskEntity> {
-        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-        val dateOnlySdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        // 演示数据的「今天 / 明天 / 23:59」要和课表、待办用同一个时区（AppZone），
+        // 否则跨时区设备上会造出「周一 08:00 上课、却挂在昨天」的假待办。
+        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).apply {
+            timeZone = AppZone.TIME_ZONE
+        }
+        val dateOnlySdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
+            timeZone = AppZone.TIME_ZONE
+        }
 
         fun makeTime(daysOffset: Int, hour: Int, minute: Int): Pair<Long, String> {
-            val c = Calendar.getInstance().apply {
-                timeInMillis = nowMillis
+            val c = AppZone.calendar(nowMillis).apply {
                 add(Calendar.DAY_OF_YEAR, daysOffset)
                 set(Calendar.HOUR_OF_DAY, hour)
                 set(Calendar.MINUTE, minute)
@@ -154,7 +159,7 @@ object SampleDataProvider {
             return Pair(c.timeInMillis, sdf.format(c.time))
         }
 
-        val todayDateStr = dateOnlySdf.format(Date(nowMillis))
+        val todayDateStr = dateOnlySdf.format(AppZone.calendar(nowMillis).time)
         val d0 = makeTime(0, 23, 59)
         val d1 = makeTime(1, 23, 59)
         val d2 = makeTime(2, 23, 59)

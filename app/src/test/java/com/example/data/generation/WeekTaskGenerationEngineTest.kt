@@ -1,5 +1,6 @@
 package com.example.data.generation
 
+import com.example.data.calendar.AppZone
 import com.example.data.local.CourseEntity
 import com.example.data.local.CourseSlotEntity
 import com.example.data.local.TaskEntity
@@ -11,7 +12,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
@@ -24,7 +24,10 @@ import java.time.format.DateTimeFormatter
  */
 class WeekTaskGenerationEngineTest {
 
-    private val zone = ZoneId.systemDefault()
+    // 期望值必须用**引擎同一个**时区算，不能用 systemDefault()：
+    // 引擎按北京时间算开课/截止时刻，测试按设备时区算期望，跨时区环境下
+    // 这条测试会因为「测试写错了」而不是「引擎写错了」而红，那是比没有测试更坏的结果。
+    private val zone = AppZone.ZONE
     private val periodTable = PeriodTable.ZJU
 
     /** 2026-09-07 是周一，正好当第 1 周的起点。 */

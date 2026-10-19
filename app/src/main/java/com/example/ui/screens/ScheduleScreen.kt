@@ -1107,8 +1107,8 @@ private fun buildDayGroups(
     weeksBySlotId: Map<Long, Set<Int>>
 ): List<ScheduleDayGroup> {
     val groups = ArrayList<ScheduleDayGroup>(EXTRA_DAY_GROUPS + 1)
-    // 「今天」的锚点必须是 Asia/Shanghai 的今天：设备在别的时区时，
-    // 用系统时区会在北京 00:30 之前把前一天当成今天（见 ScheduleZone）。
+    // 「今天」的锚点必须是北京（AppZone）的今天：设备在别的时区时，
+    // 用系统时区会在北京 00:30 之前把前一天当成今天。
     val today = todayCalendar()
     var extra = 0
     var offset = 0

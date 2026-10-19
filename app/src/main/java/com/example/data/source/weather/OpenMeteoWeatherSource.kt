@@ -1,5 +1,6 @@
 package com.example.data.source.weather
 
+import com.example.data.calendar.AppZone
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
@@ -210,8 +211,17 @@ class OpenMeteoWeatherSource(
         /** 空气质量是**另一个端点**，不是 forecast 的一个参数。 */
         const val AIR_QUALITY_BASE_URL = "https://air-quality-api.open-meteo.com"
 
-        /** 固定按东八区切日界线。这个 App 只服务国内，写死比让用户选更省事。 */
-        const val TIMEZONE = "Asia/Shanghai"
+        /**
+         * 告诉接口按哪条日界线切 `daily` 的日期。
+         *
+         * 取 [AppZone.ZONE] 而不是再写一遍字面量：这是**唯一一处**真正决定
+         * 「接口返回的那一天」是哪一天的参数，而 [WeatherService] 又拿
+         * [AppZone.todayEpochDay] 判它是不是今天。两边一旦不是同一个时区，
+         * 天气就会整整偏一天 —— 而界面看不出任何异常。
+         *
+         * 不能留在 `const`：要从 [AppZone] 取值，而那不是编译期常量。
+         */
+        val TIMEZONE: String = AppZone.ZONE.id
 
         /** 界面上只用到「今天什么天 + 最高最低温」，其余变量一律不取。 */
         const val DAILY_VARIABLES = "weather_code,temperature_2m_max,temperature_2m_min"

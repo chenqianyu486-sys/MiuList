@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.calendar.AppZone
 import com.example.data.source.zju.ZjuFailureKind
 import com.example.data.sync.SyncFailure
 import com.example.ui.theme.AlertRedText
@@ -100,7 +101,12 @@ fun CloudAccountDialog(
         ?: zjuTermOptions.firstOrNull { it.term == 0 }
         ?: zjuTermOptions.firstOrNull()
 
-    val timeFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
+    // 同步时间是给人看的墙上时间，钉北京时区（见 AppZone）。
+    val timeFormat = remember {
+        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).apply {
+            timeZone = AppZone.TIME_ZONE
+        }
+    }
 
     GlassOverlayHost(
         onDismissRequest = onDismiss,
