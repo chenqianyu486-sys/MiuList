@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
+import android.util.Log
 import com.example.data.model.WallpaperConfig
 import com.example.data.model.WallpaperPresets
 import com.example.data.model.WallpaperType
@@ -55,11 +56,19 @@ class WallpaperRepository(
             type
         }
 
+        // 自定义照片默认 0.5 柔焦：照片细节退成颜色，玻璃后面的字更干净；
+        // 预设是平滑渐变，不需要柔焦。用户可以在壁纸设置里自己调。
+        val softFocus = prefs.getFloat(
+            KEY_SOFT_FOCUS,
+            if (finalType == WallpaperType.CUSTOM) 0.5f else 0f
+        )
+
         return WallpaperConfig(
             type = finalType,
             presetId = presetId,
             customPath = validCustomPath,
-            dimOpacity = dimOpacity
+            dimOpacity = dimOpacity,
+            softFocus = softFocus.coerceIn(0f, 1f)
         )
     }
 
@@ -69,6 +78,7 @@ class WallpaperRepository(
             .putString(KEY_PRESET_ID, config.presetId)
             .putString(KEY_CUSTOM_PATH, config.customPath)
             .putFloat(KEY_DIM_OPACITY, config.dimOpacity)
+            .putFloat(KEY_SOFT_FOCUS, config.softFocus)
             .apply()
         _wallpaperConfig.value = config
     }
@@ -79,19 +89,29 @@ class WallpaperRepository(
      * @return 成功落盘后的绝对文件路径，失败返回 null
      */
     suspend fun setCustomWallpaperFromUri(uri: Uri, resolver: ContentResolver): String? = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             val dir = File(context.filesDir, "wallpapers").apply { mkdirs() }
             val targetFile = File(dir, "custom_wallpaper_${System.currentTimeMillis()}.jpg")
 
             // 1. 读取边界信息，防止大图解码 OOM
             val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            resolver.openInputStream(uri)?.use { stream ->
+            // 空判只能问「流有没有打开」，不能问「解码有没有返回 bitmap」：
+            // inJustDecodeBounds 模式下 decodeStream 按约定只填 outWidth/outHeight 并返回 null，
+            // 把 ?: 挂在解码结果上，这一步会让每一次导入都直接判失败。
+            val boundsStream = resolver.openInputStream(uri) ?: run {
+                Log.w(TAG, "导入自定义壁纸失败：打不开图片流 $uri")
+                return@withContext null
+            }
+            boundsStream.use { stream ->
                 BitmapFactory.decodeStream(stream, null, boundsOptions)
-            } ?: return@runCatching null
+            }
 
             val srcWidth = boundsOptions.outWidth
             val srcHeight = boundsOptions.outHeight
-            if (srcWidth <= 0 || srcHeight <= 0) return@runCatching null
+            if (srcWidth <= 0 || srcHeight <= 0) {
+                Log.w(TAG, "导入自定义壁纸失败：读不到图片尺寸 (${srcWidth}x$srcHeight)")
+                return@withContext null
+            }
 
             val maxDimension = 2560
             var inSampleSize = 1
@@ -129,7 +149,10 @@ class WallpaperRepository(
 
             val decodedBitmap = resolver.openInputStream(uri)?.use { stream ->
                 BitmapFactory.decodeStream(stream, null, decodeOptions)
-            } ?: return@runCatching null
+            } ?: run {
+                Log.w(TAG, "导入自定义壁纸失败：图片解码失败")
+                return@withContext null
+            }
 
             // 4. 处理旋转
             val finalBitmap = if (rotationDegrees != 0f) {
@@ -146,22 +169,37 @@ class WallpaperRepository(
             }
 
             // 5. 保存到目标文件
-            FileOutputStream(targetFile).use { out ->
+            val compressed = FileOutputStream(targetFile).use { out ->
                 finalBitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
             }
             finalBitmap.recycle()
+            if (!compressed) {
+                // compress 失败不抛异常，只回 false；不检查的话会写出一个 0 字节文件，
+                // 然后对外报「已应用」，但壁纸层 decodeFile 拿到的是 null。
+                Log.w(TAG, "导入自定义壁纸失败：JPEG 压缩失败")
+                targetFile.delete()
+                return@withContext null
+            }
 
             // 6. 清理旧自定义壁纸文件（保留最新一份）
             cleanUpOldWallpaperFiles(dir, targetFile)
 
             val absolutePath = targetFile.absolutePath
-            val newConfig = _wallpaperConfig.value.copy(
+            val current = _wallpaperConfig.value
+            val newConfig = current.copy(
                 type = WallpaperType.CUSTOM,
-                customPath = absolutePath
+                customPath = absolutePath,
+                // 新照片先给一个中等柔焦；继续换照片时保留用户上次调好的值。
+                softFocus = if (current.type == WallpaperType.CUSTOM) current.softFocus else 0.5f
             )
             persistConfig(newConfig)
             absolutePath
-        }.getOrNull()
+        } catch (t: Throwable) {
+            // 别再 runCatching 静默吞掉：导入失败过一次，界面上只有一句「请重试」，
+            // 没有日志就只能靠猜是哪一步炸的。
+            Log.w(TAG, "导入自定义壁纸失败", t)
+            null
+        }
     }
 
     /**
@@ -170,7 +208,8 @@ class WallpaperRepository(
     fun setPresetWallpaper(presetId: String) {
         val newConfig = _wallpaperConfig.value.copy(
             type = WallpaperType.PRESET,
-            presetId = presetId
+            presetId = presetId,
+            softFocus = 0f
         )
         persistConfig(newConfig)
     }
@@ -182,7 +221,8 @@ class WallpaperRepository(
         val newConfig = _wallpaperConfig.value.copy(
             type = WallpaperType.DEFAULT,
             presetId = WallpaperPresets.DEFAULT.id,
-            dimOpacity = 0f
+            dimOpacity = 0f,
+            softFocus = 0f
         )
         persistConfig(newConfig)
     }
@@ -193,6 +233,13 @@ class WallpaperRepository(
     fun setDimOpacity(opacity: Float) {
         val clamped = opacity.coerceIn(0f, 0.5f)
         val newConfig = _wallpaperConfig.value.copy(dimOpacity = clamped)
+        persistConfig(newConfig)
+    }
+
+    /** 背景柔焦（0f ~ 1f）。只影响自定义照片，预设壁纸保持原样。 */
+    fun setSoftFocus(value: Float) {
+        val clamped = value.coerceIn(0f, 1f)
+        val newConfig = _wallpaperConfig.value.copy(softFocus = clamped)
         persistConfig(newConfig)
     }
 
@@ -207,10 +254,12 @@ class WallpaperRepository(
     }
 
     companion object {
+        private const val TAG = "WallpaperRepository"
         private const val PREFS_NAME = "miulist_wallpaper_prefs"
         private const val KEY_TYPE = "wallpaper_type"
         private const val KEY_PRESET_ID = "wallpaper_preset_id"
         private const val KEY_CUSTOM_PATH = "wallpaper_custom_path"
         private const val KEY_DIM_OPACITY = "wallpaper_dim_opacity"
+        private const val KEY_SOFT_FOCUS = "wallpaper_soft_focus"
     }
 }

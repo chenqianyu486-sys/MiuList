@@ -1412,6 +1412,10 @@ private val ruleFlow = combine(
         wallpaperRepo.setDimOpacity(opacity)
     }
 
+    fun setWallpaperSoftFocus(value: Float) {
+        wallpaperRepo.setSoftFocus(value)
+    }
+
     /**
      * 刷新学在浙大待办事项。
      * [silent] 为 true 时代表启动静默刷新，不主动弹出成功/失败 Snackbar。

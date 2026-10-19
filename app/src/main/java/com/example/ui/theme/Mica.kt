@@ -1,6 +1,7 @@
 package com.example.ui.theme
 
 import android.graphics.BitmapFactory
+import android.os.Build
 import java.io.File
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -28,15 +29,18 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
@@ -526,9 +530,9 @@ val ChipSurfaceNeutral = Color(0xFFF1F5F9)
  *
  * 沿革：课表 12.dp、其余三页 16.dp → 收成共享的 10.dp → **6.dp**。
  *
- * 压到 6.dp 是「提高信息密度」这一条要求里最直接的一档：411dp 宽的屏上，
- * 卡片宽度从 391.dp 变成 399.dp，一条待办的标题多出约两个字的宽度，
- * 而屏幕左右各 6.dp 仍足够让 18.dp 圆角的卡片不贴边（小于 4.dp 时圆角会显得被切掉）。
+ * 这一版把卡片重新交还给壁纸：留白窄，卡片的圆角和玻璃才像「浮在壁纸上」，
+ * 而不是一张张摆在白纸上的名片。深色壁纸上的可读性由自适应白衬底解决，
+ * 不靠把页面四周留白撑大来获得呼吸。
  *
  * 弹窗（TaskEditDialog / NewTaskTypeDialog）里那个 16.dp 不跟着改：
  * 那是弹窗自己离屏幕多远，不是页面边距。
@@ -630,12 +634,15 @@ fun AppBackgroundLayer(
         }
     }
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            // 壁纸之下垫一层不透明白，保证任何一帧（解码前、加载中）页面底都不是透明的。
-            .background(CanvasPureWhite)
+    CompositionLocalProvider(
+        LocalWallpaperIsCustom provides (wallpaperConfig.type == WallpaperType.CUSTOM)
     ) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                // 壁纸之下垫一层不透明白，保证任何一帧（解码前、加载中）页面底都不是透明的。
+                .background(CanvasPureWhite)
+        ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -649,11 +656,23 @@ fun AppBackgroundLayer(
         ) {
             when {
                 wallpaperConfig.type == WallpaperType.CUSTOM && customBitmap != null -> {
+                    // 用户照片先柔焦，再给卡片当背景：毛玻璃后面是一张被糊开的照片，
+                    // 不是一张清晰的人像。滑杆 0%~100% 对应 0~18dp。
+                    val blurDp = (wallpaperConfig.softFocus * 18f).dp
+                    val blurModifier = if (
+                        wallpaperConfig.softFocus > 0.01f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                    ) {
+                        Modifier.blur(blurDp)
+                    } else {
+                        Modifier
+                    }
                     Image(
                         bitmap = customBitmap,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(blurModifier)
                     )
                 }
                 wallpaperConfig.type == WallpaperType.PRESET -> {
@@ -674,7 +693,8 @@ fun AppBackgroundLayer(
                 }
             }
 
-            // 可选的内容保护遮罩：当自定义壁纸太暗或对比度过高时，淡化底色以提高文字可读性
+            // 只保留用户手动拉的文字保护遮罩。不做深色模式，也不按壁纸亮度自动切换；
+            // 深色照片要不要压白，由用户在壁纸设置里决定。
             if (wallpaperConfig.dimOpacity > 0f) {
                 Box(
                     modifier = Modifier
@@ -683,7 +703,8 @@ fun AppBackgroundLayer(
                 )
             }
         }
-        content()
+            content()
+        }
     }
 }
 

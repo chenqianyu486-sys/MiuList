@@ -42,7 +42,8 @@ class WallpaperSettingDialogTest {
                 onSelectPreset = { selectedPresetId = it },
                 onSelectCustom = {},
                 onResetDefault = { resetCalled = true },
-                onUpdateDimOpacity = {}
+                onUpdateDimOpacity = {},
+                onUpdateSoftFocus = {}
             )
         }
         composeTestRule.mainClock.advanceTimeBy(1000)

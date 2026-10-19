@@ -84,6 +84,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.di.AppContainer
 import com.example.ui.theme.LocalGlassHazeState
 import com.example.ui.theme.LocalCardRevealProgress
+import com.example.ui.theme.LocalWallpaperIsCustom
 import com.example.ui.components.AcademicCalendarDialog
 import com.example.ui.components.CategoryRulesDialog
 import com.example.ui.components.CloudAccountDialog
@@ -248,8 +249,9 @@ private fun TopBarStrip(
         // 生成是低频的写操作，紧挨着它。两个都不给文字标签——顶栏只有 40.dp，
         // 标签会把学期名挤掉，而这些动作的名字（搜索 / 一键生成）在图标上足够直白。
         //
-        // 两个色块刻意一深一浅：生成是写操作，用主题绿平涂（绿只做填充、上面配深墨字，
-        // 见 Color.kt 的全局约定），搜索是纯读操作，走中性 chip。一眼能分出主次。
+        // 两个色块一深一浅：生成是写操作，用主题绿平涂（绿只做填充、上面配深墨字，
+        // 见 Color.kt 的全局约定），搜索是纯读操作，走中性 chip。这是原版的分工，
+        // 也是壁纸上的第一眼重心。
         TopBarAction(
             icon = Icons.Outlined.AutoAwesome,
             contentDescription = "生成本周待办",
@@ -532,7 +534,24 @@ fun MainApp(viewModel: MainViewModel) {
         // 表现是「点保存 / 点检查更新，一点反应都没有」——提示确实弹了，只是没人看见。
         // 真正的主机挪到了 MainApp 最末尾，和所有弹层同一层的 Box 里，见文件末尾。
         topBar = {
-            TopBarStrip(
+            // 顶栏直接压在照片上，深色/花壁纸里学期名会消失。
+            // 固定铺一层很浅的白色渐隐（不是深色模式，也不随壁纸切换），
+            // 让文本在任何照片上都有最低限度的承托。
+            Box(modifier = Modifier.fillMaxWidth()) {
+                if (LocalWallpaperIsCustom.current) {
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    0f to Color.White.copy(alpha = 0.55f),
+                                    0.65f to Color.White.copy(alpha = 0.32f),
+                                    1f to Color.White.copy(alpha = 0f)
+                                )
+                            )
+                    )
+                }
+                TopBarStrip(
                 termName = termName,
                 termConfigured = termConfigured,
                 onOpenMoreMenu = { moreDrawerVisible = true },
@@ -549,8 +568,9 @@ fun MainApp(viewModel: MainViewModel) {
                     }
                     searchVisible = true
                 },
-                onCloseSearch = { searchVisible = false }
-            )
+                    onCloseSearch = { searchVisible = false }
+                )
+            }
         }
     ) { innerPadding ->
         Box(modifier = Modifier.fillMaxSize()) {
@@ -893,7 +913,8 @@ fun MainApp(viewModel: MainViewModel) {
                 onSelectPreset = { presetId -> viewModel.applyPresetWallpaper(presetId) },
                 onSelectCustom = { uri -> viewModel.applyCustomWallpaper(uri, contentResolver) },
                 onResetDefault = { viewModel.resetToDefaultWallpaper() },
-                onUpdateDimOpacity = { opacity -> viewModel.setWallpaperDimOpacity(opacity) }
+                onUpdateDimOpacity = { opacity -> viewModel.setWallpaperDimOpacity(opacity) },
+                onUpdateSoftFocus = { value -> viewModel.setWallpaperSoftFocus(value) }
             )
         }
 

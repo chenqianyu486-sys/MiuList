@@ -110,10 +110,13 @@ object WallpaperPresets {
  * @param presetId 若为预设，对应的预设标识符
  * @param customPath 若为自定义相册，复制到应用内部私有存储的文件绝对路径
  * @param dimOpacity 可选的浅色保护遮罩（0f ~ 0.5f），保障较深或对比度过高的壁纸上的文字可读性
+ * @param softFocus 背景柔焦（0f ~ 1f），只对自定义照片生效；用户可自己调，
+ *   0 = 原图清晰，1 = 最柔。它不是深色模式，只是把照片细节退成颜色。
  */
 data class WallpaperConfig(
     val type: WallpaperType = WallpaperType.DEFAULT,
     val presetId: String = WallpaperPresets.DEFAULT.id,
     val customPath: String? = null,
-    val dimOpacity: Float = 0f
+    val dimOpacity: Float = 0f,
+    val softFocus: Float = 0f
 )

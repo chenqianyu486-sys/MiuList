@@ -37,13 +37,12 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -66,6 +65,7 @@ import com.example.ui.theme.WallpaperCardFaceAlpha
 import com.example.ui.theme.WallpaperCardFaceTint
 import com.example.ui.theme.glassSurface
 import java.io.File
+import kotlin.math.abs
 
 /**
  * 自定义壁纸设置弹层。
@@ -85,6 +85,7 @@ fun WallpaperSettingDialog(
     onSelectCustom: (Uri) -> Unit,
     onResetDefault: () -> Unit,
     onUpdateDimOpacity: (Float) -> Unit,
+    onUpdateSoftFocus: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val uriHandler = LocalUriHandler.current
@@ -327,42 +328,27 @@ fun WallpaperSettingDialog(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 4. 文字保护遮罩调节
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "文字保护遮罩",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "增加浅色柔光层，避免深色壁纸影响文字可读性",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextSecondary
-                        )
-                    }
-                    Text(
-                        text = "${(currentConfig.dimOpacity * 100).toInt()}%",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
+                // 4. 背景柔焦（仅自定义照片）：三档预设，不给连续滑杆
+                if (currentConfig.type == WallpaperType.CUSTOM) {
+                    TierSection(
+                        title = "背景柔焦",
+                        subtitle = "把照片细节柔化；清晰档保留原图，柔和 / 很柔是两档预设",
+                        tiers = SoftFocusTiers,
+                        selectedValue = currentConfig.softFocus,
+                        onSelect = onUpdateSoftFocus,
+                        testTag = "wallpaper_soft_focus_tiers"
                     )
+                    Spacer(modifier = Modifier.height(12.dp))
                 }
 
-                Slider(
-                    value = currentConfig.dimOpacity,
-                    onValueChange = onUpdateDimOpacity,
-                    valueRange = 0f..0.5f,
-                    colors = SliderDefaults.colors(
-                        thumbColor = MaterialTheme.colorScheme.primary,
-                        activeTrackColor = MaterialTheme.colorScheme.primary
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("wallpaper_dim_slider")
+                // 5. 文字保护遮罩：三档预设
+                TierSection(
+                    title = "文字保护遮罩",
+                    subtitle = "增加浅色柔光层，避免深色壁纸影响文字可读性",
+                    tiers = ProtectionTiers,
+                    selectedValue = currentConfig.dimOpacity,
+                    onSelect = onUpdateDimOpacity,
+                    testTag = "wallpaper_dim_tiers"
                 )
 
                 // 5. 恢复默认壁纸按钮
@@ -390,6 +376,76 @@ fun WallpaperSettingDialog(
     )
 }
 
+/** 壁纸参数档位：自定义参数只给预设档，不做连续滑杆。 */
+private data class WallpaperTier(val label: String, val value: Float)
+
+private val SoftFocusTiers = listOf(
+    WallpaperTier("清晰", 0f),
+    WallpaperTier("柔和", 0.5f),
+    WallpaperTier("很柔", 1f)
+)
+
+private val ProtectionTiers = listOf(
+    WallpaperTier("关闭", 0f),
+    WallpaperTier("标准", 0.18f),
+    WallpaperTier("加强", 0.36f)
+)
+
+@Composable
+private fun TierSection(
+    title: String,
+    subtitle: String,
+    tiers: List<WallpaperTier>,
+    selectedValue: Float,
+    onSelect: (Float) -> Unit,
+    testTag: String
+) {
+    val nearest = tiers.minByOrNull { abs(it.value - selectedValue) }?.value
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.labelSmall,
+            color = TextSecondary
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(testTag),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            tiers.forEach { tier ->
+                val selected = nearest == tier.value
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (selected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                        )
+                        .clickable { onSelect(tier.value) }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = tier.label,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (selected) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        }
+    }
+}
+
 /**
  * 实时预览视口小组件
  */
@@ -413,11 +469,18 @@ private fun WallpaperLivePreviewCard(
         // 壁纸背景
         when {
             config.type == WallpaperType.CUSTOM && customBitmap != null -> {
+                // 预览按真实比例显示柔焦，用户拖滑杆时能直接看到效果。
+                val previewBlur = (config.softFocus * 8f).dp
                 Image(
                     bitmap = customBitmap,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (config.softFocus > 0.01f) Modifier.blur(previewBlur)
+                            else Modifier
+                        )
                 )
             }
             config.type == WallpaperType.PRESET -> {

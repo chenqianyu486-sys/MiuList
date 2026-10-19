@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Card
@@ -34,18 +33,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.data.local.TaskEntity
 import com.example.data.model.CustomTaskType
 import com.example.data.model.TaskStar
-import com.example.data.model.TaskTypeOption
 import com.example.data.model.TaskTypes
-import com.example.ui.theme.CourseTintAlpha
-import com.example.ui.theme.CardBaseCoatAlpha
-import com.example.ui.theme.cardTint
+import com.example.ui.theme.LocalWallpaperIsCustom
+import com.example.ui.theme.MiuSurface
+import com.example.ui.theme.MiuType
 import com.example.ui.theme.NestedFaceAlpha
-import com.example.ui.theme.TaskCheckIdleFill
+import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.accentOnCourse
+import com.example.ui.theme.cardTint
 import com.example.data.calendar.AppZone
 import com.example.ui.theme.glassSurface
 import com.example.ui.theme.readableOn
@@ -70,9 +68,7 @@ fun TaskItemCard(
     /**
      * 是否被放在另一张「已染成同一门课粉彩」的卡片里面（目前只有课表今日页的课程卡）。
      *
-     * 这种位置不能自己再染一遍同一个颜色：同一个色相叠两次只会更深，
-     * 实测外层 #D6E9FE 会叠成 #C2DFFD，层次正好反了——内层比外层重。
-     * 改成近白「挖入」，靠「浅在深上」撑出层次，和课程详情弹层里的处理一致。
+     * 这种位置不能自己再染一遍颜色；改成近白面，靠「浅在深上」撑出层次。
      */
     nestedInCourseCard: Boolean = false
 ) {
@@ -88,203 +84,179 @@ fun TaskItemCard(
     val typeOption = remember(task.taskType, customTypes) {
         TaskTypes.resolve(task.taskType, customTypes)
     }
-    // 类别的墨色不用在这里再取一遍：它走 TaskTypeBadge（淡彩底 + 墨色字，
-    // 验算见 EnumsAndModels）；星标的两态配色也定在 TaskStarToggle 里（白 / StarInk），
-    // 这层只负责把「标没标」这个布尔喂过去。
     val isStarred = remember(task.priority) { TaskStar.isMarked(task.priority) }
+
+    // 卡片标题里的课程名前缀和 meta 行的课程名重复。只做显示层裁剪：
+    // 数据不动，搜索/导出仍按原题名；裁掉之后卡片上只剩「第5周预习」这类真正的任务名。
+    val displayTitle = remember(task.title, task.courseName) { taskDisplayTitle(task) }
+
+    // 不做深色模式：预设壁纸用原版 0.55 玻璃；用户照片用更厚的玻璃，
+    // 让照片的细节退成颜色，不和待办标题抢注意力。
+    val customWallpaper = LocalWallpaperIsCustom.current
+    val contentBase = if (customWallpaper) 0.72f else 0.55f
+    val tintAlpha = if (customWallpaper) 0.26f else 0.30f
 
     Card(
         modifier = modifier
             .fillMaxWidth()
             .testTag("task_card_${task.id}")
             .clickable { onOpenDetail() },
-        shape = RoundedCornerShape(18.dp),
-        // 卡片本体画在里面的 Column 上（云母面），Card 这层只做点击和裁剪
+        shape = MiuSurface.CardShape,
+        // 卡片本体画在里面的 Row 上（云母面），Card 这层只做点击和裁剪
         colors = CardDefaults.cardColors(containerColor = Color.Transparent),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .glassSurface(
-                    shape = RoundedCornerShape(18.dp),
-                    // 整张卡染这门课的颜色：颜色本身就是「这是哪门课」的标识，
-                    // 不必再靠一条色条去认。染的不是课程原色，而是 cardTint 解出来的那一支——
-                    // 两者按 CourseTintAlpha 叠下去之后落在同一个感知明度上，八门课等重，
-                    // 理由见 Color.kt 的「卡片染色」。被嵌在课程卡里时反过来挖近白，
-                    // 理由见 nestedInCourseCard。
-                    tint = if (nestedInCourseCard) Color.White else cardTint(courseColor, CourseTintAlpha),
-                    tintAlpha = if (nestedInCourseCard) NestedFaceAlpha else CourseTintAlpha,
-                    // 白衬底只铺在**顶层**卡片上：内层待办卡自己就是近白面，
-                    // 再铺一层只会糊掉内外层次（内层靠调实 [NestedFaceAlpha] 达到同样的效果）。
-                    // 顶层铺它的理由见 CardBaseCoatAlpha：待办卡是全屏文字最密的地方，
-                    // 卡面明度必须主要由卡片自己决定，换壁纸时才不会连着变暗。
-                    baseCoatAlpha = if (nestedInCourseCard) 0f else CardBaseCoatAlpha,
-                    // 已完成的待办压扁一点（白衬底和染色一起降），别跟没做完的抢注意力
+                    shape = MiuSurface.CardShape,
+                    // 课程色回到卡面，但只做「哪门课」的暗示；正文对比度
+                    // 由底色染色的等重计算和自适应白衬底一起兜住。
+                    tint = if (nestedInCourseCard) Color.White else cardTint(courseColor, tintAlpha),
+                    tintAlpha = if (nestedInCourseCard) NestedFaceAlpha else tintAlpha,
+                    baseCoatAlpha = if (nestedInCourseCard) 0f else contentBase,
+                    blurRadius = 0.dp,
+                    // 已完成的待办压扁一点，别跟没做完的抢注意力
                     faceAlphaScale = if (task.isCompleted) 0.78f else 1f
                 )
-                .padding(14.dp)
+                .padding(horizontal = 13.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // Interactive Checkbox with animated fill
-                //
-                // 未勾选 = 纯白圆，不描边。走过的弯路别再走回去：
-                // ① Transparent + outline(#DDE6E2)：压在染色卡面上约 1.05:1，等于没有圈；
-                // ② 白填充 + 中灰边(#98A29E)：轮廓够清楚了，但用户明确表示「灰色圆边框丑」，已删。
-                // 现在圈只有填充，白色 alpha 也提到 1.0（半透白会透出卡面的染色色相就不再是白的）。
-                // 详见 Color.kt 的 TaskCheckIdleFill。
-                val checkboxBg by animateColorAsState(
-                    targetValue = if (task.isCompleted) MaterialTheme.colorScheme.primary else TaskCheckIdleFill,
-                    animationSpec = tween(durationMillis = 200),
-                    label = "checkboxBg"
-                )
+            // 勾选圈回到原来的纯白圆：浅色壁纸上它是「卡面挖出来的一个洞」，
+            // 和课程粉彩是同一套语言。只有深色壁纸把卡面推到近白时，
+            // 才补一圈淡墨描边，否则白圆会消失。
+            val checkboxBg by animateColorAsState(
+                targetValue = if (task.isCompleted) MaterialTheme.colorScheme.primary else Color.White,
+                animationSpec = tween(durationMillis = 200),
+                label = "checkboxBg"
+            )
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .clickable { onToggleComplete() }
+                    .testTag("task_checkbox_${task.id}"),
+                contentAlignment = Alignment.Center
+            ) {
                 Box(
                     modifier = Modifier
                         .size(24.dp)
                         .clip(CircleShape)
-                        .background(checkboxBg)
-                        .clickable { onToggleComplete() }
-                        .testTag("task_checkbox_${task.id}"),
+                        .background(checkboxBg),
                     contentAlignment = Alignment.Center
                 ) {
                     if (task.isCompleted) {
                         Icon(
                             imageVector = Icons.Default.Check,
                             contentDescription = "已完成",
-                            tint = Color(0xFF1E2D0E),
-                            modifier = Modifier.size(15.dp)
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(14.dp)
                         )
                     }
                 }
-
-                Spacer(modifier = Modifier.width(12.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = task.title,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontWeight = if (task.isCompleted) FontWeight.Normal else FontWeight.Bold,
-                            fontSize = 14.5.sp,
-                            lineHeight = 19.sp,
-                            textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None
-                        ),
-                        color = if (task.isCompleted) {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
-                    Spacer(modifier = Modifier.height(5.dp))
-
-                    // 名称以外的信息全部压在这一行：ddl · 关联课程 · 待办类别。
-                    // 课程名吃掉弹性宽度先被截断，另外两段都是短的，宁可牺牲课程名也要保住它们。
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        MetaText(
-                            text = dueRelativeText,
-                            // ddl 是这一行最该被扫到的字段，不能用 onSurfaceVariant：
-                            // 实测 #78827B 压在橙课卡面 #FFF0E1 上只有 3.56:1、紫课面 3.20:1。
-                            // 逾期红同理——#EF4444 直接当前景也只有 3.4:1，压暗后仍有 8:1 且认得出是警示色。
-                            // 没设截止的走中性色：它不是一条需要被扫出来的紧急信息，
-                            // 染成和「逾期」一样重的字反而会把它抬到不该在的位置。
-                            color = if (isOverdue) {
-                                readableOn(MaterialTheme.colorScheme.error)
-                            } else if (hasDue) {
-                                MaterialTheme.colorScheme.onSurface
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                            fontWeight = if (isOverdue) FontWeight.Bold else FontWeight.Medium
-                        )
-                        // 不关联课程时整段拿掉，别在 meta 行里留一个
-                        // 只写着「未关联」的占位——那种信息对扫描没有任何帮助
-                        if (!TaskEntity.isUnlinked(task)) {
-                            MetaSeparator()
-                            MetaText(
-                                text = task.courseName,
-                                color = accentOnCourse(courseColor),
-                                modifier = Modifier.weight(1f, fill = false)
-                            )
-                        }
-                        // 类别在这里是 chip，不是裸文字：和弹层里的徽标同一套
-                        // 「淡彩底 + 墨色字」，扫列表时它自成一块，
-                        // 不用逐字去读「· 课前预习」这一串。
-                        //
-                        // 分隔点是**跟着段走**的，不是写死一串：类型可以留空、
-                        // 课程可以没关联，两种情况都会让「· 」孤零零地留在行尾或行首。
-                        if (typeOption != null) {
-                            MetaSeparator()
-                            TaskTypeBadge(
-                                taskTypeStr = task.taskType,
-                                customTypes = customTypes
-                            )
-                        }
-                    }
-                }
-
-                // 星标单独占卡片右侧、垂直居中，不挤在 meta 行里。
-                //
-                // 两个原因：① meta 行是文字和 chip 的地方，星星塞进去要和
-                // 「· 」分隔点抢位置，而它比旁边任何一段都重要；
-                // ② 位置固定在右下角，整屏扫下来眼睛走的是一条直线，
-                // 「哪些是我挑出来的」不用逐行读就能看出来。
-                //
-                // **两态都画**，因为它现在是开关而不是徽章：只画「已标星」那一态，
-                // 这颗星就只能取消不能标记，交互反而不成立。空星用白色描边，
-                // 实心星用 [StarInk]——认的是形状差（空 / 实），不是颜色深浅。
-                //
-                // 尺寸跟左侧的勾选圈（24.dp）**对齐**：两个都是「这条待办的状态」，
-                // 一样大小才像一对。并排两个不等大的图标（24 的圈 + 19 的星）
-                // 看着就像星是个附属品，而它其实和完成状态一样重要。
-                //
-                // 卡面**不跟着变**：颜色这一格只归星标，卡面仍染这门课的粉彩。
-                // 之前想过「标星就把整张卡染黄」，但那样「标星」被表达了两遍，
-                // 而且黄的卡面会让 meta 行里按课程色取的墨色失掉参照。
-                Spacer(modifier = Modifier.width(10.dp))
-                TaskStarToggle(
-                    isStarred = isStarred,
-                    onToggle = onToggleStar,
-                    modifier = Modifier.testTag("task_star_${task.id}")
-                )
             }
-            // 备注整块搬走了，只留在详情弹层里（TaskDetailSheet）。
-            // 备注是待办里最长最不受约束的一段文字，放在卡片上必然把它撑成两行三行，
-            // 而列表要的是一眼扫过去的密度——所以卡片只管「是什么、什么时候、属于哪门课」，
-            // 要读正文就点开。
+
+            Spacer(modifier = Modifier.width(7.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = displayTitle,
+                    style = MiuType.TaskTitle,
+                    color = if (task.isCompleted) {
+                        TextSecondary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // 名称以外的信息全部压在这一行：ddl · 课程名 · 待办类别。
+                // 课程名沿用它自己的深色墨，不再额外加一枚色点：
+                // 卡面已经染了这门课的颜色，再点一次是同一句话说三遍。
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = dueRelativeText,
+                        // 逾期红要用压暗的那一档：#EF4444 直接当前景只有 3.4:1。
+                        color = if (isOverdue) {
+                            readableOn(MaterialTheme.colorScheme.error)
+                        } else if (hasDue) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            TextSecondary
+                        },
+                        style = MiuType.TaskMeta,
+                        fontWeight = if (isOverdue) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                    if (!TaskEntity.isUnlinked(task)) {
+                        MetaDot()
+                        Text(
+                            text = task.courseName,
+                            color = accentOnCourse(courseColor),
+                            style = MiuType.TaskMeta,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    }
+                    if (typeOption != null) {
+                        MetaDot()
+                        TaskTypeBadge(
+                            taskTypeStr = task.taskType,
+                            customTypes = customTypes
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            // 星标回到原来的白描边：浅色壁纸的粉彩卡上它和勾选圈是同一对控件。
+            // 深色壁纸把卡面推到近白时，才改用墨色空星，避免白色消失。
+            TaskStarToggle(
+                isStarred = isStarred,
+                onToggle = onToggleStar,
+                size = 24.dp,
+                unstarredColor = Color.White,
+                modifier = Modifier.testTag("task_star_${task.id}")
+            )
         }
     }
 }
 
-/** 附加信息行里的一段文字。固定单行，靠 [MetaSeparator] 分隔。 */
+/** meta 行里的小圆点分隔符：比一个「·」字符更轻，也不跟正文抢字宽。 */
 @Composable
-private fun MetaText(
-    text: String,
-    color: Color,
-    modifier: Modifier = Modifier,
-    fontWeight: FontWeight = FontWeight.Normal
-) {
-    Text(
-        text = text,
-        color = color,
-        style = MaterialTheme.typography.labelSmall.copy(fontWeight = fontWeight),
-        fontSize = 11.sp,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = modifier
+private fun MetaDot() {
+    Spacer(modifier = Modifier.width(5.dp))
+    Box(
+        modifier = Modifier
+            .size(2.5.dp)
+            .clip(CircleShape)
+            .background(TextSecondary.copy(alpha = 0.38f))
     )
+    Spacer(modifier = Modifier.width(5.dp))
 }
 
-@Composable
-private fun MetaSeparator() {
-    Text(
-        text = " · ",
-        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-        style = MaterialTheme.typography.labelSmall,
-        fontSize = 11.sp,
-        maxLines = 1
-    )
+/**
+ * 只改显示：课程联动生成的标题通常是「课程名 + 空格 + 任务名」，
+ * 而课程名已经在 meta 行里。裁掉前缀之后，卡片上只剩真正的任务名，
+ * 标题不必为了重复的课程名折成两行。
+ *
+ * 数据层不动：搜索、导出、详情页仍使用完整标题。
+ */
+private fun taskDisplayTitle(task: TaskEntity): String {
+    val courseName = task.courseName.trim()
+    if (courseName.isEmpty() || TaskEntity.isUnlinked(task)) return task.title
+    val prefix = "$courseName "
+    if (task.title.startsWith(prefix)) {
+        val rest = task.title.removePrefix(prefix).trim()
+        if (rest.isNotEmpty()) return rest
+    }
+    return task.title
 }
 
 /** 没设截止的待办，ddl 段显示的字样。清单页按截止分组时也用它当组内标签。 */
