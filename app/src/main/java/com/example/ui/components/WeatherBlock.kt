@@ -77,7 +77,43 @@ import com.example.ui.theme.TextSecondary
  * （Normal → Medium → SemiBold）来表达「这是次要信息」——
  * 对比度不打折，层次靠排版而不是靠牺牲可读性。
  */
-private val BlockWidth = 92.dp
+/**
+ * 天气块的固定宽度。
+ *
+ * ## 它是被谁定的
+ *
+ * 不是拍脑袋，也不是「看着差不多」：左边那一列（周次徽标、学期名、日期、
+ * 「N 门课」）占着剩下的全部空间，加宽这里就等于**从日期行那里抢**。
+ * 所以每一分都花在**最长的一句上** ——
+ * 「杭州 · 空气轻度污染 138」（两字地名 + 四字等级 + 三位数）。
+ *
+ * ## 现值是怎么校出来的（模拟器实测，非估算）
+ *
+ * `uiautomator dump` 取 Compose 的语义边界（那是排版宽度，不是墨迹宽度）：
+ * - 9sp 的「杭州 · 空气良 67」= **180px = 68.6dp**（11 字）
+ * - 12sp 的「12 门课 · 31.3 小时」= **273px = 104.0dp**（15 字）
+ *
+ * 拿这两条反推，字宽落在「CJK 约 0.93em（含 M3 labelSmall 那 0.5sp 字距）、
+ * 数字 0.5625em、空格 0.25em、`·` 约 0.5em」，两条都在 ±2.5% 内对上。
+ * 最坏那句按这套参数约 **93dp**；按各字取上界（CJK 1em + 0.5sp 字距、
+ * `·` 0.5em）约 **106dp** —— 108.dp 是照**后者**定的，留约 2dp 余量。
+ *
+ * ## 411dp 屏上左边还剩多少
+ *
+ * 卡片内容宽 363dp（屏 411 − 页面边距 6×2 − 卡内边距 18×2），减掉 12dp 间隔
+ * 与 108dp 天气块 = **243dp**；实测日期行「2026年10月19日 星期一」是 232.8dp，
+ * 还剩 10dp。加到 120dp 以上日期就会折行，那才是真被挤坏的地方。
+ *
+ * ## 为什么还要有这条测试
+ *
+ * 那格 `maxLines = 1` + `TextOverflow.Ellipsis`，超出**不报错、不崩**，
+ * 只是指数被悄悄截掉最后一位 —— 恰好是最需要看全的那一行。
+ * 预算由 [WeatherCaptionBudgetTest] 守着；**别靠缩字号解决溢出**。
+ */
+internal val BlockWidth = 108.dp
+
+/** 最后一行小字的字号。与 [BlockWidth] 是一对，改一个必须同时量另一个。 */
+internal val CaptionFontSize = 9.sp
 
 @Composable
 fun WeatherBlock(
@@ -98,10 +134,7 @@ fun WeatherBlock(
                 value = weather.temperatureRange() ?: "--",
                 valueColor = MaterialTheme.colorScheme.onSurface,
                 valueWeight = FontWeight.ExtraBold,
-                caption = listOfNotNull(
-                    weather.cityName.takeIf { it.isNotBlank() },
-                    weather.airQualityLabel()
-                ).joinToString(" "),
+                caption = weatherCaption(weather),
                 captionColor = TextSecondary,
                 modifier = modifier
             )
@@ -139,6 +172,33 @@ fun WeatherBlock(
         )
     }
 }
+
+/**
+ * 天气块最后一行：「杭州 · 空气良 68」。
+ *
+ * ## 为什么中间是「·」而不是空格
+ *
+ * 空格分隔的「杭州 空气良 68」读起来像一句**断了的话** —— 地名后面没有动词，
+ * 读者会以为是没显示完、或者中间漏了个分隔符。「·」明确地说：
+ * 这是同一行里的**两件独立事实**，谁都不是谁的后半句。
+ *
+ * 城市与空气本来就不相干：一个回答「哪儿的」，一个回答「空气怎么样」，
+ * 它们共用一行只因为新起一行会让主卡变高（见 [WeatherBlockFrame]），
+ * 既然是被挤到一行的，就得用标点承认它们是并排的两件事。
+ *
+ * ## 任一段缺失时，标点不许留下
+ *
+ * 空气拉不到是常事（另一个端点，挂了就挂）。只显示「杭州」，
+ * 绝不能显示成「杭州 ·」—— 那等于告诉用户有一段数据被吞了。
+ */
+internal fun weatherCaption(weather: DailyWeather): String =
+    listOfNotNull(
+        weather.cityName.takeIf { it.isNotBlank() },
+        weather.airQualityLabel()
+    ).joinToString(SEPARATOR)
+
+/** 两段之间的分隔符，带两侧空格。UI 只有一个拼接点，符号与空格一起定在这里。 */
+private const val SEPARATOR = " · "
 
 /**
  * 天气块唯一的骨架：三行、固定宽、行距固定。
@@ -208,7 +268,7 @@ private fun WeatherBlockFrame(
             text = caption,
             style = MaterialTheme.typography.labelSmall,
             color = captionColor,
-            fontSize = 9.sp,
+            fontSize = CaptionFontSize,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
