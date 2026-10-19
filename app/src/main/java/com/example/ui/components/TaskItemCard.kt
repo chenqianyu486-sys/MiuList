@@ -3,6 +3,7 @@ package com.example.ui.components
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +50,49 @@ import com.example.ui.theme.glassSurface
 import com.example.ui.theme.readableOn
 import java.util.Calendar
 
+/**
+ * 圆圈（勾选圈）的填色不透明度。
+ *
+ * 填色是**这门课的粉彩本身**，不额外往卡面上压任何颜色：
+ * 纯白实心会把卡面整个盖住（比正文还跳的一坨白），
+ * 「换一支更浅的实色」或「压一层白纱」也都是新糊上去的东西——
+ * 玻璃是透的，往浅里走只能靠**少遮一点底下的东西**。
+ *
+ * **这一档必须低于卡片自己的染色强度**（`CourseTintAlpha` = 0.30）：
+ * 圆圈的填色要比卡面淡，才读得出「卡面上的一块淡斑」而不是「卡面本身」。
+ * 0.08：卡面 #BBCFE4（蓝课）→ 圆圈 #BBCEE6，只差一两个色阶，
+ * 肉眼几乎只剩那一圈白描边——「只保留白色描线」照到了字面。
+ */
+private const val CircleFillAlpha = 0.08f
+
+/**
+ * 星标的填色不透明度。
+ *
+ * 星是**笔画**不是面积：24dp 的一个星形轮廓，填色淡到 0.08 就整颗不见了，
+ * 只剩白描边——那还是原来那颗「纯白空星」，而它当初被记成问题
+ * （见 design-notes「现状诊断」第 6 条：星标像装饰而不是控件）。
+ * 所以这一档比圆圈浓：0.30 的粉彩星体 + 白色描边，
+ * 星形才认得出是「这门课的星」，同时白仍然只落在描边上。
+ */
+private const val StarFillAlpha = 0.30f
+
+/**
+ * 白色描线的不透明度。
+ *
+ * 实白是这两个控件上**最响**的东西：圆圈成了一圈实白线，
+ * 星标更糟——它那颗垫底白星是实心的，整颗星直接读成一坨白形状，
+ * 也就是「现状诊断」第 6 条记的「纯白空心，像装饰而不是控件」。
+ * 0.70 让白退成一道柔和的边：还是白、还是描边，但不再压过卡面。
+ *
+ * 星标这一处尤其要降：星体是**压在**那颗白星上的，
+ * 白从实白退到 0.70，星体才真的透出这门课的粉彩
+ * （实白垫底时星体压在纯白上，再怎么降它也只是一颗更白的星）。
+ */
+private const val ControlRimAlpha = 0.70f
+
+/** 白色描线的粗细。24dp 的控件上，1dp 才勾得出轮廓。 */
+private val ControlRimWidth = 1.dp
+
 @Composable
 fun TaskItemCard(
     task: TaskEntity,
@@ -73,6 +117,12 @@ fun TaskItemCard(
     nestedInCourseCard: Boolean = false
 ) {
     val courseColor = parseColor(task.courseColorHex)
+
+    // 圆圈和星标的填色：**这门课的粉彩本身**，半透明地压在卡面上。
+    // 不额外压白、也不换别的颜色——卡面本身就是这支粉彩染出来的。
+    // 两档不一样：圆圈是面积，要比卡面淡；星是笔画，要看得见。
+    val circleFill = courseColor.copy(alpha = CircleFillAlpha)
+    val starFill = courseColor.copy(alpha = StarFillAlpha)
 
     // 没设截止的待办不参与逾期判断：哨兵是 Long.MIN_VALUE，
     // 直接拿去和 now 比会得到 true，一条「不设截止」的待办会被染成逾期红。
@@ -123,11 +173,11 @@ fun TaskItemCard(
                 .padding(horizontal = 13.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 勾选圈回到原来的纯白圆：浅色壁纸上它是「卡面挖出来的一个洞」，
-            // 和课程粉彩是同一套语言。只有深色壁纸把卡面推到近白时，
-            // 才补一圈淡墨描边，否则白圆会消失。
+            // 勾选圈的填色是这门课的粉彩，**比卡面淡**（不透明度 0.15 < 卡片的 0.30），
+            // 白只留一圈描边——肉眼几乎只剩那一圈白线，就是「只保留白色描线」。
+            // 完成态不变：主题绿实心 + 对勾，那是「做完了」的状态色，不是主题色。
             val checkboxBg by animateColorAsState(
-                targetValue = if (task.isCompleted) MaterialTheme.colorScheme.primary else Color.White,
+                targetValue = if (task.isCompleted) MaterialTheme.colorScheme.primary else circleFill,
                 animationSpec = tween(durationMillis = 200),
                 label = "checkboxBg"
             )
@@ -143,7 +193,12 @@ fun TaskItemCard(
                     modifier = Modifier
                         .size(24.dp)
                         .clip(CircleShape)
-                        .background(checkboxBg),
+                        .background(checkboxBg)
+                        .border(
+                            ControlRimWidth,
+                            Color.White.copy(alpha = ControlRimAlpha),
+                            CircleShape
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
                     if (task.isCompleted) {
@@ -215,13 +270,16 @@ fun TaskItemCard(
 
             Spacer(modifier = Modifier.width(6.dp))
 
-            // 星标回到原来的白描边：浅色壁纸的粉彩卡上它和勾选圈是同一对控件。
-            // 深色壁纸把卡面推到近白时，才改用墨色空星，避免白色消失。
+            // 星标的星体填半透明的课程粉彩（0.38），白只留在描边上：
+            // 星是笔画，淡到 0.15 就整颗看不见了，那还是原来那颗「纯白空星」。
+            // 「描边空星 vs 实心星」的形状差仍然认得出，
+            // 而「标了星」那一态照旧是实心琥珀色——那是状态色，不是主题色。
             TaskStarToggle(
                 isStarred = isStarred,
                 onToggle = onToggleStar,
                 size = 24.dp,
-                unstarredColor = Color.White,
+                unstarredColor = Color.White.copy(alpha = ControlRimAlpha),
+                unstarredFill = starFill,
                 modifier = Modifier.testTag("task_star_${task.id}")
             )
         }

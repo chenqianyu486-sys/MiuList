@@ -15,7 +15,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -114,7 +117,8 @@ fun TaskStarMark(
 /**
  * 待办卡片右侧那颗**可点**的星标。
  *
- * 两态由用户定：未标星 = **白色描边空星**，标星 = **黄色实心星**。
+ * 两态由用户定：未标星 = **粉彩星体 + 白色描边**（[unstarredFill] 为 null 时退成
+ * 白色描边空星），标星 = **黄色实心星**。
  * 卡面本身不动（仍是这门课的粉彩）——颜色这一格只归星标，两处都染等于
  * 「标了星」被重复表达一次。
  *
@@ -122,9 +126,10 @@ fun TaskStarMark(
  * 没有标记，交互反而不成立。这推翻了「没标星就不画」那条旧结论——
  * 那条成立的前提是星标纯展示，现在是控件了。
  *
- * 空星用纯白（不是灰）：它压在淡彩卡面上只有 1.2~1.5:1，和左侧那个纯白勾选圈
- * 是同一个取舍，用户明确要过这个。识别靠的是「描边空星 vs 实心星」的形状差，
- * 不是亮度差。实心态那一格用 [StarInk]——它是黄底上唯一还认得出的那支黄。
+ * 未标星那一态可以再垫一层**半透明填色**（[unstarredFill]）：星体因此是
+ * 卡片主题色（这门课的粉彩）而不是死白，白只剩描边那一圈。
+ * 「描边空星 vs 实心星」的形状差照旧认得出，而两个状态之间那道对比
+ * 也不再是「白 vs 黄」——是「粉彩 vs 琥珀」。
  */
 @Composable
 fun TaskStarToggle(
@@ -132,17 +137,69 @@ fun TaskStarToggle(
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
     size: Dp = 24.dp,
-    unstarredColor: Color = Color.White
+    unstarredColor: Color = Color.White,
+    /**
+     * 未标星时垫在描边下面那层**半透明填色**（通常是卡片主题色）。
+     * null = 星体不填色，只有描边（课程详情弹层里那排待办就是这个用法）。
+     */
+    unstarredFill: Color? = null
 ) {
-    Icon(
-        imageVector = if (isStarred) Icons.Rounded.Star else Icons.Outlined.Star,
-        contentDescription = if (isStarred) "取消星标" else "标星",
-        tint = if (isStarred) StarInk else unstarredColor,
+    val description = if (isStarred) "取消星标" else "标星"
+    Box(
         modifier = modifier
             .size(size)
             .clickable { onToggle() }
-    )
+            // 无障碍描述挂在**带 tag 的这一层**：星体和描边是两层图标，
+            // 描述若留在图标上，测试和读屏都找不到「标星 / 取消星标」这个动作。
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center
+    ) {
+        if (isStarred) {
+            Icon(
+                imageVector = Icons.Rounded.Star,
+                contentDescription = null,
+                tint = StarInk,
+                modifier = Modifier.size(size)
+            )
+        } else {
+            if (unstarredFill != null) {
+                // 白色描边 = 略大一点的纯白星垫在下面，粉彩星压在上面。
+                //
+                // 为什么不用 Material 的 Outlined.Star 当描边：它那圈描边在 24dp 上
+                // 几乎把星体整个填满（实测画出来是一颗实心白星），压在粉彩上等于
+                // 粉彩全被盖住——星标还是白的，压根没染上色。
+                // 「大一号的白星 + 缩回去的粉彩星」才真正得到「白只留描线」的那颗星。
+                Icon(
+                    imageVector = Icons.Rounded.Star,
+                    contentDescription = null,
+                    tint = unstarredColor,
+                    modifier = Modifier.size(size).scale(StarRimScale)
+                )
+                Icon(
+                    imageVector = Icons.Rounded.Star,
+                    contentDescription = null,
+                    tint = unstarredFill,
+                    modifier = Modifier.size(size)
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Outlined.Star,
+                    contentDescription = null,
+                    tint = unstarredColor,
+                    modifier = Modifier.size(size)
+                )
+            }
+        }
+    }
 }
+
+/**
+ * 星标那圈白色描边用「白星放大几成」来造。
+ *
+ * 1.10 档：外尖处白边约 1dp（五角星外半径约 10.4，尖上多出来 10%），
+ * 内凹角处约 0.5dp——比描边粗细完全一致差得远，但 24dp 上看不出来。
+ */
+private const val StarRimScale = 1.10f
 
 @Composable
 fun CourseColorDot(
