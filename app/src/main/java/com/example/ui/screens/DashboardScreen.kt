@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material3.Button
@@ -59,7 +61,6 @@ import com.example.ui.theme.cardRevealAt
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -175,7 +176,11 @@ fun DashboardScreen(
         periodStartMillis(todayCalendar, it.slot, state.periodTable)
     } ?: 0L
     val featuredCountdown = if (featuredWindow != null && !featuredIsCurrent) {
-        "还有 ${formatRemaining((featuredStartMillis - nowMillis).coerceAtLeast(0L))} 开始"
+        // 只说「还有 51 分」，不接「开始」：组头已经说过「下节课还有 51 分 开始」，
+        // 卡片右栏那枚「开课」标签又把「开始」说了一遍——同一个词在一屏里出现三次，
+        // 就得砍到只剩最该说的那处。卡片这一行接上右栏正好读成
+        //「还有 51 分 · 开课 13:25」。
+        "还有 ${formatRemaining((featuredStartMillis - nowMillis).coerceAtLeast(0L))}"
     } else {
         ""
     }
@@ -688,7 +693,7 @@ fun DashboardScreen(
                                 .courseCardWash(
                                     courseColor = courseColor,
                                     shape = MiuSurface.CardShape,
-                                    borderColor = Color.White.copy(alpha = 0.35f),
+                                    // 不描边：白边已取消，边界交给卡面本身。
                                     washAlpha = 0.10f,
                                     sheenAlpha = 0.11f
                                 )
@@ -942,14 +947,18 @@ private data class SlotWindow(
 )
 
 /**
- * 课程卡的“色带玻璃”：课程色从左侧晕开、顶部一道很轻的高光，外加一圈细描边。
+ * 课程卡的“色带玻璃”：课程色从左侧晕开、顶部一道很轻的高光。
  * 叠在 glassSurface 之上，不改变卡片尺寸和交互。
+ *
+ * **不描边**：白边已经取消——白边在浅色壁纸上只是勉强算材质，在深色/花纹壁纸上
+ * 是一圈硬邦邦的亮线，而卡片边界本来就由「面更实 + 更大的模糊半径」这两件事撑着
+ * （见 Mica.kt）。主卡那圈 1dp 课程色描边也跟着撤了：它原本是拿来当「这是主卡」
+ * 的层级信号，现在主卡已经靠**加高 + 状态标记 + 右栏读数**站出来了，不必再描一圈。
+ * 描边给出去就收回来，别留一个没人用的旋钮。
  */
 private fun Modifier.courseCardWash(
     courseColor: Color,
     shape: RoundedCornerShape,
-    borderColor: Color,
-    borderWidth: Dp = 0.75.dp,
     washAlpha: Float = 0.10f,
     sheenAlpha: Float = 0.11f
 ): Modifier = this
@@ -968,7 +977,6 @@ private fun Modifier.courseCardWash(
             )
         )
     }
-    .border(borderWidth, borderColor, shape)
 
 /** 课程卡右侧的待办小签：同色系描边，不再用一块高白胶囊。 */
 @Composable
@@ -1024,6 +1032,98 @@ private fun CoursePendingBadge(
     }
 }
 
+/**
+ * 主卡上那个状态标记。
+ *
+ * 「现在」是**主题绿实心**，「下一节」是**磨砂白面 + 墨黑字**。
+ *
+ * 为什么不再用两档绿：旧版「下一节」那枚淡绿胶囊压在粉彩卡上，是全卡对比度
+ * 最高的元素，比课名还响——可绿色跟「这门课」没有任何关系，纯粹是拿了一个
+ * 不相干的颜色占了最贵的对比度（设计笔记的规矩：颜色是线索，不是装饰；
+ * 紧迫度负责「现在看哪条」）。
+ *
+ * 现在两态靠**实心 / 磨砂**分轻重：「现在」是正在发生，主题绿是语义色，
+ * 值得占一个实心块；「下一节」还没发生，给一枚中性标签就够——
+ * 中性的好处是它落在任何一门课的粉彩卡面上都不撞色。
+ */
+@Composable
+private fun FeaturedStateChip(
+    isCurrent: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val background = if (isCurrent) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        Color.White.copy(alpha = 0.55f)
+    }
+    val foreground = if (isCurrent) {
+        MaterialTheme.colorScheme.onPrimary
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(background)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    ) {
+        Text(
+            text = if (isCurrent) "现在" else "下一节",
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = foreground,
+            maxLines = 1
+        )
+    }
+}
+
+/**
+ * 加高的主卡：当前课 / 下一节课。
+ *
+ * 排版按**信息成组**来：左边是这门课的事实（课名 / 教室 / 节次 / 教师），
+ * 右边是一个时间读数，中间一根发丝线分开，底部那行按这一态有没有百分比来给。
+ *
+ * 相对旧版改了三处，都是为了把「响」让给该响的东西：
+ *
+ * 1. **状态标记不再跟课程色打架**（见 [FeaturedStateChip]）。
+ * 2. **右栏改成「标签在上、读数在下」**。旧版把「开始」压在 13:25 底下，
+ *    而这个词组头已经说过一次（组头：「下节课还有 51 分 开始」），
+ *    卡里再说就是第三次。现在右栏只留一个标签说明右边那个数字是什么，
+ *    文案也改成「开课」，跟组头的「开始」不撞词。
+ * 3. **左轨满高，底部各归各位**。旧版左轨只有 56dp，在 112dp 的卡里像半截
+ *    没画完。现在左轨贯通内容区。底部那行按**这一态到底有没有百分比**来给：
+ *    「现在」有——进度条就是「这节课上了多少」的量表，所以画轨道 +「已上 92%」；
+ *    「下一节」没有——还没开课，没有百分比可言，硬画一条空轨道只是拿一根
+ *    没有含义的线占位置，所以那里只留倒计时本身。
+ * 4. **教室升成速查项**（见下）。
+ * 5. **不描边**。主卡那圈 1dp 课程色描边撤掉了：它原本是「这是主卡」的层级信号，
+ *    现在主卡已经靠**加高 + 状态标记 + 右栏读数**站出来了，不必再描一圈。
+ *
+ * ### 教室为什么单独占一行
+ *
+ * 用户原话：「教室信息对用户来说是需要速查的信息，要明显一点」。
+ * 旧版把教室塞成 meta 行里一枚 9.5sp 的小胶囊，压在 11sp 的节次/时间/教师旁边——
+ * 那是整张卡上**最小**的一枚字，却是出门前最要紧的一个数。速查的东西不该
+ * 藏在最细的一行里。
+ *
+ * 现在教室自己占一行：位置图标 + 14sp SemiBold + 主文字墨色，夹在课名和
+ * meta 行之间，字号只比课名小一档。顺带把「@」去掉了——课程详情弹层里
+ * 教室本来就用 [Icons.Outlined.LocationOn] 表示（见 CourseTimetableComponents），
+ * 图标已经说明了「这是地点」，再挂一个「@」是重复；设计笔记的现状诊断也写着
+ * 「@ 教室胶囊的『@』是程序员语法，不是学生语言」。
+ *
+ * 教室名写**全名**（带「紫金港」这样的校区前缀），不砍前缀——理由见
+ * 下面 `room` 变量上方那段注释。
+ *
+ * ### 行高必须显式写
+ *
+ * Compose 的 `Text` 只改 `fontSize` 不改 `lineHeight` 时，会**继承默认主题的
+ * lineHeight**（本项目是 24sp）——11sp 的小字和 17sp 的课名因此占着一样高的
+ * 行框，24dp 一行是白白浪费的。这张卡要同时塞下四行事实，就把这几行的
+ * lineHeight 逐条写死，行高立刻省出 20dp 上下，教室这一行才塞得进去而
+ * 不必把卡继续加高。
+ */
 @Composable
 private fun FeaturedCourseCard(
     course: CourseEntity,
@@ -1051,8 +1151,16 @@ private fun FeaturedCourseCard(
         0f
     }
     val percent = (progress * 100).roundToInt()
-    // 加高卡里省掉校区前缀，给教师名留出宽度；完整教室仍在课程详情里。
-    val displayRoom = if (room.startsWith("紫金港")) room.removePrefix("紫金港") else room
+    // 教室写全名（带校区前缀）。
+    //
+    // 早先这里会砍掉「紫金港」前缀，为的是给同一行里的教师名腾宽度——那时教室是
+    // meta 行里一枚 9.5sp 的小胶囊，挤得下不下全看教师名长不长。
+    // 那个理由现在**正好反过来了**：教室已经提成速查项、自己独占一行，宽度根本不紧张；
+    // 而被砍掉的「紫金港」恰恰是速查时最要紧的那部分——「西2-105」不写校区，
+    // 学生分不清是紫金港还是玉泉。列表卡、课程详情、课表页也一直都是写全名的。
+    //
+    // 判据：**为省宽度砍掉关键字段，是把成本转嫁给最不该承担它的人**——
+    // 砍掉的是要出门找教室的人要读的那几个字，省下的是一行的空白。
 
     Card(
         shape = shape,
@@ -1060,7 +1168,7 @@ private fun FeaturedCourseCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         modifier = modifier
             .fillMaxWidth()
-            .height(112.dp)
+            .height(124.dp)
     ) {
         Row(
             modifier = Modifier
@@ -1074,17 +1182,17 @@ private fun FeaturedCourseCard(
                 .courseCardWash(
                     courseColor = courseColor,
                     shape = shape,
-                    borderColor = accentBarColor(courseColor).copy(alpha = 0.42f),
-                    borderWidth = 1.dp,
                     washAlpha = 0.10f,
                     sheenAlpha = 0.12f
                 )
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // 左轨贯通整个内容区。原来只有 56dp，在 112dp 的卡里像半截没画完。
             Box(
                 modifier = Modifier
-                    .size(5.dp, 56.dp)
+                    .width(5.dp)
+                    .fillMaxHeight()
                     .clip(RoundedCornerShape(2.5.dp))
                     .background(
                         Brush.verticalGradient(
@@ -1099,27 +1207,12 @@ private fun FeaturedCourseCard(
 
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(
-                                if (isCurrent) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.primaryContainer
-                            )
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = if (isCurrent) "现在" else "下一节",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isCurrent) MaterialTheme.colorScheme.onPrimary
-                            else MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
+                    FeaturedStateChip(isCurrent = isCurrent)
                     Spacer(modifier = Modifier.width(7.dp))
                     Text(
                         text = course.name,
                         fontSize = 17.sp,
+                        lineHeight = 24.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
@@ -1128,36 +1221,40 @@ private fun FeaturedCourseCard(
                     )
                 }
                 Spacer(modifier = Modifier.height(4.dp))
+                // 教室：速查项，单独一行。图标跟课程详情弹层用同一个（LocationOn）。
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (room.isNotBlank()) {
-                        val roomShape = RoundedCornerShape(6.dp)
-                        Box(
-                            modifier = Modifier
-                                .clip(roomShape)
-                                .background(courseColor.copy(alpha = 0.16f))
-                                .border(0.5.dp, courseColor.copy(alpha = 0.28f), roomShape)
-                                .padding(horizontal = 5.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "@$displayRoom",
-                                fontSize = 9.5.sp,
-                                color = accentOnCourse(courseColor),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Outlined.LocationOn,
+                            contentDescription = null,
+                            modifier = Modifier.size(15.dp),
+                            tint = accentOnCourse(courseColor)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = room,
+                            fontSize = 14.sp,
+                            lineHeight = 21.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
-                    Text(
-                        text = "${formatPeriodRange(slot.startPeriod, slot.endPeriod)} ($timeStart-$timeEnd) · ${course.teacher}",
-                        fontSize = 11.sp,
-                        color = TextSecondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
                 }
-                Spacer(modifier = Modifier.height(7.dp))
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = "${formatPeriodRange(slot.startPeriod, slot.endPeriod)} ($timeStart-$timeEnd) · ${course.teacher}",
+                    style = MiuType.CourseMeta.copy(fontSize = 11.sp),
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                // 底部：时间进度。**轨道只属于「现在」**——
+                // 进度条是「这节课上了百分之多少」的量表，「下一节」还没有百分比可言，
+                // 画一条空轨道只是拿一根没有含义的线占位置。
+                // 「下一节」这一行只留倒计时本身。
                 if (isCurrent) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
@@ -1181,10 +1278,11 @@ private fun FeaturedCourseCard(
                                     )
                             )
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(9.dp))
                         Text(
                             text = "已上 $percent%",
-                            fontSize = 11.sp,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = accentOnCourse(courseColor),
                             maxLines = 1
@@ -1194,6 +1292,7 @@ private fun FeaturedCourseCard(
                     Text(
                         text = countdownText,
                         fontSize = 12.sp,
+                        lineHeight = 17.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = TextSecondary,
                         maxLines = 1,
@@ -1202,32 +1301,38 @@ private fun FeaturedCourseCard(
                 }
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(10.dp))
+            // 发丝线贯通内容区，把右边读数单独划成一列。
             Box(
                 modifier = Modifier
                     .width(1.dp)
-                    .height(48.dp)
-                    .background(Color.White.copy(alpha = 0.28f))
+                    .fillMaxHeight()
+                    .background(Color.White.copy(alpha = 0.34f))
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(10.dp))
             Column(
-                modifier = Modifier.width(62.dp),
+                modifier = Modifier.width(64.dp),
                 horizontalAlignment = Alignment.End
             ) {
+                // 标签在上、读数在下：旧版把「开始」压在数字底下，
+                // 那个词又被组头说过一次，现在右栏只说明右边这个数字是什么。
+                Text(
+                    text = if (isCurrent) "下课" else "开课",
+                    fontSize = 10.5.sp,
+                    lineHeight = 14.sp,
+                    color = TextSecondary,
+                    maxLines = 1
+                )
+                Spacer(modifier = Modifier.height(1.dp))
                 Text(
                     text = formatMinute(if (isCurrent) endMinute else startMinute),
-                    fontSize = 20.sp,
+                    fontSize = 21.sp,
+                    lineHeight = 26.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1
                 )
-                Text(
-                    text = if (isCurrent) "下课" else "开始",
-                    fontSize = 10.sp,
-                    color = TextSecondary,
-                    maxLines = 1
-                )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(7.dp))
                 CoursePendingBadge(
                     pendingCount = pendingCount,
                     hasLinked = hasLinked,
