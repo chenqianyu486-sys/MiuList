@@ -426,10 +426,10 @@ internal val AcknowledgementsList = listOf(
     AcknowledgementInfo(
         project = "心知天气 (Seniverse)",
         contributors = "心知天气团队 (Seniverse)",
-        // 只说天气：空气质量那项 2026-10-18 起换成了 Open-Meteo
-        // （心知的 air/now.json 要单独开通产品权限，这把 key 没有，返回 AP010002）。
+        // 只说天气：空气质量那项走的是 Open-Meteo（心知的 air/now.json 要单独
+        // 开通产品权限，这把 key 没有，返回 AP010002）。
         // 署名写多了就是把没用的数据也算进来。
-        note = "提供实时天气数据服务支持（GitHub Actions 定时同步静态托管）",
+        note = "提供天气数据服务支持（由 GitHub Actions 定时同步为静态托管文件）",
         url = "https://www.seniverse.com"
     ),
     AcknowledgementInfo(

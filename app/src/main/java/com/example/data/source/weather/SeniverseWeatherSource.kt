@@ -1,5 +1,6 @@
 package com.example.data.source.weather
 
+import com.example.data.calendar.AppZone
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
@@ -31,6 +32,13 @@ import java.util.concurrent.TimeUnit
  *
  * 所以这个类名里的 Seniverse 只对**天气**成立；空气是同一份文件里的另一个字段，
  * 它的口径与上游等级的处理见 [DailyWeather.aqi] 与 [DailyWeather.airQualityLabel]。
+ *
+ * ## 为什么不改成客户端直连 Open-Meteo 拿天气
+ *
+ * 试过，那套实现是完整的，但它给的是**数值模式**（ECMWF / GFS / ICON），
+ * 而用户要的是**地面观测**。同一时刻两边的数值会有出入。
+ * 空气则两边都无所谓 —— 托管那份本来就是 Open-Meteo 的。
+ * 所以天气留在托管这一侧。
  */
 class SeniverseWeatherSource(
     private val client: OkHttpClient = defaultClient(),
@@ -44,21 +52,48 @@ class SeniverseWeatherSource(
         if (responseText != null) return classify(responseText, 200)
         return withContext(Dispatchers.IO) {
             val reasons = mutableListOf<String>()
+            // 拿到了、但日期不是今天的那些。留着当兜底：万一所有镜像都只给得出
+            // 昨天的文件，把它交上去，好让决策层说「不是今天的数据」，
+            // 而不是一句笼统的「拉取失败」。
+            var notToday: WeatherFetch.Got? = null
+
             for (url in remoteUrls) {
                 when (val result = fetchOne(url)) {
-                    is WeatherFetch.Got -> return@withContext result
+                    is WeatherFetch.Got -> {
+                        // **关键：日期不对就继续试下一个镜像。**
+                        //
+                        // 镜像之间的新鲜度**不一致**，而且不一致是常态：
+                        // Gitee 那份靠 CI 另推一次，而 CI 那一步的推送是
+                        // `|| true` 兜底的 —— token 没配/过期时它**静默失败**，
+                        // 于是 Gitee 上的 weather.json 可以比 GitHub 上那份
+                        // 旧上一天。实测就撞到过：Gitee 是 10-18、ghproxy 是 10-19。
+                        //
+                        // 旧的做法是「第一个能通的就算」，于是一个陈旧镜像排在前面，
+                        // 就能把一整天的天气变成「读不到」—— 而它自己明明是好的。
+                        if (isToday(result.text, location)) return@withContext result
+                        if (notToday == null) notToday = result
+                        reasons += "${hostOf(url)}: 文件不是今天的"
+                    }
                     is WeatherFetch.Unavailable -> {
-                        val host = url.toHttpUrlOrNull()?.host ?: url
-                        reasons += "$host: ${result.reason}"
+                        reasons += "${hostOf(url)}: ${result.reason}"
                     }
                 }
             }
-            WeatherFetch.Unavailable(
+
+            notToday ?: WeatherFetch.Unavailable(
                 reasons.joinToString("；").ifEmpty { "没有配置任何天气远程地址" },
                 WeatherFailureKind.OFFLINE
             )
         }
     }
+
+    /** 这份文件是不是**今天**的。解不出来也算「不是今天」—— 交给决策层去报错。 */
+    private fun isToday(text: String, location: WeatherLocation): Boolean {
+        val parsed = parseToday(text, location) ?: return false
+        return parsed.epochDay == AppZone.todayEpochDay()
+    }
+
+    private fun hostOf(url: String): String = url.toHttpUrlOrNull()?.host ?: url
 
     private fun fetchOne(url: String): WeatherFetch = try {
         client.newCall(Request.Builder().url(url).get().build()).execute().use { res ->
@@ -111,17 +146,33 @@ class SeniverseWeatherSource(
     companion object {
         /**
          * 静态天气数据的托管地址，逐个镜像回退。
-         * Gitee 国内访问较快，GitHub raw 作为备用。
+         *
+         * **顺序按「国内能直连」排，不按「离源近」排。**
+         * 原来第一顺位是 `raw.githubusercontent.com` —— 实测在国内直连必然超时
+         * （12s 挂掉），而客户端的连接超时也是 15s，于是每个缓存未命中的用户
+         * 都要先白等满一个超时，才轮得到第二个能通的镜像。
+         * 实测（不走代理）：Gitee 0.4s、ghproxy 1.5s、raw.githubusercontent 超时。
+         *
+         * 排在最后的 raw.githubusercontent 仍要留着：它在墙外网络上反而最稳，
+         * 而 App 只服务国内这件事不该写死成一个「只有这几个能用」的假设。
          */
         val REMOTE_URLS = listOf(
-            "https://raw.githubusercontent.com/chenqianyu486-sys/MiuList/main/weather.json",
+            "https://gitee.com/zjuchenqianyu/MiuList/raw/main/weather.json",
             "https://ghproxy.net/https://raw.githubusercontent.com/chenqianyu486-sys/MiuList/main/weather.json",
-            "https://gitee.com/zjuchenqianyu/MiuList/raw/main/weather.json"
+            "https://raw.githubusercontent.com/chenqianyu486-sys/MiuList/main/weather.json"
         )
 
+        /**
+         * 超时**按「这份文件有多小」定，不按「网络通常多快」定。
+         *
+         * 这份文件只有几百字节。连不上时多等一会儿毫无意义 —— 挂着的镜像
+         * 不会因为再等 10 秒就活过来，只会让用户对着「读不到」多等一轮。
+         * 5 秒够覆盖正常网络（Gitee 实测 0.4s、ghproxy 1.5s），也够慢网一把；
+         * 而三个镜像全挂时，15s×3 变 5s×3，用户少等 30 秒。
+         */
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS)
             .build()
 
         private val adapter by lazy {

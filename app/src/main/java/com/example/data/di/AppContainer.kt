@@ -150,8 +150,14 @@ class AppContainer(context: Context) {
      *
      * **这里没有任何密钥**，是刻意的：这一块曾经接心知天气，需要把私钥编译进
      * dex 才能在客户端算签名 —— 于是它以明文常量躺在安装包里（实测能直接搜到）。
-     * 换成 Open-Meteo 之后这条注入链路整个删掉了，不需要 `isConfigured` 闸门，
-     * 也不再有「忘了配密钥就什么都不显示」的那一档状态。
+     * 现在的形态是**静态托管**：客户端只拉一份公开的 `weather.json`，
+     * 那份文件由 GitHub Actions 在云端合成 —— 天气本体用心知（地面观测），
+     * 空气质量用 Open-Meteo（心知的空气接口要单独开通产品权限，一把 key 没有）。
+     * 密钥只在 CI 的 Secrets 里，永远不进包，也不需要 `isConfigured` 闸门。
+     *
+     * 天气走托管而不是客户端直连心知，是因为直连就得把私钥塞进 APK。
+     * 天气走托管而不是客户端直连 Open-Meteo，是因为用户要的是**地面观测**，
+     * 而 Open-Meteo 给的是数值模式。空气则两边都无所谓，托管那份本来就是它。
      */
     val weatherService: WeatherService by lazy {
         WeatherService(

@@ -1,7 +1,6 @@
 package com.example.data.source.weather
 
 import kotlinx.coroutines.test.runTest
-import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -17,12 +16,16 @@ import java.time.LocalDate
 /**
  * 天气取数的**决策层**：3 小时窗口、当天校验、三态语义、空气并入。
  *
- * 全部离线：响应文本注入 [OpenMeteoWeatherSource]，缓存落在 [TemporaryFolder]，
+ * 全部离线：响应正文由 [StubWeatherSource] 注入，缓存落在 [TemporaryFolder]，
  * 时钟也钉死，所以「距上次拉取多久」是确定的值而不是碰运气。
  *
  * 这一层**不该因为换了数据源、或改了窗口长度而改**：它只认「拿到的这份
  * 是不是今天」与「它有多新」，与那份数据是谁给的无关。底下换源、上面改窗口，
  * 用例的形状要跟着动，但它们要验的那条逻辑一个都不许变。
+ *
+ * ⚠️ 这里**不挂任何一个真实数据源**。决策层的用例要验的是「拿到一份正文之后
+ * 怎么办」，不是「某个源的 JSON 长什么样」—— 后者是那个源自己的单测的事。
+ * 挂一个生产里不存在的源，验的就是一条线上没有的链路。
  */
 class WeatherServiceTest {
 
@@ -41,13 +44,17 @@ class WeatherServiceTest {
         /** 上游报错时的形状：正文里带 error 与 reason。 */
         val BROKEN = """{"error":true,"reason":"boom"}"""
 
-        /** 61 = 小雨。 */
+        /**
+         * 静态托管文件那种**扁平形状**，与 `scripts/sync_weather.py` 写出来的一致。
+         *
+         * 刻意不用上游原始格式：决策层不关心 JSON 长什么样，
+         * 而用一份**线上真会出现的形状**意味着这个用例里没有第二个真相。
+         */
         fun response(date: String, high: Double = 25.0, low: Double = 19.0) = """
-            {"daily":{"time":["$date"],"weather_code":[61],
-              "temperature_2m_max":[$high],"temperature_2m_min":[$low]}}
+            {"date":"$date","textDay":"小雨","high":${high.toInt()},"low":${low.toInt()}}
         """.trimIndent()
 
-        /** 空气正常：64 = 良。 */
+        /** 空气正常：64 = 良。空气是**另一份正文**，与天气分开取。 */
         const val AIR_OK = """{"current":{"time":"2026-10-16T14:00","interval":3600,"us_aqi":64}}"""
     }
 
@@ -61,13 +68,11 @@ class WeatherServiceTest {
         /**
          * 空气质量正文。**默认给一份固定的成功响应，而不是 null。**
          *
-         * 因为 [OpenMeteoWeatherSource] 把 `null` 理解成「没注入，去真联网」——
-         * 写测试时漏传一个参数，于是这条用例会真的发请求出去。
-         * 实测过一次：断言里写着 `aqi=null`，实际拿回来的却是真实读数 150，
-         * 用例红在一个与它要验的东西毫无关系的地方。
+         * null 在这里表示「没有空气这一份」，而不是「去真联网」——
+         * 桩源压根不联网，所以传 null 是安全的；但默认值仍给一份确定的正文，
+         * 因为「默认值是确定的」这条比「默认值是 null」更难让人误读。
          *
-         * 所以这里的默认值必须是「一份确定的正文」。要模拟空气拉不到，
-         * 显式传 [BROKEN] 或 `"""{"current":{}}"""`，不要靠 null。
+         * 要模拟空气拉不到，显式传 [BROKEN] 或 `"""{"current":{}}"""`。
          */
         air: String = AIR_OK,
         cache: WeatherCache = cacheIn(),
@@ -77,12 +82,11 @@ class WeatherServiceTest {
          * 整份数据源覆盖。
          *
          * 只在要验「网络层失败」时用：那是唯一无法靠注入正文造出来的分支
-         * （正文注入了就等于服务端已经回过话）。做法是给 client 挂一个
-         * 抛异常的拦截器 —— **注入异常，而不是等它真的发生**，
-         * 否则换台机器、换个网络，这条用例会红在一个与它无关的地方。
+         * （正文注入了就等于服务端已经回过话）。做法是让 fetch 直接抛
+         * —— **注入异常，而不是等它真的发生**，否则换台机器、换个网络，
+         * 这条用例会红在一个与它无关的地方。
          */
-        source: OpenMeteoWeatherSource =
-            OpenMeteoWeatherSource(responseText = text, airResponseText = air)
+        source: WeatherSource = StubWeatherSource(text, air)
     ) = WeatherService(
         source = source,
         cache = cache,
@@ -90,12 +94,11 @@ class WeatherServiceTest {
         nowMillis = { now }
     )
 
-    /** 一个「请求压根没发出去」的源：拦截器直接抛异常。 */
-    private fun offlineSource() = OpenMeteoWeatherSource(
-        client = OkHttpClient.Builder()
-            .addInterceptor { throw UnknownHostException("no dns in here") }
-            .build(),
-        airResponseText = AIR_OK
+    /** 一个「请求压根没发出去」的源：fetch 直接抛网络异常。 */
+    private fun offlineSource() = StubWeatherSource(
+        weatherText = null,
+        airText = AIR_OK,
+        networkError = UnknownHostException("no dns in here")
     )
 
     /**
@@ -192,7 +195,6 @@ class WeatherServiceTest {
 
         assertNull(service(cache = cache, now = T0).cachedToday())
     }
-
     /** 拉取失败时**不能**动缓存 —— 那等于让用户连最后那份都失去。 */
     @Test
     fun `拉取失败时不动缓存`() = runTest {

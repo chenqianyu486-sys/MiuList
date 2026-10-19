@@ -244,8 +244,8 @@ class WeatherService(
  * 缓存文件的外壳：**拉取时刻 + 天气原文 + 空气质量原文**。
  *
  * 天气原文整体当字符串存，一个字节都不改 —— 解析链路只有
- * [OpenMeteoWeatherSource.parseToday] 这一条，不为了套壳再写一份解析。
- * 空气同理走 [OpenMeteoWeatherSource.parseAirQuality]。
+ * [source.parseToday] 这一条，不为了套壳再写一份解析。
+ * 空气同理走 [source.parseAirQuality]。
  *
  * [airBody] 可空且**默认可空**：写这份缓存时还没有空气这一项，
  * 老缓存解出来是 null，界面照样显示天气 —— 不需要数据迁移，也不该因为
