@@ -19,6 +19,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # 必须取全量历史：checkout 默认是 depth=1 的浅克隆，
+          # 从浅克隆往第二个远端推，服务端会因为拿不到完整祖先而拒收
+          # （shallow update not allowed）。这份仓库很小，全量检出没有成本。
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -45,16 +50,24 @@ jobs:
             echo "weather.json 没有变化，无需提交。"
           fi
 
-      # 这里**不能**用 `if: env.GITEE_TOKEN != ''` 来判空：
-      # step 级的 env 不会出现在该 step 自己的 `if` 的 env context 里，
-      # 那个条件恒为 false —— 于是这一步从来没执行过（实测 gitee 上那份
-      # weather.json 一直停滞在加 aqiError 字段之前的版本）。
-      # run 里已经有 `|| true` 兜底，没配 token 时推送失败也不影响天气更新，
-      # 所以这里无条件执行即可。
-      - name: Push to Gitee (optional mirror)
+      # 推 Gitee 镜像。这里有两个坑，都踩过：
+      #
+      # 1. 不能写成 `git remote set-url gitee <url>`：Actions 全新 checkout 里
+      #    只有 origin 这一个 remote，set-url 对不存在的 remote 会以退出码 2
+      #    失败，整条流水线直接红在这一行，镜像一个字节都没推上去。
+      #    要么 `git remote add`，要么干脆不建 remote、直接推 URL —— 这里用后者。
+      #
+      # 2. 不能留 `|| true`：token 没配或过期时推送会失败，而失败被吞掉之后
+      #    没有任何痕迹，镜像就停在旧版本上（实测滞留了 19 小时的天气数据）。
+      #    宁可让这一步红，也不要在没人知道的情况下让镜像悄悄烂掉。
+      #    这一步在推 origin 之后，失败也不影响 GitHub 上的天气数据本身。
+      - name: Push to Gitee (mirror)
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
-          git remote set-url gitee "https://zjuchenqianyu:${GITEE_TOKEN}@gitee.com/zjuchenqianyu/MiuList.git"
-          git push gitee main
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "::error::GITEE_TOKEN 未配置（或为空），Gitee 镜像不会更新"
+            exit 1
+          fi
+          git push "https://zjuchenqianyu:${GITEE_TOKEN}@gitee.com/zjuchenqianyu/MiuList.git" main
 
