@@ -18,6 +18,7 @@ import com.example.data.model.SlotWithWeeks
 import com.example.data.timetable.WeekSet
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import java.util.UUID
 
 /**
  * 课程、时段与开课周次的读写。
@@ -165,7 +166,20 @@ class CourseRepository(
         courseDao.insertCourses(courses.map { it.withDedupeKey() })
         slotDao.insertSlots(slots)
         // 示例数据的时段一律按每周处理：开课周次表留空 = 每周
-        taskDao.insertTasks(tasks)
+        //
+        // 同步身份在这里就分配好，而不是等启动时的惰性补齐：演示待办同样会被
+        // 用户导出成快照文件，带着空 uid 出去会让文件里出现一整段「无法参与
+        // 跨设备合并」的条目。`updatedAt` 也盖上，免得它们在任何一次后写覆盖里
+        // 都判负、永远被别的设备覆盖。
+        val now = System.currentTimeMillis()
+        taskDao.insertTasks(
+            tasks.map {
+                it.copy(
+                    syncUid = it.syncUid.ifBlank { UUID.randomUUID().toString() },
+                    updatedAt = now
+                )
+            }
+        )
     }
 
     /**

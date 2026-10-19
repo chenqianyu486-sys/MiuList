@@ -56,17 +56,6 @@ enum class TaskStatusFilter(val label: String) {
 }
 
 /**
- * 课表的导入来源。
- *
- * `ZJU` 走 App 内的浙大登录与取数，产出的 JSON 与文件导入走**同一条管线**；
- * `FILE` 读本地文件。两者唯一的区别是数据从哪来。
- */
-enum class ImportSource(val label: String) {
-    FILE("文件"),
-    ZJU("ZJU")
-}
-
-/**
  * 浙大校历里的一个**学年学期**（秋冬 / 春夏，16 周）。
  *
  * [term] 是教务网查询用的那一半（秋冬 → 0 秋，春夏 → 4 春），
@@ -225,9 +214,14 @@ data class MainUiState(
     val isTaskRulesDialogOpen: Boolean = false,
     val isWeekPickerDialogOpen: Boolean = false,
 
-    // 课表导入 / 导出
+    // 数据导入 / 导出（整机快照）
     val isTransferDialogOpen: Boolean = false,
-    val importStrategy: ImportStrategy = ImportStrategy.MERGE,
+    /**
+     * 默认整机同步。这条接口现在的定位就是「把本机状态搬到另一台设备」，
+     * 课表之外的待办、自定义分类、生成规则只有这一条路能带走；
+     * 默认选别的等于让用户每次导入都要先想一遍「我这次到底想不想同步待办」。
+     */
+    val importStrategy: ImportStrategy = ImportStrategy.SNAPSHOT,
 
     // 待办分类管理
     val isTaskCategoryManageDialogOpen: Boolean = false,
@@ -236,9 +230,7 @@ data class MainUiState(
     val wallpaperConfig: WallpaperConfig = WallpaperConfig(),
     val isWallpaperDialogOpen: Boolean = false,
 
-    // 「ZJU」导入源
-    /** 导入来源分段：本地文件 or 直接登录浙大教务网。 */
-    val importSource: ImportSource = ImportSource.FILE,
+    // 浙大同步（账号 / 学期下拉 / 取课表）与文件导入导出各自的状态
     val isZjuImportRunning: Boolean = false,
     /** 学期的下拉选项，来自 zju-ical 的公共校历配置。 */
     val zjuTermOptions: List<ZjuTermOption> = emptyList(),

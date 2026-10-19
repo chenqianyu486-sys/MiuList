@@ -97,8 +97,8 @@ fun SettingsScreen(
         item {
             SettingsActionCard(
                 icon = Icons.Outlined.ImportExport,
-                title = "课表导入 / 导出",
-                subtitle = "JSON 文件 · 课程与作息一起走",
+                title = "数据导入 / 导出",
+                subtitle = "整机快照 · 课程与待办一起走",
                 actionLabel = "管理",
                 actionTestTag = "open_transfer_button",
                 onAction = onOpenTransferDialog

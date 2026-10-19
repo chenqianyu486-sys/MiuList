@@ -26,6 +26,7 @@ import com.example.data.sync.ScheduleSyncManager
 import com.example.data.transfer.ScheduleExportService
 import com.example.data.transfer.ScheduleImportService
 import com.example.data.validate.ScheduleBundleValidator
+import com.example.data.validate.SnapshotValidator
 import java.io.File
 
 /**
@@ -91,8 +92,18 @@ class AppContainer(context: Context) {
     }
 
     val exportService: ScheduleExportService by lazy {
-        ScheduleExportService(codec, courseRepository, calendarRepository, settingsRepository)
+        ScheduleExportService(
+            codec,
+            courseRepository,
+            calendarRepository,
+            settingsRepository,
+            taskRepository,
+            taskTypeRepository
+        )
     }
+
+    /** v3 三块用户数据的归一化与判错。与 `validator` 同一套分层，各自只吃 Bundle。 */
+    val snapshotValidator: SnapshotValidator by lazy { SnapshotValidator() }
 
     /**
      * 「ZJU」导入源。纯网络客户端，不依赖 Room，所以它自己不持有数据库 ——

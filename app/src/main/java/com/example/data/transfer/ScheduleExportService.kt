@@ -1,5 +1,6 @@
 package com.example.data.transfer
 
+import com.example.data.calendar.AppZone
 import com.example.data.calendar.EpochDays
 import com.example.data.calendar.TweakKind
 import com.example.data.calendar.ZjuCalendarAdapter
@@ -9,33 +10,52 @@ import com.example.data.codec.CourseBundle
 import com.example.data.codec.PeriodBundle
 import com.example.data.codec.ProvenanceBundle
 import com.example.data.codec.ScheduleBundle
+import com.example.data.codec.TaskBundle
+import com.example.data.codec.TaskRuleBundle
+import com.example.data.codec.TaskTypeBundle
 import com.example.data.codec.TermConfigBundle
 import com.example.data.codec.TermRefBundle
 import com.example.data.codec.TimetableBlockBundle
 import com.example.data.codec.TweakBundle
 import com.example.data.local.MakeupDayEntity
 import com.example.data.local.NoClassDayEntity
+import com.example.data.local.TaskEntity
+import com.example.data.model.CourseKeys
 import com.example.data.repository.AcademicCalendarRepository
 import com.example.data.repository.CourseRepository
 import com.example.data.repository.ScheduleSettingsRepository
+import com.example.data.repository.TaskRepository
+import com.example.data.repository.TaskTypeRepository
 import com.example.data.timetable.WeekSet
 import java.time.format.DateTimeFormatter
 
 /**
- * 把库里的当前状态导成同一份 JSON 契约（schemaVersion = 2）。
+ * 把库里的当前状态导成同一份 JSON 契约（schemaVersion = 3）——**整机快照**。
  *
  * 与导入共用 [com.example.data.codec.ScheduleCodec]，所以「导出 → 导入」天然闭环：
  * 用户换机、重装、备份都不需要 App 之外的任何知识。
  *
- * v2 是**单文件、顶层分块**：导出的停课与补课被反写回 `calendar.tweaks`
- * （而不是 v1 的两段列表），termConfigs 写当前这个学年学期的两半，
- * termRef 指回被查询的那一半。
+ * 快照装的是**这台设备上的全部用户状态**，不只是课表：
+ * 课程 / 校历 / 作息 / 类别规则 / **待办** / **自定义待办分类** / **课程级生成规则**。
+ * 待办尤其不能少 —— 课表随时能从浙大重新拉一遍，勾没勾、打没打星标、拉高亮没拉高亮，
+ * 服务端根本不知道。换机丢待办是最贵的一种丢。
+ *
+ * 顶层分块（`calendar` / `timetable` / `categoryRules` / `tasks` / `taskTypes` / `taskRules`）
+ * 是因为**来源不同**：前三块可以随时由浙大同步覆盖，后三块只能靠这份文件。
+ *
+ * v3 的 `calendar` / `timetable` 与 v2 逐字段相同，v2 里分两段写的停课与补课在
+ * v3 仍反写回 `calendar.tweaks`。
+ *
+ * **绝不导出凭据**：学号密码在 `SecureAccountStorage`（Keystore）里，不经过这里，
+ * `provenance.studentId` 在手工导出路径上保持为空。
  */
 class ScheduleExportService(
     private val codec: com.example.data.codec.ScheduleCodec,
     private val courseRepo: CourseRepository,
     private val calendarRepo: AcademicCalendarRepository,
-    private val settingsRepo: ScheduleSettingsRepository
+    private val settingsRepo: ScheduleSettingsRepository,
+    private val taskRepo: TaskRepository,
+    private val taskTypeRepo: TaskTypeRepository
 ) {
 
     /**
@@ -61,15 +81,35 @@ class ScheduleExportService(
         val makeup = calendarRepo.makeupDaysOnce()
         val rules = settingsRepo.getCategoryRulesOnce()
 
+        // ---- v3：用户数据。课程的自然键在待办与生成规则里替代本地 courseId ----
+        //
+        // 自然键**现算**而不是直接读 dedupeKey：老数据可能没补上这一列，而导入侧
+        // 是拿算法算出来的键去匹配的。导出写空串、导入按算法找，两边口径一差，
+        // 这门课的待办就静默变成「未关联课程」。
+        val courseKeyById = courses.associate { course ->
+            course.id to course.dedupeKey.ifBlank {
+                CourseKeys.compute(course.code, course.name, course.teacher)
+            }
+        }
+        val tasks = taskRepo.getAllTasksOnce()
+        // 没补上 uid 的历史行**跳过**，不写一份空身份进文件：导入侧看到空 uid
+        // 会整条忽略（那是对的），但如果在这里给它编一个 uid，那条待办就会
+        // 变成一个「看起来能同步、实际上和本机那条是两条」的东西。
+        val exportableTasks = tasks.filter { it.syncUid.isNotBlank() }
+        val taskRules = settingsRepo.getTaskRulesOnce()
+
         // 未配置学期时导出「每周」也要有个明确的周数范围，沿用 25 这个上界
         val totalWeeks = semester?.totalWeeks ?: WeekSet.FALLBACK_TOTAL_WEEKS
 
         val bundle = ScheduleBundle(
             provenance = ProvenanceBundle(
-                source = "manual",
+                source = "snapshot",
                 generator = "MiuList 1.0",
-                generatedAt = DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(java.time.LocalDateTime.now()),
-                note = "由应用内「导出课表」生成"
+                // 快照时间写的是北京墙上时间：这份文件是给「同一台机器 / 同一个校园」看的，
+                // 用设备时区会让导出方在 GMT 机器上写下一串比真实时间差 8 小时的值。
+                generatedAt = DateTimeFormatter.ISO_LOCAL_DATE_TIME
+                    .format(java.time.LocalDateTime.now(AppZone.ZONE)),
+                note = "由应用内「导出数据」生成的整机快照"
             ),
             calendar = CalendarBundle(
                 termConfigs = semester?.toTermConfigs().orEmpty(),
@@ -119,7 +159,55 @@ class ScheduleExportService(
                     )
                 }
             ),
-            categoryRules = rules
+            categoryRules = rules,
+            tasks = exportableTasks.map { t ->
+                TaskBundle(
+                    syncUid = t.syncUid,
+                    // 未关联课程的待办 courseId = 0，写 null 而不是空串
+                    courseKey = if (t.courseId == TaskEntity.UNLINKED_COURSE_ID) {
+                        null
+                    } else {
+                        courseKeyById[t.courseId]
+                    },
+                    title = t.title,
+                    description = t.description,
+                    taskType = t.taskType,
+                    startTimeTimestamp = t.startTimeTimestamp,
+                    dueDateTimestamp = t.dueDateTimestamp,
+                    startTimeString = t.startTimeString,
+                    dueDateString = t.dueDateString,
+                    priority = t.priority,
+                    isCompleted = t.isCompleted,
+                    completedAt = t.completedAt,
+                    isAutoGenerated = t.isAutoGenerated,
+                    generatedDate = t.generatedDate,
+                    week = t.week,
+                    dayOfWeek = t.dayOfWeek,
+                    createdAt = t.createdAt,
+                    updatedAt = t.updatedAt
+                )
+            },
+            taskTypes = taskTypeRepo.getAllOnce().map {
+                TaskTypeBundle(
+                    id = it.id,
+                    label = it.label,
+                    colorHex = it.colorHex,
+                    inkHex = it.inkHex,
+                    sortOrder = it.sortOrder
+                )
+            },
+            taskRules = taskRules.flatMap { (courseId, byType) ->
+                val courseKey = courseKeyById[courseId] ?: return@flatMap emptyList()
+                byType.map { (type, spec) ->
+                    TaskRuleBundle(
+                        courseKey = courseKey,
+                        taskType = type.name,
+                        cadence = spec.cadence,
+                        dueOffsetDays = spec.dueOffsetDays,
+                        dueBeforeMinutes = spec.dueBeforeMinutes
+                    )
+                }
+            }
         )
 
         return codec.encode(bundle)

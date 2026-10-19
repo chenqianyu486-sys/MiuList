@@ -6,26 +6,70 @@ import com.example.data.codec.CourseBundle
 import com.example.data.codec.DecodeResult
 import com.example.data.codec.ScheduleCodec
 import com.example.data.codec.SlotBundle
+import com.example.data.codec.TaskBundle
+import com.example.data.codec.TaskRuleBundle
+import com.example.data.codec.TaskTypeBundle
+import com.example.data.generation.CourseRuleSpec
+import com.example.data.generation.TaskCadence
 import com.example.data.local.AppDatabase
 import com.example.data.local.CourseEntity
 import com.example.data.local.CourseSlotEntity
+import com.example.data.local.CustomTaskTypeEntity
 import com.example.data.local.TaskEntity
-import com.example.data.model.CourseKeys
 import com.example.data.model.CategoryRule
+import com.example.data.model.CourseKeys
 import com.example.data.model.SlotWithWeeks
+import com.example.data.model.TaskStar
+import com.example.data.model.TaskType
 import com.example.data.repository.AcademicCalendarRepository
 import com.example.data.repository.CourseRepository
 import com.example.data.repository.ScheduleSettingsRepository
+import com.example.data.repository.TaskTypeRepository
 import com.example.data.timetable.WeekSet
 import com.example.data.validate.ScheduleBundleValidator
+import com.example.data.validate.SnapshotValidator
 import com.example.data.validate.ValidatedBundle
+import com.example.data.validate.ValidatedSnapshot
 import com.example.data.validate.ValidationResult
+
+/**
+ * 「这条待办，文件里的版本是不是比本机的新」。
+ *
+ * **抽成顶层函数而不是两个方法各自判一次**：预览与提交对「谁赢」的判断必须
+ * 是同一处实现，否则会出现「预览说覆盖 3 条、实际覆盖了 5 条」，
+ * 而界面上两处数字都显得合理，没有任何矛盾可查。
+ *
+ * 相等时**文件赢**。毫秒级撞车概率极低，但真撞上时行为是确定的（不会静默错乱）；
+ * 「本机赢」的话，用户会看到自己刚在另一台设备上勾的待办在这台上莫名其妙退回未完成。
+ */
+private fun taskWinsFile(localUpdatedAt: Long, fileUpdatedAt: Long): Boolean =
+    fileUpdatedAt >= localUpdatedAt
+
+/**
+ * 一门课在跨设备语境下的自然键。
+ *
+ * **空 `dedupeKey` 必须现算，不能直接拿空串去匹配。**
+ * `MIGRATION_3_4` 给老数据补过这一列，但补的是补不上的地方就留空 —— 而文件里
+ * 的 `courseKey` 是按算法算出来的，不是空串。于是拿空串当键去匹配，
+ * 结果是「这门课找不到」，待办静默变成「未关联课程」，而界面上看不出任何异常。
+ *
+ * 口径必须与 `CourseKeys.compute` 一致，也与本文件 [preview] 里既有的
+ * `existingByKey` 一致 —— 同一个键有三处算法，迟早会漂移出一处。
+ */
+private fun CourseEntity.naturalKey(): String =
+    dedupeKey.ifBlank { CourseKeys.compute(code, name, teacher) }
+
+/** 本机课程的自然键 → id。供待办与生成规则共用。 */
+private fun List<CourseEntity>.courseIdByNaturalKey(): Map<String, Long> =
+    associate { it.naturalKey() to it.id }
 
 sealed interface PreviewResult {
     data class Failed(val message: String) : PreviewResult
     data class Ready(
         val validated: ValidatedBundle,
-        val preview: ImportPreview
+        val preview: ImportPreview,
+        /** v3 的三块用户数据。非 SNAPSHOT 策略下是 [ValidatedSnapshot.EMPTY]。 */
+        val snapshot: ValidatedSnapshot = ValidatedSnapshot.EMPTY
     ) : PreviewResult
 }
 
@@ -36,9 +80,16 @@ sealed interface PreviewResult {
  * 且全程一个事务：任一步抛异常就整体回滚，DB 回到导入前，
  * 不存在「导了一半」的中间态。
  *
- * 待办**不属于课表**。整表替换只换课表，不动用户自己的待办：课程还在的
- * 继续挂在那门课上，不在了的移入「未关联课程」，本来就未关联的原样不动。
- * 见 [captureTaskLinks] / [planTaskLinks] / [applyTaskLinks]。
+ * ## 三种策略各管各的
+ *
+ * - [ImportStrategy.MERGE] / [ImportStrategy.REPLACE] 是**课表**的两种合并法，
+ *   按 v2 起的既定设计**都不动待办**：课程还在的继续挂着，不在的移入「未关联课程」
+ *   （见 [captureTaskLinks] / [planTaskLinks] / [applyTaskLinks]）。浙大同步走的就是
+ *   REPLACE —— 服务端只管课表，它根本不知道本机的待办勾没勾。
+ * - [ImportStrategy.SNAPSHOT] 才是整机同步：课表部分按 MERGE（**不** REPLACE，
+ *   清空课程会毁掉刚同步来的课表），待办按 `syncUid` 逐条后写覆盖。
+ *
+ * 两条链路共用同一份 Bundle 与同一个 Validator，但**写库的覆盖面刻意不重叠**。
  */
 class ScheduleImportService(
     private val db: AppDatabase,
@@ -46,7 +97,9 @@ class ScheduleImportService(
     private val validator: ScheduleBundleValidator,
     private val courseRepo: CourseRepository,
     private val calendarRepo: AcademicCalendarRepository,
-    private val settingsRepo: ScheduleSettingsRepository
+    private val settingsRepo: ScheduleSettingsRepository,
+    private val snapshotValidator: SnapshotValidator = SnapshotValidator(),
+    private val taskTypeRepo: TaskTypeRepository = TaskTypeRepository(db, db.customTaskTypeDao())
 ) {
 
     suspend fun preview(text: String, strategy: ImportStrategy): PreviewResult {
@@ -58,9 +111,15 @@ class ScheduleImportService(
             is ValidationResult.Invalid -> return PreviewResult.Failed(v.message)
             is ValidationResult.Valid -> v.bundle
         }
+        val snapshot = when (strategy) {
+            ImportStrategy.SNAPSHOT -> snapshotValidator.validate(decoded)
+            // 课表导入不带用户数据。浙大同步走的就是这条路，
+            // 所以这里**必须**不让它碰到待办 —— 它产出的文档三块本来就是空的。
+            else -> ValidatedSnapshot.EMPTY
+        }
 
         val existingCourses = courseRepo.getAllCoursesOnce()
-        val existingByKey = existingCourses.associateBy { it.dedupeKey.ifBlank { CourseKeys.compute(it.code, it.name, it.teacher) } }
+        val existingByKey = existingCourses.associateBy { it.naturalKey() }
 
         val newCourses = mutableListOf<CourseBundle>()
         val updated = mutableListOf<Pair<String, Long>>()
@@ -70,7 +129,7 @@ class ScheduleImportService(
             val hit = existingByKey[key]
             if (hit == null) newCourses += c else updated += (c.name ?: "") to hit.id
         }
-        if (strategy == ImportStrategy.MERGE) {
+        if (strategy == ImportStrategy.MERGE || strategy == ImportStrategy.SNAPSHOT) {
             unchanged = (existingCourses.size - updated.size).coerceAtLeast(0)
         }
 
@@ -99,6 +158,14 @@ class ScheduleImportService(
             emptyMap()
         }
 
+        // 快照的逐条合并结论。与提交走同一个 [planTaskMerge]：
+        // 预览承诺「新增 12 条、覆盖 3 条、保留 5 条」就必须真的是这个数。
+        val taskMerge = if (strategy == ImportStrategy.SNAPSHOT) {
+            planTaskMerge(snapshot.tasks, existingCourses)
+        } else {
+            TaskMergePlan()
+        }
+
         return PreviewResult.Ready(
             validated = validated,
             preview = ImportPreview(
@@ -107,7 +174,8 @@ class ScheduleImportService(
                 newCourses = newCourses,
                 updatedCourses = updated,
                 unchangedCount = unchanged,
-                issues = validated.issues,
+                // 课表问题在前，用户数据问题在后：预览上本来就先讲课表。
+                issues = validated.issues + snapshot.issues,
                 semesterChanged = semesterChanged,
                 semesterSummary = validated.semester?.let {
                     "${it.name} · 第 1-${it.totalWeeks} 周 · ${EpochDays.formatCn(it.startEpochDay)} 起"
@@ -118,8 +186,15 @@ class ScheduleImportService(
                 existingCourseCount = existingCourses.size,
                 existingTaskCount = existingTaskCount(),
                 tasksLosingCourse = taskLinkPlan.count { it.value == null },
-                tasksKeepingCourse = taskLinkPlan.count { it.value != null }
-            )
+                tasksKeepingCourse = taskLinkPlan.count { it.value != null },
+                fileTaskCount = snapshot.tasks.size,
+                taskMerge = taskMerge,
+                fileTaskTypeCount = snapshot.taskTypes.size,
+                fileTaskRuleCount = snapshot.taskRules.size,
+                taskTypesOverwritten = countOverwrittenTypes(snapshot.taskTypes),
+                taskRulesOverwritten = countOverwrittenRules(snapshot.taskRules, existingCourses)
+            ),
+            snapshot = snapshot
         )
     }
 
@@ -154,7 +229,15 @@ class ScheduleImportService(
                 )
                 val entity = course.toEntity()
                 val hits = courseRepo.getByDedupeKey(key)
-                val existing = if (strategy == ImportStrategy.MERGE) hits.firstOrNull() else null
+                // **SNAPSHOT 的课表部分按 MERGE 处理**，理由与它对待办的态度不同：
+                // 课程是有服务端这个权威源的，整表替换一份本地快照会毁掉刚同步来的
+                // 课表；而待办只有本地有，不存在「别人的更权威」这回事。
+                //
+                // 这里若漏掉 SNAPSHOT（只写 `== MERGE`），文件里那门课每次导入都会
+                // 被当成新课程再插一份 —— 同一个自然键下冒出两门课，而界面上
+                // 周课表会显示两行一模一样的东西，且没有任何报错。
+                val mergeByKey = strategy == ImportStrategy.MERGE || strategy == ImportStrategy.SNAPSHOT
+                val existing = if (mergeByKey) hits.firstOrNull() else null
                 val slots = course.slots.map { it.toSlotWithWeeks(v) }
 
                 if (existing != null) {
@@ -192,18 +275,236 @@ class ScheduleImportService(
 
             val removed = if (strategy == ImportStrategy.REPLACE) ready.preview.existingCourseCount else 0
 
+            // ---- 整机快照的三块。课表部分已经落完，这里才轮到用户数据 ----
+            //
+            // 顺序有讲究：**自定义类型必须先落**，待办的 taskType 才解析得出来
+            // （`TaskTypes.resolve` 认不出就返回 null，待办静默退化成「未分类」）。
+            val merge = if (strategy == ImportStrategy.SNAPSHOT) {
+                applySnapshot(ready.snapshot)
+            } else {
+                TaskMergePlan()
+            }
+
             ImportReport(
                 inserted = inserted,
                 updated = updatedCount,
                 removed = removed,
-                issues = v.issues,
+                issues = v.issues + ready.snapshot.issues,
                 semesterUpdated = v.semester != null,
                 timetableUpdated = v.timetable != null,
                 noClassDayCount = v.noClassDays.size,
                 makeupDayCount = v.makeupDays.size,
                 tasksUnlinked = taskLinkPlan.count { it.value == null },
-                tasksRelinked = taskLinkPlan.count { it.value != null }
+                tasksRelinked = taskLinkPlan.count { it.value != null },
+                taskMerge = merge,
+                taskTypesImported = if (strategy == ImportStrategy.SNAPSHOT) ready.snapshot.taskTypes.size else 0,
+                taskRulesImported = if (strategy == ImportStrategy.SNAPSHOT) countAppliedRules(ready.snapshot) else 0
             )
+        }
+    }
+
+    // ------------------------------------------------------------------ v3 用户数据
+
+    /**
+     * 落快照的三块。**只能在 [commit] 的事务内调用。**
+     *
+     * 步骤顺序就是依赖顺序：
+     * 1. 自定义类型 —— 待办的 `taskType` 依赖它才能解析；
+     * 2. 生成规则 —— 依赖课程（外键带级联），所以必须在课程落库之后；
+     * 3. 待办 —— 同时依赖上面两者。
+     *
+     * 三块**都遵循「包里没有就别动」**。浙大同步走的是同一条管线、产出的文档
+     * 三块全空；不守住这一条，一次浙大同步就会把用户配好的自定义分类与
+     * 生成规则清空，而界面上不会有任何提示。
+     */
+    private suspend fun applySnapshot(snapshot: ValidatedSnapshot): TaskMergePlan {
+        applyTaskTypes(snapshot.taskTypes)
+        val rulesApplied = applyTaskRules(snapshot.taskRules)
+        return applyTasks(snapshot.tasks)
+    }
+
+    /** 自定义待办分类。**空列表直接返回**，见 [applySnapshot] 的说明。 */
+    private suspend fun applyTaskTypes(rows: List<TaskTypeBundle>): Int {
+        if (rows.isEmpty()) return 0
+        val dao = db.customTaskTypeDao()
+        for (row in rows) {
+            val id = row.id ?: continue
+            // 覆盖而非跳过：这份快照是「另一台设备上的我」，那边的名字与配色
+            // 就是用户在最近一次修改后的样子，本机那份已经更旧了。
+            dao.insert(
+                CustomTaskTypeEntity(
+                    id = id,
+                    label = row.label.orEmpty(),
+                    colorHex = row.colorHex.orEmpty(),
+                    inkHex = row.inkHex.orEmpty(),
+                    sortOrder = row.sortOrder ?: 0
+                )
+            )
+        }
+        return rows.size
+    }
+
+    /**
+     * 课程级生成规则。课程用自然键换成本机 id —— 文件里没有本地 `courseId`。
+     * 本机没有这门课的规则**跳过**（课程没了，规则也就没有归属）。
+     */
+    private suspend fun applyTaskRules(rows: List<TaskRuleBundle>): Int {
+        if (rows.isEmpty()) return 0
+        val courseIdByKey = courseRepo.getAllCoursesOnce().courseIdByNaturalKey()
+        var applied = 0
+        for (row in rows) {
+            val courseId = courseIdByKey[row.courseKey] ?: continue
+            val type = row.taskType?.let { runCatching { TaskType.valueOf(it) }.getOrNull() } ?: continue
+            settingsRepo.saveTaskRule(
+                courseId = courseId,
+                taskType = type,
+                spec = CourseRuleSpec(
+                    cadence = row.cadence ?: TaskCadence.PER_WEEK.name,
+                    dueOffsetDays = row.dueOffsetDays ?: 0,
+                    dueBeforeMinutes = row.dueBeforeMinutes ?: 0
+                )
+            )
+            applied++
+        }
+        return applied
+    }
+
+    /**
+     * 待办逐条后写覆盖。返回的就是 [applySnapshot] 交给报告的那个 [TaskMergePlan]。
+     *
+     * 判定与 [planTaskMerge] 完全一致（两边共用同一个纯函数 `wins`），
+     * 所以预览上写的数字就是这里的实际结果。
+     */
+    private suspend fun applyTasks(rows: List<TaskBundle>): TaskMergePlan {
+        if (rows.isEmpty()) return TaskMergePlan()
+        val taskDao = db.taskDao()
+        val courses = courseRepo.getAllCoursesOnce()
+        val coursesById = courses.associateBy { it.id }
+        val courseIdByKey = courses.courseIdByNaturalKey()
+
+        var added = 0
+        var overwritten = 0
+        var keptLocal = 0
+        var losingCourse = 0
+
+        for (row in rows) {
+            val uid = row.syncUid ?: continue
+            val courseId = if (row.courseKey.isNullOrBlank()) {
+                TaskEntity.UNLINKED_COURSE_ID
+            } else {
+                courseIdByKey[row.courseKey] ?: TaskEntity.UNLINKED_COURSE_ID
+            }
+            val course = coursesById[courseId]
+            if (courseId == TaskEntity.UNLINKED_COURSE_ID && !row.courseKey.isNullOrBlank()) losingCourse++
+
+            val incoming = row.toEntity(courseId, course)
+            val local = taskDao.getBySyncUid(uid)
+            when {
+                local == null -> {
+                    taskDao.insertTask(incoming)
+                    added++
+                }
+                // 本机这条更晚改过：保留本机版本。丢的是文件里那份旧副本，
+                // 而它正是本机那条被改之前的模样。
+                local.updatedAt > incoming.updatedAt -> keptLocal++
+                else -> {
+                    // 覆盖时**保留本机 id**：Room 的主键换不得，
+                    // 而「同一条待办换了本地行号」对用户没有任何好处。
+                    taskDao.updateTask(incoming.copy(id = local.id))
+                    overwritten++
+                }
+            }
+        }
+        return TaskMergePlan(added, overwritten, keptLocal, losingCourse)
+    }
+
+    /** 文件里的一条待办 → 库里的实体。课程的三个快照字段从本机课程行取。 */
+    private fun TaskBundle.toEntity(courseId: Long, course: CourseEntity?): TaskEntity = TaskEntity(
+        id = 0L,
+        courseId = courseId,
+        // 课程色 / 类别 / 名称是**从课程行现取**的快照，跟随本机课程而不是
+        // 跟着文件走：一门课改了配色之后，它的待办要跟着改。
+        courseName = course?.name ?: TaskEntity.UNLINKED_COURSE_NAME,
+        courseCategory = course?.category ?: "",
+        courseColorHex = course?.colorHex ?: TaskEntity.UNLINKED_COLOR_HEX,
+        title = title.orEmpty(),
+        description = description.orEmpty(),
+        taskType = taskType.orEmpty(),
+        startTimeTimestamp = startTimeTimestamp ?: 0L,
+        startTimeString = startTimeString.orEmpty(),
+        dueDateTimestamp = dueDateTimestamp ?: TaskEntity.NO_DUE_TIMESTAMP,
+        dueDateString = dueDateString.orEmpty(),
+        priority = priority ?: TaskStar.encode(false),
+        isCompleted = isCompleted ?: false,
+        completedAt = completedAt,
+        isAutoGenerated = isAutoGenerated ?: false,
+        generatedDate = generatedDate,
+        week = week ?: 0,
+        dayOfWeek = dayOfWeek ?: 0,
+        createdAt = createdAt ?: 0L,
+        syncUid = syncUid.orEmpty(),
+        updatedAt = updatedAt ?: 0L
+    )
+
+    // ------------------------------------------------------------------ 预览用的纯判定
+
+    /**
+     * 逐条合并的结论，**不写库**。
+     *
+     * 与 [applyTasks] 共用 [taskWinsFile]，两边对「谁赢」的判断必须是同一个函数 ——
+     * 否则会出现「预览说覆盖 3 条、实际覆盖了 5 条」，而界面上看不出矛盾。
+     */
+    private suspend fun planTaskMerge(
+        rows: List<TaskBundle>,
+        existingCourses: List<CourseEntity>
+    ): TaskMergePlan {
+        if (rows.isEmpty()) return TaskMergePlan()
+        val taskDao = db.taskDao()
+        val courseKeys = existingCourses.map { it.naturalKey() }.toSet()
+
+        var added = 0
+        var overwritten = 0
+        var keptLocal = 0
+        var losingCourse = 0
+        for (row in rows) {
+            if (!row.courseKey.isNullOrBlank() && row.courseKey !in courseKeys) losingCourse++
+            val uid = row.syncUid ?: continue
+            val local = taskDao.getBySyncUid(uid)
+            when {
+                local == null -> added++
+                taskWinsFile(local.updatedAt, row.updatedAt ?: 0L) -> overwritten++
+                else -> keptLocal++
+            }
+        }
+        return TaskMergePlan(added, overwritten, keptLocal, losingCourse)
+    }
+
+    private suspend fun countOverwrittenTypes(rows: List<TaskTypeBundle>): Int {
+        if (rows.isEmpty()) return 0
+        val existing = db.customTaskTypeDao().getAllOnce().map { it.id }.toSet()
+        return rows.count { it.id != null && it.id in existing }
+    }
+
+    private suspend fun countOverwrittenRules(rows: List<TaskRuleBundle>, existingCourses: List<CourseEntity>): Int {
+        if (rows.isEmpty()) return 0
+        val courseIdByKey = existingCourses.courseIdByNaturalKey()
+        val local = db.taskGenerationRuleDao().getAllOnce()
+            .filter { runCatching { TaskType.valueOf(it.taskType) }.isSuccess }
+            .map { "${it.courseId}|${it.taskType}" }
+            .toSet()
+        return rows.count { row ->
+            val id = row.courseKey?.let { courseIdByKey[it] } ?: return@count false
+            "$id|${row.taskType}" in local
+        }
+    }
+
+    private suspend fun countAppliedRules(snapshot: ValidatedSnapshot): Int {
+        val rows = snapshot.taskRules
+        if (rows.isEmpty()) return 0
+        val courseIdByKey = courseRepo.getAllCoursesOnce().courseIdByNaturalKey()
+        return rows.count { row ->
+            courseIdByKey[row.courseKey] != null &&
+                row.taskType?.let { runCatching { TaskType.valueOf(it) }.isSuccess } == true
         }
     }
 
@@ -365,8 +666,7 @@ class ScheduleImportService(
         )
     }
 
-    private fun SlotBundle.toSlotWithWeeks(v: ValidatedBundle): SlotWithWeeks {
-        // 校验阶段已经把 weeks 归一化成 Set<Int>。这里仍然走一遍 WeekSet.parse
+    private fun SlotBundle.toSlotWithWeeks(v: ValidatedBundle): SlotWithWeeks {        // 校验阶段已经把 weeks 归一化成 Set<Int>。这里仍然走一遍 WeekSet.parse
         // 而不是 filterIsInstance<Int>()：JSON 反序列化给出来的是 List<Number>
         // （内置 ObjectJsonAdapter 把数字读成 Double），一旦哪天有代码绕过校验器
         // 直接构造 bundle，filterIsInstance<Int>() 会安静地把整组周次清空，

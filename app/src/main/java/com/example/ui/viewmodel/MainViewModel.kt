@@ -218,6 +218,10 @@ private val ruleFlow = combine(
             calendarRepo.ensureDefaultPeriods()
             // 清理历史残留的非法补课脏数据（如旧版本生成的「工作日补周末课」）
             calendarRepo.sanitizeMakeupDays()
+            // 给迁移后还没有同步身份的旧待办补上。放在播种这一步之前：
+            // 演示数据也会被一并补到，之后导出的快照文件里就不会有一段
+            // 「在库里存在、却无法参与跨设备合并」的待办。
+            taskRepo.ensureSyncUids()
 
             val currentCourses = courseRepo.getAllCoursesOnce()
             val hasSavedCreds = secureStorage.hasSavedCredentials()
@@ -825,7 +829,6 @@ private val ruleFlow = combine(
     fun setImportStrategy(strategy: ImportStrategy) = _uiState.update {
         it.copy(importStrategy = strategy, importPreview = null, importError = null)
     }
-
     fun dismissImportReport() = _uiState.update { it.copy(importReport = null, importPreview = null) }
 
     /** 只解析不落库：产出预览并存下，等用户确认。 */
@@ -875,7 +878,14 @@ private val ruleFlow = combine(
                 importPreview = null,
                 importReport = report,
                 isDemoMode = false,
-                userMessage = "课表导入完成：新增 ${report.inserted} 门、更新 ${report.updated} 门"
+                // 待办那部分也要报出来，否则用户点完「确认导入」只看到课程数字，
+                // 会以为同步没生效 —— 而他真正关心的往往就是待办。
+                userMessage = "导入完成：课程新增 ${report.inserted} 门、更新 ${report.updated} 门" +
+                    if (report.taskMerge.added > 0 || report.taskMerge.overwritten > 0) {
+                        "；待办新增 ${report.taskMerge.added} 条、覆盖 ${report.taskMerge.overwritten} 条"
+                    } else {
+                        ""
+                    }
             )
         }
     }
@@ -894,21 +904,18 @@ private val ruleFlow = combine(
         _uiState.update {
             it.copy(
                 isImporting = false,
-                userMessage = if (ok) "课表已导出" else "导出失败：无法写入所选位置"
+                userMessage = if (ok) "数据已导出（整机快照）" else "导出失败：无法写入所选位置"
             )
         }
     }
 
-    // ------------------------------------------------------------ 「ZJU」导入源
-
-    fun setImportSource(source: ImportSource) = _uiState.update {
-        it.copy(importSource = source, zjuError = null)
-    }
+    // ------------------------------------------------------------ 浙大同步：学期下拉与取课表
 
     /**
      * 拉一次公共校历配置，填学期的下拉。
      *
-     * 切到 ZJU 那一档时触发一次：下拉里没有学期用户就无从选起。
+     * 由浙大同步的入口触发（「更多」抽屉的浙大学号、总览页翻面卡的快捷登录）：
+     * 下拉里没有学期用户就无从选起。
      */
     fun loadZjuTerms() = viewModelScope.launch {
         if (_uiState.value.zjuTermOptions.isNotEmpty()) return@launch

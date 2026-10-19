@@ -1,9 +1,6 @@
 package com.example.ui.components
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,8 +9,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -22,29 +17,19 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -53,32 +38,34 @@ import com.example.data.transfer.ImportPreview
 import com.example.data.transfer.ImportReport
 import com.example.data.transfer.ImportStrategy
 import com.example.data.validate.ImportIssue
-import com.example.ui.theme.ChipSurfaceNeutral
 import com.example.ui.theme.TextSecondary
-import com.example.ui.viewmodel.ImportSource
-import com.example.ui.viewmodel.ZjuTermOption
 
 /**
- * 课表导入 / 导出。
+ * 数据导入 / 导出。**整机快照**，用于换机与多端之间搬运数据。
  *
  * 交互沿用 App 既有的「先预览、再确认」惯例（和 QuickGenerateDialog 同构）：
  * 选策略 → 选文件 → **看清楚会发生什么** → 才允许落库。
  * 绝不做「点了直接导入、出了问题再回滚」。
+ *
+ * ## 这里不再有浙大登录
+ *
+ * 原来这个弹层里嵌了一整块「学号 + 密码 + 获取课表」，那是浙大同步，
+ * 而它已经有自己的两处入口：「更多」抽屉的浙大学号与总览页翻面卡的快捷登录。
+ * 三处入口做同一件事，用户要猜该走哪条，职责也说不清。
+ *
+ * 两条链路现在分工明确，**不重叠**：
+ * - **浙大同步**：以服务端为准刷新**课表**。服务端不知道你的待办勾没勾、打没打星标。
+ * - **本弹层**：把本机的**全部状态**（课表 + 待办 + 自定义分类 + 生成规则）
+ *   搬到另一台设备，或者把另一台设备上的改动取回来。
  */
 @Composable
 fun ScheduleTransferDialog(
     strategy: ImportStrategy,
-    importSource: ImportSource,
-    zjuTermOptions: List<ZjuTermOption>,
-    zjuError: String?,
-    isZjuRunning: Boolean,
     preview: ImportPreview?,
     issues: List<ImportIssue>,
     errorMessage: String?,
     isBusy: Boolean,
     report: ImportReport?,
-    onSourceChange: (ImportSource) -> Unit,
-    onZjuImport: (studentId: String, password: String, option: ZjuTermOption, remember: Boolean) -> Unit,
     onStrategyChange: (ImportStrategy) -> Unit,
     onExport: (android.net.Uri) -> Unit,
     onImportUri: (android.net.Uri) -> Unit,
@@ -94,16 +81,11 @@ fun ScheduleTransferDialog(
         ActivityResultContracts.OpenDocument()
     ) { uri -> uri?.let(onImportUri) }
 
-    var studentId by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var rememberCredentials by remember { mutableStateOf(true) }
-    var selectedTermKey by remember { mutableStateOf("") }
-
     GlassOverlayHost(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "课表导入 / 导出",
+                text = "数据导入 / 导出",
                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -111,7 +93,7 @@ fun ScheduleTransferDialog(
         text = {
             // 弹层正文默认继承 onSurfaceVariant（TextMuted #78827B），压在卡面上实测
             // 只有 3.74:1 —— 11–12sp 的小字过不了 AA，而这里恰好是用户**必须读懂**
-            // 的内容（选了「整表替换」会删掉什么）。统一抬到 TextSecondary（约 7.6:1）。
+            // 的内容（选了「整机同步」会覆盖什么）。统一抬到 TextSecondary（约 7.6:1）。
             // 显式指定颜色的文字（错误红、标题、chips）不受影响。
             CompositionLocalProvider(LocalContentColor provides TextSecondary) {
             Column(
@@ -136,155 +118,9 @@ fun ScheduleTransferDialog(
                     )
                 }
 
-                // ---- 来源：本地文件 / 浙大教务网 ----
-                Text(
-                    text = "数据来源",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ImportSource.entries.forEach { s ->
-                        FilterChip(
-                            selected = importSource == s,
-                            onClick = { onSourceChange(s) },
-                            // 有预览之后锁住：中途换来源会让「眼前这份预览」失去意义
-                            enabled = !isBusy && !isZjuRunning && preview == null && report == null,
-                            label = { Text(s.label, fontSize = 11.sp) },
-                            shape = RoundedCornerShape(10.dp),
-                            colors = micaChipColors(),
-                            border = micaChipBorder(importSource == s)
-                        )
-                    }
-                }
-
-                if (importSource == ImportSource.ZJU) {
-                    val selected = zjuTermOptions.firstOrNull { it.key == selectedTermKey }
-                        ?: zjuTermOptions.firstOrNull()
-                    OutlinedTextField(
-                        value = studentId,
-                        onValueChange = { studentId = it },
-                        label = { Text("学号", fontSize = 12.sp) },
-                        singleLine = true,
-                        enabled = !isZjuRunning,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
-                        label = { Text("密码", fontSize = 12.sp) },
-                        singleLine = true,
-                        enabled = !isZjuRunning,
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-
-                    // 学期下拉：选项来自 zju-ical 的公共校历配置，抓课时也要靠它算总周数
-                    LazyRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        items(zjuTermOptions) { option ->
-                            val isSelected = option == selected
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(
-                                        if (isSelected) MaterialTheme.colorScheme.primary
-                                        else ChipSurfaceNeutral
-                                    )
-                                    .clickable { selectedTermKey = option.key }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                            ) {
-                                Text(
-                                    text = option.label,
-                                    fontSize = 11.5.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-
-                    zjuError?.let {
-                        Text(
-                            text = it,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { rememberCredentials = !rememberCredentials }
-                    ) {
-                        Checkbox(
-                            checked = rememberCredentials,
-                            onCheckedChange = { rememberCredentials = it },
-                            colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "安全记住学号密码 (Android KeyStore 硬件加密)",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    Text(
-                        text = "通过设备硬件 Keystore 加密存储，不提交版本库。断网直接读取本地缓存。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextSecondary
-                    )
-
-                    Button(
-                        onClick = {
-                            selected?.let { onZjuImport(studentId, password, it, rememberCredentials) }
-                        },
-                        enabled = !isZjuRunning && selected != null && studentId.isNotBlank() && password.isNotBlank(),
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                        modifier = Modifier.fillMaxWidth().testTag("zju_fetch_button")
-                    ) {
-                        Text(
-                            text = if (isZjuRunning) "获取中…" else "获取课表",
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-
-                Text(
-                    text = "冲突处理方式（每次导入前选择）",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ImportStrategy.entries.forEach { s ->
-                        FilterChip(
-                            selected = strategy == s,
-                            onClick = { onStrategyChange(s) },
-                            enabled = !isBusy && preview == null,
-                            label = { Text(s.label, fontSize = 11.sp) },
-                            shape = RoundedCornerShape(10.dp),
-                            colors = micaChipColors(),
-                            border = micaChipBorder(strategy == s)
-                        )
-                    }
-                }
-                Text(
-                    text = strategy.description,
-                    style = MaterialTheme.typography.labelSmall,
-                    // 这段是用户真正要读的内容（选了「整表替换」会删掉什么），
-                    // 用 onSurfaceVariant（TextMuted）实测只有 3.74:1，不过 AA。
-                    color = TextSecondary
-                )
-
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
-                        onClick = { createDoc.launch("miulist-schedule.json") },
+                        onClick = { createDoc.launch("miulist-backup.json") },
                         enabled = !isBusy,
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp)
@@ -309,6 +145,48 @@ fun ScheduleTransferDialog(
                     }
                 }
 
+                Text(
+                    text = "导出的文件包含课程、校历、待办、自定义分类与生成规则，不含浙大学号与密码。" +
+                        "课表随时可以用浙大同步刷新，待办只能靠这个文件带走。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextSecondary
+                )
+
+                Text(
+                    text = "冲突处理方式（每次导入前选择）",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ImportStrategy.entries.forEach { s ->
+                        FilterChip(
+                            selected = strategy == s,
+                            onClick = { onStrategyChange(s) },
+                            enabled = !isBusy && preview == null,
+                            label = { Text(s.label, fontSize = 11.sp) },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = micaChipColors(),
+                            border = micaChipBorder(strategy == s)
+                        )
+                    }
+                }
+                Text(
+                    text = strategy.description,
+                    style = MaterialTheme.typography.labelSmall,
+                    // 这段是用户真正要读的内容（选了「整机同步」会覆盖什么），
+                    // 用 onSurfaceVariant（TextMuted）实测只有 3.74:1，不过 AA。
+                    color = TextSecondary
+                )
+
+                // 「两台设备同时离线各改一条」的代价必须说清楚。
+                // 「同步」这个词听起来像永不冲突，不说就等于让用户替我们兜底。
+                if (strategy == ImportStrategy.SNAPSHOT) {
+                    Text(
+                        text = "同一条待办两台设备都改过时，较晚的那次胜出，另一台的改动会被覆盖。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary
+                    )
+                }
+
                 preview?.let { p -> PreviewBlock(p, issues) }
 
                 report?.let { r ->
@@ -329,6 +207,26 @@ fun ScheduleTransferDialog(
                         if (r.timetableUpdated) Text("作息表已更新", style = MaterialTheme.typography.bodySmall)
                         if (r.noClassDayCount > 0) Text("停课 ${r.noClassDayCount} 天", style = MaterialTheme.typography.bodySmall)
                         if (r.makeupDayCount > 0) Text("补课 ${r.makeupDayCount} 天", style = MaterialTheme.typography.bodySmall)
+                        if (r.taskMerge.added > 0 || r.taskMerge.overwritten > 0 || r.taskMerge.keptLocal > 0) {
+                            Text(
+                                "待办：新增 ${r.taskMerge.added} · 覆盖 ${r.taskMerge.overwritten} · " +
+                                    "保留本机 ${r.taskMerge.keptLocal}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        if (r.taskTypesImported > 0) {
+                            Text("自定义分类 ${r.taskTypesImported} 个已同步", style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (r.taskRulesImported > 0) {
+                            Text("生成规则 ${r.taskRulesImported} 条已同步", style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (r.taskMerge.losingCourse > 0) {
+                            Text(
+                                "${r.taskMerge.losingCourse} 条待办的课程本机没有，已移入「未关联课程」",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
                         if (r.tasksRelinked > 0) {
                             Text("待办保持关联 ${r.tasksRelinked} 条", style = MaterialTheme.typography.bodySmall)
                         }
@@ -435,6 +333,36 @@ private fun PreviewBlock(preview: ImportPreview, issues: List<ImportIssue>) {
                 Text("… 另有 ${preview.updatedCourses.size - 8} 门", style = MaterialTheme.typography.labelSmall)
             }
         }
+
+        // 整机同步才碰用户数据，课表导入（浙大同步走的那条）不显示这一段。
+        if (preview.touchesUserData) {
+            Text(
+                text = "待办（文件 ${preview.fileTaskCount} 条）",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            Text(
+                text = "新增 ${preview.taskMerge.added} · 用文件覆盖 ${preview.taskMerge.overwritten} · " +
+                    "保留本机较新 ${preview.taskMerge.keptLocal}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            if (preview.taskMerge.losingCourse > 0) {
+                Text(
+                    "${preview.taskMerge.losingCourse} 条待办的课程本机没有，会移入「未关联课程」（待办本身不丢）",
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+            if (preview.fileTaskTypeCount > 0 || preview.fileTaskRuleCount > 0) {
+                Text(
+                    text = "自定义分类 ${preview.fileTaskTypeCount} 个" +
+                        "（覆盖 ${preview.taskTypesOverwritten}）· " +
+                        "生成规则 ${preview.fileTaskRuleCount} 条" +
+                        "（覆盖 ${preview.taskRulesOverwritten}）",
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+        }
+
         if (issues.isNotEmpty()) {
             Text("问题 ${issues.size} 条：", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))
             issues.take(10).forEach {

@@ -6,15 +6,19 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 
 /**
- * JSON 文档的 DTO（schemaVersion = 2）。
+ * JSON 文档的 DTO（schemaVersion = 3）。
  *
  * v2 把文档**顶层分块**：`calendar` / `timetable` / `categoryRules` 三块互不嵌套。
  * 课表是与学期绑定的，所以 `timetable` 块自己带一个 `termRef`，指明这些课属于
  * `calendar.termConfigs` 里的哪一个；校验期必须能对上，对不上整档失败。
  *
+ * v3 再加 `tasks` / `taskTypes` / `taskRules` 三块用户数据（DTO 在
+ * `SnapshotDtos.kt`）。**这三块全空时，这份文档仍然是一份合法的 v2 文档** ——
+ * zju-ical 的 `config.json` 与浙大同步产出的东西都走这条路，兼容面没有变窄。
+ *
  * `calendar` 块的字段名与类型**与 zju-ical 的 `configs/config.json` 逐字段同名同义**
  * （只多一个 `periods`：上游把作息硬编码在 Go 里，没有对应的 JSON 字段）。
- * 这么设计的收益是那份 config.json 本身就能当一份「只有 calendar 的 v2 文档」直接导入。
+ * 这么设计的收益是那份 config.json 本身就能当一份「只有 calendar 的文档」直接导入。
  *
  * 全部字段可空且带默认值：**缺整块不能导致整档失败**。爬虫少抓一节不应让整个
  * 导入归零，未知字段一律忽略（Moshi 默认行为）。
@@ -26,7 +30,13 @@ data class ScheduleDocumentDto(
     val provenance: ProvenanceDto? = null,
     val calendar: CalendarDto? = null,
     val timetable: TimetableBlockDto? = null,
-    val categoryRules: List<CategoryRuleDto>? = null
+    val categoryRules: List<CategoryRuleDto>? = null,
+    /** v3 起：待办。三块的用户数据，缺空都不是失败。 */
+    val tasks: List<TaskDto>? = null,
+    /** v3 起：用户新建的待办分类。 */
+    val taskTypes: List<TaskTypeDto>? = null,
+    /** v3 起：课程 × 类型的生成规则。 */
+    val taskRules: List<TaskRuleDto>? = null
 )
 
 @JsonClass(generateAdapter = true)

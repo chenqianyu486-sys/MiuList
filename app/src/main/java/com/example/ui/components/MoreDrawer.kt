@@ -312,7 +312,7 @@ fun MoreDrawer(
                     DrawerRow(
                         icon = Icons.Outlined.School,
                         title = "设置",
-                        detail = "导入导出 · 演示数据",
+                        detail = "整机快照 · 演示数据",
                         testTag = "drawer_settings_row",
                         onClick = onOpenSettings
                     )

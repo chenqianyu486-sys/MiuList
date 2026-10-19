@@ -75,7 +75,32 @@ data class TaskEntity(
     /** 归属的星期几（1 = 周一 … 7 = 周日）。0 = 未指定。语义同 [week]。 */
     @ColumnInfo(defaultValue = "0")
     val dayOfWeek: Int = 0,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    /**
+     * 跨设备稳定身份，UUID。**跨设备同步靠它认人**：本机自增 [id] 与 [courseId]
+     * 两台设备各不相同，写进同步文件等于把一端的主键强加给另一端。
+     *
+     * 空串 = 还没补齐（迁移后的历史行）。补齐在应用启动时惰性做，见
+     * `TaskRepository.ensureSyncUids`：**绝不**用标题/正文的内容哈希代替 ——
+     * 那两个字段用户随时会改，一改哈希就变，同一条待办在两台设备上就对不上了。
+     *
+     * 刻意**不建唯一索引**：补齐与导入并发时的正确处理是「重新生成一个」，
+     * 而唯一索引冲突会直接抛异常，把整批补齐/导入拖垮。
+     *
+     * [defaultValue] 必须显式声明：`MIGRATION_9_10` 用
+     * `ALTER TABLE tasks ADD COLUMN syncUid TEXT NOT NULL DEFAULT ''` 加这一列，
+     * 与 `week` / `CourseEntity.dedupeKey` 是同一条理由（见 Room 的 schema 校验）。
+     */
+    @ColumnInfo(defaultValue = "")
+    val syncUid: String = "",
+    /**
+     * 最后一次修改的时刻，跨设备合并按它做**后写覆盖**。
+     *
+     * 补齐时初值取该行已有的 [createdAt] 而不是 0：0 会让它在任何一次比较里
+     * 都判负，等于「历史待办永远被别人导出的文件覆盖」。
+     */
+    @ColumnInfo(defaultValue = "0")
+    val updatedAt: Long = 0L
 ) {
     companion object {
         /**

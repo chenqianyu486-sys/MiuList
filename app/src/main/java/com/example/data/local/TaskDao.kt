@@ -43,6 +43,25 @@ interface TaskDao {
     @Query("SELECT COUNT(*) FROM tasks")
     suspend fun countTasks(): Int
 
+    /**
+     * 按跨设备稳定身份找一条待办。**同步合并的匹配入口。**
+     *
+     * 不传空串进来：空串是「还没补齐 uid」的占位值，多行会同时命中，
+     * 单查一条拿到的是任意一条 —— 那种匹配是假的。调用方（导入侧）必须
+     * 先把空 uid 挡掉。
+     */
+    @Query("SELECT * FROM tasks WHERE syncUid = :syncUid LIMIT 1")
+    suspend fun getBySyncUid(syncUid: String): TaskEntity?
+
+    /**
+     * 还没有 `syncUid` 的行。启动时用来惰性补齐（`TaskRepository.ensureSyncUids`）。
+     *
+     * 迁移给历史行填的是空串而不是现成的 UUID —— SQL 里生成不了，
+     * 而在迁移里塞一个基于内容的哈希又会在用户改标题后失效。
+     */
+    @Query("SELECT * FROM tasks WHERE syncUid = '' OR syncUid IS NULL")
+    suspend fun getMissingSyncUids(): List<TaskEntity>
+
     @Query("SELECT * FROM tasks WHERE courseId = :courseId ORDER BY isCompleted ASC, dueDateTimestamp ASC")
     fun getTasksByCourse(courseId: Long): Flow<List<TaskEntity>>
 
@@ -73,18 +92,27 @@ interface TaskDao {
     @Update
     suspend fun updateTask(task: TaskEntity)
 
-    @Query("UPDATE tasks SET isCompleted = :isCompleted, completedAt = :completedAt WHERE id = :id")
-    suspend fun updateTaskCompletion(id: Long, isCompleted: Boolean, completedAt: Long?)
+    /**
+     * 改勾选状态与 `updatedAt`。
+     *
+     * `updatedAt` 在这里盖而不是由调用方算好后传进来：它是**同步语义**的一部分
+     * （后写覆盖靠它仲裁），漏写一次的后果是「这条待办在这台设备上改过，
+     * 但另一台设备不知道」，而界面上完全看不出差别。
+     */
+    @Query(
+        "UPDATE tasks SET isCompleted = :isCompleted, completedAt = :completedAt, updatedAt = :updatedAt WHERE id = :id"
+    )
+    suspend fun updateTaskCompletion(id: Long, isCompleted: Boolean, completedAt: Long?, updatedAt: Long)
 
     /**
-     * 只改星标那一列（`priority`，存 `STAR` / 空串，见 `TaskStar`）。
+     * 只改星标那一列（`priority`，存 `STAR` / 空串，见 `TaskStar`）与 `updatedAt`。
      *
      * 和 [updateTask] 分开是刻意的：星标在列表里是个高频点按，
      * 走整行 `@Update` 会把同一行的其它字段一起写回去——一旦用户在这条上
      * 刚改过什么（或并发的另一条路径改过），整行回写就会把它悄悄盖掉。
      */
-    @Query("UPDATE tasks SET priority = :priority WHERE id = :id")
-    suspend fun updateTaskStar(id: Long, priority: String)
+    @Query("UPDATE tasks SET priority = :priority, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateTaskStar(id: Long, priority: String, updatedAt: Long)
 
     @Delete
     suspend fun deleteTask(task: TaskEntity)

@@ -377,3 +377,29 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
         db.execSQL("ALTER TABLE makeup_days ADD COLUMN sourceEpochDay INTEGER NOT NULL DEFAULT 0")
     }
 }
+
+/**
+ * v9 → v10。
+ *
+ * 给 `tasks` 补两列，做**跨设备同步**用：`syncUid` 与 `updatedAt`。
+ *
+ * 补了之后同一条待办在两台设备上才认得出是同一条（判据见 `TaskEntity.syncUid`
+ * 与 `updatedAt` 的注释：本地自增 id 和本地 courseId 跨设备都不成立）。
+ *
+ * **已有行统一填空串 / 0，uid 留到应用启动时惰性补齐**，理由两条：
+ * - SQL 里生成不出 UUID，只能拼一个「看起来像」的字符串，那不是稳定身份；
+ * - 更不能按内容哈希：标题与正文用户随时会改，一改哈希就变，
+ *   两台设备对同一条待办算出的 uid 就不一样了，于是每次同步都在制造重复。
+ *
+ * `updatedAt` 同理不能在这里填：`0` 会让它在任何一次后写覆盖的比较里都判负，
+ * 等于「历史待办永远被别人导出的文件覆盖」。补齐时取该行已有的 `createdAt`。
+ *
+ * 代价是升级后有一段「本机待办没有 uid」的窗口期。导入侧与导出侧都对空 uid
+ * 做了防御（跳过 + 记 issue，绝不现场生成），所以这段窗口期不会静默出错。
+ */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE tasks ADD COLUMN syncUid TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE tasks ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
+    }
+}

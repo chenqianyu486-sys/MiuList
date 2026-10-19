@@ -8,22 +8,30 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.adapter
 
 /**
- * MiuList 自有 JSON 格式（schemaVersion = 2）的实现。
+ * MiuList 自有 JSON 格式（schemaVersion = 3）的实现。
  *
  * **这份格式同时是三种数据源之间的契约**，也是教务网爬虫的接口说明书：
  * 爬虫按 [ScheduleDocumentDto] 的字段表产出 JSON，走的是和用户导入文件
  * 完全相同的管线。
  *
- * v2 的形状是「**单文件、顶层分块**」：`calendar` / `timetable` / `categoryRules`。
+ * 文档形状是「**单文件、顶层分块**」：`calendar` / `timetable` / `categoryRules`，
+ * 外加 v3 起的三块用户数据 `tasks` / `taskTypes` / `taskRules`。
+ *
  * 分块的理由是**课程与学期绑定**——课表块自带 `termRef`，必须能在校历块的
  * `termConfigs` 里对上，校验期对不上就整档失败。
  *
+ * 用户数据单独成块的理由是**来源不同**：课表随时可以从浙大重新拉一遍，
+ * 待办不能（勾没勾、打没打星标，服务端根本不知道）。合成一块就分不清
+ * 「同步进来的是我的待办」还是「服务端说的课表」。
+ *
  * `calendar` 块与 zju-ical 的 `configs/config.json` 同构同字段名，
- * 所以那份 config.json 本身就是一份合法的「只有 calendar 的 v2 文档」。
+ * 所以那份 config.json 本身就是一份合法的「只有 calendar 的文档」——
+ * **v3 之后仍然是**，三块用户数据缺空不构成问题。
  *
  * 本类只做「JSON ↔ Bundle」的搬运，归一化与判错全部交给
- * `ScheduleBundleValidator` —— 解析层不该懂「Begin + FirstWeekNo 怎么展开成周次」，
- * 那套语义只有一处实现。
+ * `ScheduleBundleValidator` 与 `SnapshotValidator` —— 解析层不该懂
+ * 「Begin + FirstWeekNo 怎么展开成周次」，也不该懂「两条待办谁更该赢」，
+ * 那两套语义各自只有一处实现。
  */
 class JsonScheduleCodec : ScheduleCodec {
 
@@ -48,7 +56,11 @@ class JsonScheduleCodec : ScheduleCodec {
         if (version > SCHEMA_VERSION) {
             return DecodeResult.Failure("文件版本为 v$version，高于本应用支持的 v$SCHEMA_VERSION，请先升级应用")
         }
+        // v1 与 v2 的形状不同，但**都不是要丢的东西**：老用户手上已经有导出过的文件，
+        // 直接报「格式过旧」等于让他们手工重录一遍。两条映射规则都很短，
+        // 代价只是各一个独立分支。
         if (version <= 1) return decodeLegacyV1(text)
+        if (version == 2) return decodeLegacyV2(text)
 
         return DecodeResult.Success(dto.toBundle())
     }
@@ -121,6 +133,26 @@ class JsonScheduleCodec : ScheduleCodec {
         return DecodeResult.Success(bundle)
     }
 
+    /**
+     * 读 v2 文档。
+     *
+     * v2 的 `calendar` / `timetable` / `categoryRules` 三块与 v3 **完全同构** ——
+     * 那三块从 v2 起就没变过，v3 只是**加**了三块用户数据。所以这里做的事只有一件：
+     * 把三块用户数据置空，其余照常映射。
+     *
+     * 不写成「`if (version == 2) 清空三块」再走同一条 `toBundle()` 也没问题，
+     * 但显式写出来更直白：读老文件**永远拿不到**待办，界面上就不该出现
+     * 「导入 0 条待办」这种听起来像「那边一条都没有」的措辞。
+     */
+    private fun decodeLegacyV2(text: String): DecodeResult {
+        val dto = try {
+            moshi.adapter(ScheduleDocumentDto::class.java).fromJson(text)
+        } catch (e: Exception) {
+            return DecodeResult.Failure("旧格式（v2）解析失败：${e.message ?: e::class.java.simpleName}")
+        } ?: return DecodeResult.Failure("旧格式（v2）解析失败：内容为空")
+        return DecodeResult.Success(dto.toBundle())
+    }
+
     // ---------------------------------------------------------------- DTO → Bundle
 
     private fun ScheduleDocumentDto.toBundle() = ScheduleBundle(
@@ -138,7 +170,10 @@ class JsonScheduleCodec : ScheduleCodec {
                 defaultMinutes = dto.defaultMinutes ?: 45,
                 preDueBeforeMinutes = dto.preDueBeforeMinutes ?: 5
             )
-        }
+        },
+        tasks = tasks.orEmpty().map { it.toBundle() },
+        taskTypes = taskTypes.orEmpty().map { it.toBundle() },
+        taskRules = taskRules.orEmpty().map { it.toBundle() }
     )
 
     private fun CalendarDto.toBundle() = CalendarBundle(
@@ -269,11 +304,14 @@ class JsonScheduleCodec : ScheduleCodec {
                 defaultMinutes = it.defaultMinutes,
                 preDueBeforeMinutes = it.preDueBeforeMinutes
             )
-        }
+        },
+        tasks = tasks.map { it.toDto() },
+        taskTypes = taskTypes.map { it.toDto() },
+        taskRules = taskRules.map { it.toDto() }
     )
 
     companion object {
-        const val SCHEMA_VERSION = 2
+        const val SCHEMA_VERSION = 3
         const val DEFAULT_GENERATOR = "MiuList 1.0"
         const val DEFAULT_GENERATED_AT = ""
     }

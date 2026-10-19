@@ -65,6 +65,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
@@ -117,7 +118,6 @@ import com.example.ui.theme.TopBarHeight
 import com.example.ui.theme.controlSurface
 import com.example.ui.theme.rememberCardRevealProgress
 import com.example.ui.theme.pageChangeSpec
-import com.example.ui.viewmodel.ImportSource
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.MainViewModelFactory
 import com.example.ui.viewmodel.NavigationTab
@@ -870,15 +870,6 @@ fun MainApp(viewModel: MainViewModel) {
             val contentResolver = LocalContext.current.contentResolver
             ScheduleTransferDialog(
                 strategy = state.importStrategy,
-                importSource = state.importSource,
-                zjuTermOptions = state.zjuTermOptions,
-                zjuError = state.zjuError,
-                isZjuRunning = state.isZjuImportRunning,
-                onSourceChange = { source ->
-                    viewModel.setImportSource(source)
-                    if (source == ImportSource.ZJU) viewModel.loadZjuTerms()
-                },
-                onZjuImport = { id, pwd, option, remember -> viewModel.importFromZju(id, pwd, option, remember) },
                 preview = state.importPreview,
                 issues = state.importIssues,
                 errorMessage = state.importError,
