@@ -36,7 +36,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.ui.theme.TextMuted
+import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.GuideTarget
 
 /**
@@ -60,7 +60,7 @@ data class GuideStep(
  * ## 为什么是这四件事
  *
  * 它们是「一个课表 App 从空到能用」真正要走的那几步：**先把课表弄进来**（否则
- * 后面全是空的）、**知道课分门别类**（类别决定默认生成哪几类待办）、
+ * 后面全是空的）、**知道课分门别类**（类别决定它归联动规则里的哪一组）、
  * **会配联动规则**（不然待办生成得不对）、**把界面调成自己的**。
  *
  * ## 顺序不是随手的
@@ -80,24 +80,39 @@ val GuideSteps: List<GuideStep> = listOf(
         target = GuideTarget.ZJU_SYNC,
         icon = Icons.Outlined.CloudSync,
         title = "把浙大课表搬进来",
-        description = "用学号和密码登录浙大教务，课表、作息表和校历会一起落到本地，" +
-            "断网也能看；学在浙大的作业也会并进待办清单。",
+        // 只说同步**真的**做的事：整表换成服务器上那一份、落进本地缓存。
+        //
+        // 以前这里还写着「学在浙大的作业也会并进待办清单」—— 两处不实：
+        // 一是学在浙大的待办走的是另一条链路（App 打开时按已存凭据单独刷新），
+        //   登录课表那一步根本不拉它；二是它只以只读清单出现在总览页，
+        //   从来不写进待办清单。引导说了一件 App 做不到的事，用户照着找只会扑空。
+        description = "用学号和密码登录浙大教务，课表会换成服务器上那一份，" +
+            "存进本地缓存，断网也能看。",
         actionLabel = "去登录浙大"
     ),
     GuideStep(
         target = GuideTarget.COURSE_CATEGORY,
         icon = Icons.Outlined.Assignment,
         title = "给每门课分门别类",
+        // 「类别决定默认生成哪几类待办」只对**新建**的课成立：改一门已有课的类别
+        // 不会重算它那三个开关（那三个开关在课程编辑里是用户自己的值）。
+        // 真实的关系是「类别 → 它归联动规则里的哪一组」，改完类别还要在第三步
+        // 应用一次。这两件事写在一起，用户才知道改完类别为什么没反应。
+        //
+        // 「所有课程在同一个窗口里逐门定」说的是落点：课程分类弹层把全部课程
+        // 列在一处，一门一门展开选 —— 分类是个逐门推进的活，看得见全貌才知道
+        // 还剩几门没分。
         description = "每门课归到一个类别：公共基础、专业必修、实验实践、通识公共、专业选修。" +
-            "类别决定它默认生成哪几类待办 —— 实验课默认交实验报告，通识课三个开关都不勾。",
-        actionLabel = "去添加课程"
+            "类别决定它在「课程联动规则」里算哪一组；所有课程在同一个窗口里逐门定。",
+        actionLabel = "去选类别"
     ),
     GuideStep(
         target = GuideTarget.LINKAGE_RULES,
         icon = Icons.Outlined.Tune,
         title = "按类别配联动规则",
         description = "每个类别三个开关：课前预习、课后作业、实验报告。" +
-            "改一个开关会覆盖该类别下的所有课程，弹层里会先告诉你波及几门课。",
+            "改开关会覆盖该类别下所有课程，弹层里写着每个类别有几门课。" +
+            "课程刚改过类别的，在这里应用一次就跟上了。",
         actionLabel = "去配置规则"
     ),
     GuideStep(
@@ -182,7 +197,11 @@ fun OnboardingGuide(
                             Text(
                                 text = "第 ${index + 1} 步 / 共 ${GuideSteps.size} 步",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = TextMuted
+                                // 用 TextSecondary 而不是全局的 onSurfaceVariant（= TextMuted
+                                // #78827B）：这一行是 11sp 小字，压在玻璃面板上实测只有
+                                // 3.7:1，过不了 AA。TextSecondary #4A524D 约 7.6:1。
+                                // 同一个理由，设置页那张卡上也是这么改的。
+                                color = TextSecondary
                             )
                         }
                         GuideProgressDots(total = GuideSteps.size, current = index)
@@ -200,7 +219,7 @@ fun OnboardingGuide(
                         Text(
                             text = "刚带你去过这一项，确认好了再继续。",
                             style = MaterialTheme.typography.bodySmall,
-                            color = TextMuted
+                            color = TextSecondary
                         )
                         Spacer(modifier = Modifier.height(10.dp))
                     }

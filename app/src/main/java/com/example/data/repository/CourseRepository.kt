@@ -57,6 +57,16 @@ class CourseRepository(
 
     suspend fun getCourseById(id: Long): CourseEntity? = courseDao.getCourseById(id)
 
+    /**
+     * 只改课程类别。
+     *
+     * **不走 [saveCourseWithSlots]**：那条路会把时段整体删光重建，
+     * 而这里只该动一个字符串字段。顺手重建时段等于把「改类别」变成
+     * 「把这门课重新保存一遍」，开课周次都要跟着重来。
+     */
+    suspend fun updateCourseCategory(id: Long, category: String) =
+        courseDao.updateCategory(id, category)
+
     /** 同 key 可能返回多条（dedupeKey 是非唯一索引，历史数据可能已经重复）。 */
     suspend fun getByDedupeKey(key: String): List<CourseEntity> = courseDao.getByDedupeKey(key)
 

@@ -100,7 +100,7 @@ class OnboardingFlowTest {
     @Test
     fun `四个目标各自认自己那个弹层`() {
         val zju = MainUiState(isCloudAccountDialogOpen = true)
-        val course = MainUiState(isAddCourseDialogOpen = true)
+        val course = MainUiState(isCourseCategoryDialogOpen = true)
         val rules = MainUiState(isCategoryRulesDialogOpen = true)
         val wallpaper = MainUiState(isWallpaperDialogOpen = true)
 
@@ -114,5 +114,78 @@ class OnboardingFlowTest {
         assertFalse(wallpaper.isGuideTargetOpen(GuideTarget.ZJU_SYNC))
         assertFalse(rules.isGuideTargetOpen(GuideTarget.COURSE_CATEGORY))
         assertFalse(course.isGuideTargetOpen(GuideTarget.LINKAGE_RULES))
+    }
+
+    @Test
+    fun `分类弹层开着时课程类别那一步还没做完`() {
+        // 课程分类弹层是第 2 步的落点：它开着就说明这一步还在进行中，
+        // 引导不该在这时候接回来。
+        val state = MainUiState(
+            isCourseCategoryDialogOpen = true,
+            onboardingAwaitingTarget = GuideTarget.COURSE_CATEGORY
+        )
+
+        assertTrue(state.isGuideTargetOpen(GuideTarget.COURSE_CATEGORY))
+        assertFalse(
+            "分类弹层还开着就不该接回引导",
+            state.resumeOnboardingIfTargetDone().isOnboardingGuideOpen
+        )
+    }
+
+    @Test
+    fun `在分类弹层里加课不算这一步做完了`() {
+        // 分类弹层的空态里能直接去添加课程：那个弹层是**叠在分类弹层上面**的，
+        // 分类弹层还开着，所以这一步还没做完 —— 收掉添加弹层不该把引导拽回来。
+        val state = MainUiState(
+            isCourseCategoryDialogOpen = true,
+            isAddCourseDialogOpen = true,
+            onboardingAwaitingTarget = GuideTarget.COURSE_CATEGORY
+        )
+
+        val after = state.copy(isAddCourseDialogOpen = false).resumeOnboardingIfTargetDone()
+
+        assertFalse(
+            "分类弹层还开着就不该接回引导",
+            after.isOnboardingGuideOpen
+        )
+        assertEquals(GuideTarget.COURSE_CATEGORY, after.onboardingAwaitingTarget)
+    }
+
+    // -------------------------------------------------- 同步成功后的接回
+
+    @Test
+    fun `同步成功把弹层收掉时引导要接回来`() {
+        // 这条路以前断在这里：弹层是代码收的（withSyncSuccess），
+        // 绕开了用户点「关闭」那条路，于是引导再也接不回来。
+        val state = MainUiState(
+            isCloudAccountDialogOpen = true,
+            onboardingAwaitingTarget = GuideTarget.ZJU_SYNC
+        )
+
+        val after = state.closeCloudAccountDialogAfterSync()
+
+        assertFalse("同步成功后弹层应该已经收掉", after.isCloudAccountDialogOpen)
+        assertTrue("弹层被收掉了，引导必须自己回来", after.isOnboardingGuideOpen)
+        assertNull(after.onboardingAwaitingTarget)
+        assertTrue(after.onboardingResumed)
+    }
+
+    @Test
+    fun `同步成功时别的目标还开着就不接回引导`() {
+        // 用户正停在壁纸弹层上，后台同步恰好成功了 —— 这时候把引导拽回来
+        // 是干扰，不是接回。
+        val state = MainUiState(
+            isCloudAccountDialogOpen = true,
+            isWallpaperDialogOpen = true,
+            onboardingAwaitingTarget = GuideTarget.WALLPAPER
+        )
+
+        val after = state.closeCloudAccountDialogAfterSync()
+
+        assertFalse(
+            "等的不是浙大同步，就不该被这次同步拽回来",
+            after.isOnboardingGuideOpen
+        )
+        assertEquals(GuideTarget.WALLPAPER, after.onboardingAwaitingTarget)
     }
 }

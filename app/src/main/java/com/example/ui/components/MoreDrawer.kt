@@ -31,6 +31,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudSync
@@ -105,6 +106,7 @@ fun MoreDrawer(
     onDismiss: () -> Unit,
     onOpenCloudAccount: () -> Unit,
     onOpenAcademicCalendar: () -> Unit,
+    onOpenCourseCategory: () -> Unit,
     onOpenCategoryRules: () -> Unit,
     onOpenTaskRules: () -> Unit,
     onOpenAddCourse: () -> Unit,
@@ -236,6 +238,19 @@ fun MoreDrawer(
 
                         Spacer(modifier = Modifier.height(CardBlockGap))
                         DrawerSectionLabel("生成规则")
+
+                        // 分类排在规则前面：规则是**按类别**配的，
+                        // 类别还没定下来，规则那一层就没有可配的对象。
+                        DrawerRow(
+                            icon = Icons.Outlined.Assignment,
+                            title = "课程分类",
+                            detail = "给每门课定类别",
+                            footnote = "决定它归联动规则里的哪一组",
+                            testTag = "drawer_course_category_row",
+                            onClick = onOpenCourseCategory
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
 
                         // **两个入口而不是合成一个**：它们是两个各自独立的弹层
                         // （按类别设默认值 / 按课程设节奏与截止），合成一行就得

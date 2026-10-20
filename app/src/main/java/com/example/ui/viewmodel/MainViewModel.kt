@@ -484,6 +484,37 @@ private val ruleFlow = combine(
     private fun MainUiState.withAddCourseOpen() =
         copy(isAddCourseDialogOpen = true, editingCourseWithSlots = null)
 
+    /**
+     * 「给每门课分门别类」这一步要打开的弹层。
+     *
+     * 落点是**课程分类弹层**，不是课程编辑表单：这一步只跟类别有关，
+     * 而编辑表单里还有教师、教室、主题色、时段、周次和三个待办开关 ——
+     * 为改一个类别让用户穿过那张表单，既吓人又容易顺手改坏别的字段。
+     *
+     * 弹层里所有课程列在一起，一门一门展开选；没有课时空态里直接给「去添加课程」。
+     */
+    private fun MainUiState.withCourseCategoryOpen() = copy(isCourseCategoryDialogOpen = true)
+
+    fun openCourseCategoryDialog() = _uiState.update { it.withCourseCategoryOpen() }
+
+    fun closeCourseCategoryDialog() = _uiState.update {
+        it.copy(isCourseCategoryDialogOpen = false).resumeOnboardingIfTargetDone()
+    }
+
+    /**
+     * 改一门课的类别。
+     *
+     * **只改类别**，不动那三个待办开关 —— 它们是用户自己在课程编辑里给的值，
+     * 改类别不等于替他重置（见 `CourseRepository.saveCourseWithSlots` 的编辑分支）。
+     * 要按类别批量改开关，去「课程联动规则」。
+     */
+    fun updateCourseCategory(course: CourseWithSlots, category: String) = viewModelScope.launch {
+        courseRepo.updateCourseCategory(course.course.id, category)
+        _uiState.update {
+            it.copy(userMessage = "课程「${course.course.name}」已归到「$category」")
+        }
+    }
+
     fun openAddCourseDialog() = _uiState.update { it.withAddCourseOpen() }
 
     fun openEditCourseDialog(c: CourseWithSlots) = _uiState.update {
@@ -1078,23 +1109,29 @@ private val ruleFlow = combine(
      * 没有唯一答案，就迟早有一处忘了**。所以成功也收敛成一个函数，
      * 三个字段（成功时间 / 尝试时间 / 失败类别）永远一起从存储刷新，
      * 谁都别想只更新其中一部分。
+     *
+     * [closeDialog] 为真时弹层是**代码**收的，不是用户点的「关闭」——
+     * 所以接回引导也得在这里做（见 [closeCloudAccountDialogAfterSync]）。
      */
     private fun MainUiState.withSyncSuccess(
         userMessage: String,
         closeDialog: Boolean = false
-    ): MainUiState = copy(
-        isSyncing = false,
-        isCloudAccountDialogOpen = if (closeDialog) false else isCloudAccountDialogOpen,
-        isTransferDialogOpen = if (closeDialog) false else isTransferDialogOpen,
-        boundStudentId = secureStorage.getMaskedStudentId(),
-        isRememberCredentials = secureStorage.isRememberCredentials(),
-        lastSyncTimestamp = secureStorage.getLastSyncTimestamp(),
-        lastSyncAttemptTime = secureStorage.getLastSyncAttemptTime(),
-        // 成功过一次之后这里是 null：那条失败信息已经过期，不该再挂着吓人。
-        lastSyncFailureKind = secureStorage.getLastSyncFailureKind(),
-        syncFailure = null,
-        userMessage = userMessage
-    )
+    ): MainUiState {
+        val base = copy(
+            isSyncing = false,
+            boundStudentId = secureStorage.getMaskedStudentId(),
+            isRememberCredentials = secureStorage.isRememberCredentials(),
+            lastSyncTimestamp = secureStorage.getLastSyncTimestamp(),
+            lastSyncAttemptTime = secureStorage.getLastSyncAttemptTime(),
+            // 成功过一次之后这里是 null：那条失败信息已经过期，不该再挂着吓人。
+            lastSyncFailureKind = secureStorage.getLastSyncFailureKind(),
+            syncFailure = null,
+            userMessage = userMessage
+        )
+        // 收弹层 + 接回引导合成一步：分两次做的话，中间会有一瞬间「弹层没了、
+        // 引导还没回来」，那一瞬间屏幕上什么都不剩。
+        return if (closeDialog) base.closeCloudAccountDialogAfterSync() else base
+    }
 
     /**
      * 把一次失败同时落到三处：**弹层里的卡**（能照着做）、**Snackbar 摘要**（弹层关掉后还在）、
@@ -1517,12 +1554,19 @@ private val ruleFlow = combine(
      * 「关掉引导 + 记下在等谁」和「打开目标」必须发生在**同一次状态更新**里：
      * 分两次的话，中途会有一瞬间既「引导开着」又「目标开着」，
      * 两层遮罩与两张面板撞在一起 —— 正是上面要避免的那一幕。
+     *
+     * ## 落点只管「打开哪个弹层」
+     *
+     * 别在这里挑课程：课程列表是**仓库来的**字段，只存在于合成后的 `uiState` 里，
+     * raw 的 `_uiState` 那份永远是空的 —— 读它不报错，只是「没有课」，
+     * 于是「挑一门课」这种分支会被悄悄走成另一条。
+     * 要课程就取 `uiState.value`。
      */
     fun openOnboardingTarget(target: GuideTarget) {
         _uiState.update { state ->
             val opened = when (target) {
                 GuideTarget.ZJU_SYNC -> state.withCloudAccountOpen()
-                GuideTarget.COURSE_CATEGORY -> state.withAddCourseOpen()
+                GuideTarget.COURSE_CATEGORY -> state.withCourseCategoryOpen()
                 GuideTarget.LINKAGE_RULES -> state.withCategoryRulesOpen()
                 GuideTarget.WALLPAPER -> state.withWallpaperOpen()
             }

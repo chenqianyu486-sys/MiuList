@@ -88,6 +88,7 @@ import com.example.ui.theme.LocalWallpaperIsCustom
 import com.example.ui.components.AcademicCalendarDialog
 import com.example.ui.components.CategoryRulesDialog
 import com.example.ui.components.CloudAccountDialog
+import com.example.ui.components.CourseCategoryDialog
 import com.example.ui.components.CourseEditDialog
 import com.example.ui.components.CourseLinkageSheet
 import com.example.ui.components.DeleteCourseConfirmDialog
@@ -746,6 +747,7 @@ fun MainApp(viewModel: MainViewModel) {
             // 关掉弹层回到抽屉，接着还能点下一行。
             onOpenCloudAccount = { viewModel.openCloudAccountDialog() },
             onOpenAcademicCalendar = { viewModel.openAcademicCalendarDialog() },
+            onOpenCourseCategory = { viewModel.openCourseCategoryDialog() },
             onOpenCategoryRules = { viewModel.openCategoryRulesDialog() },
             onOpenTaskRules = { viewModel.openTaskRulesDialog() },
             onOpenAddCourse = { viewModel.openAddCourseDialog() },
@@ -892,6 +894,22 @@ fun MainApp(viewModel: MainViewModel) {
                 taskCount = taskCount,
                 onDismiss = { viewModel.cancelDeleteTaskType() },
                 onConfirm = { viewModel.deleteTaskType(type) }
+            )
+        }
+
+        // 课程分类弹层（给所有课程逐门定类别）。
+        //
+        // 位置在**课程编辑弹层之前**：分类弹层的空态里有一个「去添加课程」，
+        // 那个弹层要压在它上面（兄弟节点里排得靠后的画在上面）。
+        // 顺序反过来就会变成「添加课程」被分类弹层盖住。
+        if (state.isCourseCategoryDialogOpen) {
+            CourseCategoryDialog(
+                courses = state.coursesWithSlots,
+                onSelectCategory = { course, category ->
+                    viewModel.updateCourseCategory(course, category)
+                },
+                onAddCourse = { viewModel.openAddCourseDialog() },
+                onDismiss = { viewModel.closeCourseCategoryDialog() }
             )
         }
 

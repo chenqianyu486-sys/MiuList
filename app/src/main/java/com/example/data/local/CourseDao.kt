@@ -53,6 +53,16 @@ interface CourseDao {
     @Update
     suspend fun updateCourse(course: CourseEntity)
 
+    /**
+     * 只改类别，别的一概不动。
+     *
+     * 课程自己那三个开关（课前预习 / 课后作业 / 实验报告）是**用户自己的值**，
+     * 课程编辑里也是这么定的（见 `saveCourseWithSlots` 的编辑分支）。
+     * 分类只是把这门课挪到另一个组，不该替他重置开关。
+     */
+    @Query("UPDATE courses SET category = :category WHERE id = :id")
+    suspend fun updateCategory(id: Long, category: String)
+
     /** 批量写回，只改开关时不用为每门课单开一条 UPDATE。 */
     @Update
     suspend fun updateCourses(courses: List<CourseEntity>)

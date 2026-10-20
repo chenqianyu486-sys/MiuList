@@ -184,6 +184,14 @@ data class MainUiState(
     val isAddCourseDialogOpen: Boolean = false,
     val editingCourseWithSlots: CourseWithSlots? = null,
 
+    /**
+     * 课程分类弹层（给所有课程逐门定类别）。
+     *
+     * 与 [isAddCourseDialogOpen] 分开：**「改类别」不必打开整张课程编辑表单**，
+     * 那一屏里还有教师、教室、主题色、时段、周次 —— 为一件轻活开一张重表单。
+     */
+    val isCourseCategoryDialogOpen: Boolean = false,
+
     val inspectingCourse: CourseWithSlots? = null, // for detailed course + slots + linked tasks sheet
 
     /**
