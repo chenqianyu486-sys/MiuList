@@ -274,7 +274,10 @@ private val ruleFlow = combine(
             // 同步成功就有课了，不该再弹引导；同步失败（或者压根没存凭据）
             // 才轮到引导接手。
             if (courseRepo.getAllCoursesOnce().isEmpty() && !onboardingRepo.hasSeenOnboarding) {
-                _uiState.update { it.copy(isOnboardingGuideOpen = true, onboardingStep = 0) }
+                // 从上次停住的那一步接着讲：引导是可以暂停的
+                // （去看看某个功能，做完接回来），冷启动不该从头再推一遍。
+                val step = onboardingRepo.currentStep.coerceIn(0, GuideTarget.entries.size - 1)
+                _uiState.update { it.copy(isOnboardingGuideOpen = true, onboardingStep = step) }
             }
         }
     }
@@ -472,9 +475,16 @@ private val ruleFlow = combine(
 
     // ------------------------------------------------------------ 课程
 
-    fun openAddCourseDialog() = _uiState.update {
-        it.copy(isAddCourseDialogOpen = true, editingCourseWithSlots = null)
-    }
+    /**
+     * 打开新增课程弹层时的状态变化。
+     *
+     * 抽成可复用的变换，是因为引导的「去看看」要**在同一次更新里**
+     * 既打开这个弹层又暂停引导（见 [openOnboardingTarget]）。
+     */
+    private fun MainUiState.withAddCourseOpen() =
+        copy(isAddCourseDialogOpen = true, editingCourseWithSlots = null)
+
+    fun openAddCourseDialog() = _uiState.update { it.withAddCourseOpen() }
 
     fun openEditCourseDialog(c: CourseWithSlots) = _uiState.update {
         it.copy(isAddCourseDialogOpen = true, editingCourseWithSlots = c)
@@ -482,6 +492,7 @@ private val ruleFlow = combine(
 
     fun closeCourseDialog() = _uiState.update {
         it.copy(isAddCourseDialogOpen = false, editingCourseWithSlots = null)
+            .resumeOnboardingIfTargetDone()
     }
 
     fun inspectCourse(c: CourseWithSlots?) = _uiState.update { it.copy(inspectingCourse = c) }
@@ -532,8 +543,13 @@ private val ruleFlow = combine(
 
     // ------------------------------------------------------------ 类别规则
 
-    fun openCategoryRulesDialog() = _uiState.update { it.copy(isCategoryRulesDialogOpen = true) }
-    fun closeCategoryRulesDialog() = _uiState.update { it.copy(isCategoryRulesDialogOpen = false) }
+    /** 打开类别联动规则弹层时的状态变化。见 [withAddCourseOpen] 的说明。 */
+    private fun MainUiState.withCategoryRulesOpen() = copy(isCategoryRulesDialogOpen = true)
+
+    fun openCategoryRulesDialog() = _uiState.update { it.withCategoryRulesOpen() }
+    fun closeCategoryRulesDialog() = _uiState.update {
+        it.copy(isCategoryRulesDialogOpen = false).resumeOnboardingIfTargetDone()
+    }
 
     /**
      * 批量应用类别联动规则（弹层「应用」一次可能改多个类别）。
@@ -557,7 +573,7 @@ private val ruleFlow = combine(
                     "已应用到 $categories 个类别"
                 },
                 isCategoryRulesDialogOpen = false
-            )
+            ).resumeOnboardingIfTargetDone()
         }
     }
 
@@ -981,11 +997,15 @@ private val ruleFlow = combine(
 
     // ------------------------------------------------------------ 云端同步与账号管理
 
-    fun openCloudAccountDialog() = _uiState.update {
-        it.copy(isCloudAccountDialogOpen = true, zjuError = null, syncFailure = null)
-    }
+    fun openCloudAccountDialog() = _uiState.update { it.withCloudAccountOpen() }
+
+    /** 打开浙大账号弹层时的状态变化。见 [withAddCourseOpen] 的说明。 */
+    private fun MainUiState.withCloudAccountOpen() =
+        copy(isCloudAccountDialogOpen = true, zjuError = null, syncFailure = null)
+
     fun closeCloudAccountDialog() = _uiState.update {
         it.copy(isCloudAccountDialogOpen = false, zjuError = null, syncFailure = null)
+            .resumeOnboardingIfTargetDone()
     }
 
     fun syncFromCloud(
@@ -1366,11 +1386,14 @@ private val ruleFlow = combine(
     // ------------------------------------------------------------ 自定义壁纸
 
     fun openWallpaperDialog() {
-        _uiState.update { it.copy(isWallpaperDialogOpen = true) }
+        _uiState.update { it.withWallpaperOpen() }
     }
 
+    /** 打开壁纸弹层时的状态变化。见 [withAddCourseOpen] 的说明。 */
+    private fun MainUiState.withWallpaperOpen() = copy(isWallpaperDialogOpen = true)
+
     fun closeWallpaperDialog() {
-        _uiState.update { it.copy(isWallpaperDialogOpen = false) }
+        _uiState.update { it.copy(isWallpaperDialogOpen = false).resumeOnboardingIfTargetDone() }
     }
 
     fun applyCustomWallpaper(uri: Uri, contentResolver: ContentResolver) {
@@ -1405,54 +1428,109 @@ private val ruleFlow = combine(
     // ------------------------------------------------------------ 上手引导
 
     /**
-     * 打开引导。设置页的入口走这里，**从第一步开始** ——
-     * 用户主动来翻就是想从头看。
+     * 打开引导。
+     *
+     * 从**上次停住的那一步**接着看，而不是每次都从头开始：
+     * 引导现在是可以暂停的（去看看某个功能，做完再回来接着讲），
+     * 停在哪就是停在哪 —— 从头再推一遍，等于把用户刚看过的东西又推一次。
+     *
+     * 走完或跳过的那一趟会把步数归零，所以「重看一遍」和「接着看」
+     * 用的是同一个数：没走完就接着看，走完了就从头看。
      */
-    fun openOnboardingGuide() = _uiState.update {
-        it.copy(isOnboardingGuideOpen = true, onboardingStep = 0)
+    fun openOnboardingGuide() {
+        val step = onboardingRepo.currentStep.coerceIn(0, GuideTarget.entries.size - 1)
+        _uiState.update {
+            it.copy(
+                isOnboardingGuideOpen = true,
+                onboardingStep = step,
+                onboardingAwaitingTarget = null,
+                onboardingResumed = false
+            )
+        }
     }
 
     /**
      * 关掉引导。
      *
-     * **任何一种关闭方式都算「看过」**：空态自动弹出之后，用户跳过、返回、
-     * 点「去看看」或走完最后一步，都是「我知道了」——
-     * 下次冷启动不该再弹一次打断他。
+     * **跳过**（以及返回键、点外面）算「这一趟到此为止」：记下「看过」，
+     * 下次冷启动不该再弹一次打断他。步数归零 —— 这一趟没走完，
+     * 下次从设置页进来是「重看一遍」，从头开始。
      */
     fun closeOnboardingGuide() {
         onboardingRepo.hasSeenOnboarding = true
-        _uiState.update { it.copy(isOnboardingGuideOpen = false) }
-    }
-
-    /**
-     * 下一步；已经是最后一步就收掉引导。
-     *
-     * 步数取 [GuideTarget] 的枚举个数：引导一步对应一个目标，
-     * 两边是同一份清单（`GuideSteps` 一步一个目标，见那里的说明）。
-     */
-    fun advanceOnboardingStep() = _uiState.update { state ->
-        if (state.onboardingStep >= GuideTarget.entries.size - 1) {
-            onboardingRepo.hasSeenOnboarding = true
-            state.copy(isOnboardingGuideOpen = false)
-        } else {
-            state.copy(onboardingStep = state.onboardingStep + 1)
+        onboardingRepo.currentStep = 0
+        _uiState.update {
+            it.copy(
+                isOnboardingGuideOpen = false,
+                onboardingAwaitingTarget = null,
+                onboardingResumed = false
+            )
         }
     }
 
     /**
-     * 「去看看」：收掉引导，打开那个功能。
+     * 下一步；已经是最后一步就走完这一趟（记「看过」并把步数归零）。
      *
-     * **收掉而不是叠在上面**：叠着的话弹层的遮罩会叠着引导的遮罩，
-     * 背后被压两遍，玻璃面也就糊了；两张面板还会重叠成一堆。
-     * 用户想重看可以从设置页再进，不必靠「暂停」续读。
+     * 步数取 [GuideTarget] 的枚举个数：引导一步对应一个目标，
+     * 两边是同一份清单（`GuideSteps` 一步一个目标，见那里的说明）。
+     */
+    fun advanceOnboardingStep() {
+        val next = _uiState.value.onboardingStep + 1
+        if (next >= GuideTarget.entries.size) {
+            onboardingRepo.hasSeenOnboarding = true
+            onboardingRepo.currentStep = 0
+            _uiState.update {
+                it.copy(
+                    isOnboardingGuideOpen = false,
+                    onboardingStep = 0,
+                    onboardingAwaitingTarget = null,
+                    onboardingResumed = false
+                )
+            }
+        } else {
+            onboardingRepo.currentStep = next
+            _uiState.update { it.copy(onboardingStep = next, onboardingResumed = false) }
+        }
+    }
+
+    /**
+     * 「去看看」：把引导**暂停**在这里，打开那个功能。
+     *
+     * ## 暂停，不是关闭
+     *
+     * 收掉引导就把用户一个人扔在目标功能里了 —— 他还欠着几页没看，
+     * 收掉等于让他自己记着「我刚才看到第几步了」。所以这里只**暂停**：
+     * 目标功能做完、弹层关掉之后，引导自己接回来（见
+     * [resumeOnboardingIfTargetDone]）。
+     *
+     * 顺带：「去看看」不再算「看过」。空态的条件还在（他可能没同步成功），
+     * 下次冷启动引导该回来还得回来。
+     *
+     * ## 为什么收掉而不是叠在上面
+     *
+     * 叠着的话弹层的遮罩会叠着引导的遮罩，背后被压两遍，玻璃面也就糊了；
+     * 两张面板还会重叠成一堆。收掉（暂停）等目标做完再接回来，
+     * 全程同一时刻只有一层。
+     *
+     * ## 为什么一次更新里做完两件事
+     *
+     * 「关掉引导 + 记下在等谁」和「打开目标」必须发生在**同一次状态更新**里：
+     * 分两次的话，中途会有一瞬间既「引导开着」又「目标开着」，
+     * 两层遮罩与两张面板撞在一起 —— 正是上面要避免的那一幕。
      */
     fun openOnboardingTarget(target: GuideTarget) {
-        closeOnboardingGuide()
-        when (target) {
-            GuideTarget.ZJU_SYNC -> openCloudAccountDialog()
-            GuideTarget.COURSE_CATEGORY -> openAddCourseDialog()
-            GuideTarget.LINKAGE_RULES -> openCategoryRulesDialog()
-            GuideTarget.WALLPAPER -> openWallpaperDialog()
+        _uiState.update { state ->
+            val opened = when (target) {
+                GuideTarget.ZJU_SYNC -> state.withCloudAccountOpen()
+                GuideTarget.COURSE_CATEGORY -> state.withAddCourseOpen()
+                GuideTarget.LINKAGE_RULES -> state.withCategoryRulesOpen()
+                GuideTarget.WALLPAPER -> state.withWallpaperOpen()
+            }
+            opened.copy(
+                isOnboardingGuideOpen = false,
+                onboardingAwaitingTarget = target,
+                onboardingResumed = false
+            )
         }
     }
 

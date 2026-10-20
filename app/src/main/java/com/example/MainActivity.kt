@@ -752,8 +752,16 @@ fun MainApp(viewModel: MainViewModel) {
             onEditCourse = { viewModel.openEditCourseDialog(it) },
             onDeleteCourse = { viewModel.confirmDeleteCourse(it) },
             // 「设置」是切页不是叠层：切页由 LaunchedEffect(currentTab) 统一收抽屉。
+            //
+            // 但**已经在设置页上时**（从设置页打开抽屉再点「设置」）要自己收：
+            // 这时切页没发生，LaunchedEffect(currentTab) 不会重新触发，
+            // 抽屉就留在屏幕上把设置页整个盖住 —— 用户点了「设置」却什么都没发生，
+            // 而设置页里的入口（包括「使用引导」）全被挡在抽屉底下。
             onOpenSettings = {
                 viewModel.setNavigationTab(NavigationTab.SETTINGS)
+                if (state.currentTab == NavigationTab.SETTINGS) {
+                    moreDrawerVisible = false
+                }
             }
         )
         }
@@ -766,11 +774,13 @@ fun MainApp(viewModel: MainViewModel) {
     Box(modifier = Modifier.fillMaxSize()) {
         // 上手引导。放在这一摞 overlay 的**最下面**：
         // 它是入口层的东西，Snackbar 与别的弹层都该画在它上面，
-        // 而不是被它盖住。引导的「去看看」会先收掉引导再打开目标功能，
-        // 所以两者不会叠在一起（叠着的话遮罩压两遍、面板也糊成一堆）。
+        // 而不是被它盖住。引导的「去看看」是把引导**暂停**、去开目标功能，
+        // 目标做完关掉之后引导自己接回来，所以两者不会同时在场
+        // （同时在场的话遮罩压两遍、面板也糊成一堆）。
         if (state.isOnboardingGuideOpen) {
             OnboardingGuide(
                 stepIndex = state.onboardingStep,
+                resumed = state.onboardingResumed,
                 onDismiss = { viewModel.closeOnboardingGuide() },
                 onNext = { viewModel.advanceOnboardingStep() },
                 onOpenTarget = { viewModel.openOnboardingTarget(it) }

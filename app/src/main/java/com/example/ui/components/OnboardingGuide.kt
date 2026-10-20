@@ -121,11 +121,17 @@ val GuideSteps: List<GuideStep> = listOf(
  *
  * ## 三个按钮各管一件事
  *
- * - **「去看看」**：收掉引导，去那个功能。**收掉而不是叠在上面** ——
- *   叠着的话两层玻璃面会糊在一起（弹层的遮罩叠着引导的遮罩，背后被压两遍），
- *   面板也会和面板重叠成一堆。用户从设置里随时能再打开，不靠「暂停」续读。
+ * - **「去看看」**：把引导**暂停**在这里，去那个功能。目标功能做完、
+ *   弹层关掉之后引导会自己接回来（见 `MainViewModel.openOnboardingTarget`）——
+ *   用户还欠着几页没看，收掉就等于让他自己记着看到第几步了。
+ *   但**不叠在上面**：叠着的话两层玻璃面会糊在一起（弹层的遮罩叠着引导的遮罩，
+ *   背后被压两遍），面板也会和面板重叠成一堆。
  * - **「下一步」**：翻到下一步，最后一步是「完成」。
- * - **「跳过」**：直接收掉。
+ * - **「跳过」**：直接收掉（这一趟到此为止）。
+ *
+ * @param resumed 刚从「去看看」那个功能回来时为真：面板上多一句
+ *   「刚带你去过这一项」，否则用户看到的是和离开前一模一样的第 N 步，
+ *   会以为引导没动过。
  */
 @Composable
 fun OnboardingGuide(
@@ -133,6 +139,7 @@ fun OnboardingGuide(
     onDismiss: () -> Unit,
     onNext: () -> Unit,
     onOpenTarget: (GuideTarget) -> Unit,
+    resumed: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val safeIndex = stepIndex.coerceIn(0, GuideSteps.lastIndex)
@@ -187,6 +194,16 @@ fun OnboardingGuide(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(16.dp))
+                    // 刚从目标那边回来的提示。放在动作按钮**上面**：
+                    // 它解释的是「为什么还是这一步」，紧挨着那个让人困惑的地方。
+                    if (resumed) {
+                        Text(
+                            text = "刚带你去过这一项，确认好了再继续。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                    }
                     OutlinedButton(
                         onClick = { onOpenTarget(s.target) },
                         shape = RoundedCornerShape(10.dp),

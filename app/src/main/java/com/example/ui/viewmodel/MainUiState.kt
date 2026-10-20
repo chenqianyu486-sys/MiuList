@@ -238,8 +238,10 @@ data class MainUiState(
     /**
      * 引导是否打开。
      *
-     * 两条来路：**空态自动触发**（本地一门课都没有、且用户还没看过）与
-     * **设置页的入口**。后者不受「看过」标记限制 —— 想重看随时能看。
+     * 三条来路：**空态自动触发**（本地一门课都没有、且用户还没看过）、
+     * **设置页的入口**（不受「看过」标记限制，想重看随时能看）、
+     * 以及**从目标那边接回来**（用户点「去看看」去配置某个功能，
+     * 那个功能做完关掉之后，引导自己回到刚才那一步）。
      */
     val isOnboardingGuideOpen: Boolean = false,
 
@@ -250,6 +252,24 @@ data class MainUiState(
      * 进程恢复），而「用户读到第几步」是这次引导的进度，不该在重建后从头再来。
      */
     val onboardingStep: Int = 0,
+
+    /**
+     * 引导被送去某个功能了，正在等那个功能做完。
+     *
+     * 「去看看」不是关闭，是**暂停**：用户去配置壁纸，关掉壁纸弹层之后
+     * 引导要自己接回来 —— 他还欠着几页没看。null = 没在等。
+     *
+     * 判据与接回规则见 [resumeOnboardingIfTargetDone]。
+     */
+    val onboardingAwaitingTarget: GuideTarget? = null,
+
+    /**
+     * 引导刚从目标那边接回来。
+     *
+     * 只在「接回来」这一瞬间为真，用来给面板加一句「刚带你去过这一项」——
+     * 否则用户看到的是和离开前一模一样的第 N 步，会以为引导没动过。
+     */
+    val onboardingResumed: Boolean = false,
 
     // 浙大同步（账号 / 学期下拉 / 取课表）与文件导入导出各自的状态
     val isZjuImportRunning: Boolean = false,
