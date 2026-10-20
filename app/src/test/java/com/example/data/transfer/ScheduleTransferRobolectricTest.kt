@@ -46,11 +46,11 @@ class ScheduleTransferRobolectricTest {
      * 收尾清空。
      *
      * Robolectric 里 `AppContainer` 拿的是 `AppDatabase` 单例，**测试类之间共用同一个库文件**。
-     * 本类的用例都会留下课程（导入 / 联动规则都要建课），而
+     * 本类的用例都会留下课程（导入 / 联动规则都要建课），
      * `ExampleRobolectricTest.repository initialization and multi-slot course schedule`
-     * 的播种判据是「courses 为空，或第一门课的时段被删光」——库里躺着别类测试建的课时，
-     * 那条判据会认为演示数据已经播好，于是断言挂在一份没有「高等数学」的课表上，
-     * 报错信息里完全看不出是谁弄脏的。
+     * 自己会播一门「高等数学」并按「这门课有几个时段」判断要不要重播 ——
+     * 库里躺着别类测试建的课时，它会把旧课改写而不是新播一份，
+     * 于是断言验的不是它自己刚播出来的那门，报错信息里也看不出是谁弄脏的。
      *
      * 规则行一起清：表非空时 `ensureDefaultRules` 整个不播，
      * 残留的规则会让别的类拿到一份不是自己设的默认值。

@@ -80,7 +80,7 @@ import com.example.ui.viewmodel.MainUiState
  * 只剩一层看不见却仍参与命中测试的开销。关闭只剩右上角 × 和系统返回键两条路。
  *
  * **它现在同时是设置页的一半**：账号、学期、生成规则、课程管理都收在这里，
- * 设置页只留下导入导出和演示数据。所以这一页要滚动，也因此用 `LazyColumn`——
+ * 设置页只留下导入导出、分类与壁纸。所以这一页要滚动，也因此用 `LazyColumn`——
  * 课程多起来时（一个学期 9~10 门）一次性量全部高度会白算一屏。
  *
  * **面是真·毛玻璃**（`glassSurface` + 同一个 `HazeState`），和浮岛同一套语言：
@@ -203,14 +203,17 @@ fun MoreDrawer(
 
                         DrawerRow(
                             icon = Icons.Outlined.CloudSync,
-                            title = "浙大学号",
+                            // 原来写「浙大学号」：这一行下面挂着的其实是**浙大教务账号**
+                            // （统一身份认证 + 学期），不止一个学号。
+                            // 用「ZJU」这个缩写，行的标题就只说「哪个服务」，
+                            // 下面那行仍然是具体状态（学号 / 未绑定）。
+                            title = "ZJU",
                             detail = if (state.boundStudentId == null) {
                                 "未绑定 · 点此登录浙大教务"
                             } else {
                                 state.boundStudentId
                             },
                             detailMuted = state.boundStudentId == null,
-                            footnote = if (state.isDemoMode) "演示数据模式" else null,
                             testTag = "drawer_account_row",
                             onClick = onOpenCloudAccount
                         )
@@ -278,7 +281,11 @@ fun MoreDrawer(
                 if (state.coursesWithSlots.isEmpty()) {
                     item {
                         Text(
-                            text = "还没有课程 · 先从课表导入，或点右上角添加",
+                            // 原来写「先从课表导入，或点右上角添加」：
+                            // 一，App 里没有「课表导入」这个入口（导入是「数据导入 / 导出」
+                            // 那个 JSON 文件），用户照着找会扑空；二，「添加」在
+                            // 「本学期课程」这一节的标题行右端，不在屏幕右上角。
+                            text = "还没有课程 · 先同步浙大课表，或点「添加」新建",
                             fontSize = 11.sp,
                             color = TextTertiary,
                             modifier = Modifier.padding(start = 12.dp, top = 2.dp, bottom = 8.dp)
@@ -312,7 +319,11 @@ fun MoreDrawer(
                     DrawerRow(
                         icon = Icons.Outlined.School,
                         title = "设置",
-                        detail = "整机快照 · 演示数据",
+                        // 原来写「整机快照 · 演示数据」：只点了设置页六项里的两项，
+                        // 其中一项还是内部格式名。抽屉这一行是设置的预告，
+                        // 预告该把设置页有哪几类事说清楚。
+                        // 2026-10-20「示例数据」整项取消，这一行也随之少一项。
+                        detail = "导入导出 · 分类 · 壁纸",
                         testTag = "drawer_settings_row",
                         onClick = onOpenSettings
                     )

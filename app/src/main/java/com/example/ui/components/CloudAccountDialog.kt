@@ -68,7 +68,6 @@ fun CloudAccountDialog(
     lastSyncTimestamp: Long?,
     lastSyncAttemptTime: Long?,
     lastSyncFailureKind: ZjuFailureKind?,
-    isDemoMode: Boolean,
     isSyncing: Boolean,
     zjuTermOptions: List<ZjuTermOption>,
     syncFailure: SyncFailure?,
@@ -209,8 +208,7 @@ fun CloudAccountDialog(
                     }
 
                     Text(
-                        text = if (isDemoMode) "当前状态：演示数据（从云端拉取后将自动替换）"
-                        else "当前状态：优先读取本地缓存（断网立即可用，持久保存）",
+                        text = "当前状态：优先读取本地缓存（断网立即可用，持久保存）",
                         style = MaterialTheme.typography.labelSmall,
                         color = TextSecondary
                     )
@@ -355,7 +353,9 @@ fun CloudAccountDialog(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "采用 Android KeyStore 硬件 AES-256 加密存储，不泄露到代码库",
+                                // 原来写「不泄露到代码库」：代码库是开发者的事，
+                                // 用户要听的是「这台手机上会不会留明文」。
+                                text = "采用 Android KeyStore 硬件 AES-256 加密存储，本机不留明文",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TextMuted
                             )

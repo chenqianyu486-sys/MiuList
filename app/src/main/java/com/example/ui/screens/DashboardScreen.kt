@@ -558,7 +558,12 @@ fun DashboardScreen(
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Text(
-                                            text = "✨ 当前没有未交作业，所有任务已结清",
+                                            // 原来写「当前没有未交作业，所有任务已结清」：
+                                            // 前半句和后半句说的是同一件事，而「任务」
+                                            // 是这个 App 里第四个称呼（待办 / 作业 /
+                                            // 课程 / 任务），指的却是同一批东西。
+                                            // 这一栏是「学在浙大」拉回来的作业，就只说作业。
+                                            text = "✨ 暂无未交作业",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = TextSecondary,
                                             fontSize = 12.5.sp
@@ -736,7 +741,12 @@ fun DashboardScreen(
                                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                                         ) {
                                             Text(
-                                                text = "@$room",
+                                                // 不带「@」：设计笔记的现状诊断第 6 条写着
+                                                // 「@ 教室胶囊的『@』是程序员语法，不是学生语言」，
+                                                // 加高主卡早就照这条改掉了，这一枚小胶囊
+                                                // 却还留着。同一个 App 里同一件事实用两种写法，
+                                                // 改掉一处就等于把另一处也标成了待办。
+                                                text = room,
                                                 color = accentOnCourse(courseColor),
                                                 fontSize = 10.sp,
                                                 maxLines = 1,

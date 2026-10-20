@@ -50,7 +50,7 @@ import com.example.ui.theme.TextSecondary
  * ## 这里不再有浙大登录
  *
  * 原来这个弹层里嵌了一整块「学号 + 密码 + 获取课表」，那是浙大同步，
- * 而它已经有自己的两处入口：「更多」抽屉的浙大学号与总览页翻面卡的快捷登录。
+ * 而它已经有自己的两处入口：「更多」抽屉的 ZJU 账号与总览页翻面卡的快捷登录。
  * 三处入口做同一件事，用户要猜该走哪条，职责也说不清。
  *
  * 两条链路现在分工明确，**不重叠**：
@@ -300,7 +300,7 @@ private fun PreviewBlock(preview: ImportPreview, issues: List<ImportIssue>) {
         if (preview.strategy == ImportStrategy.REPLACE) {
             Text(
                 text = buildString {
-                    append("注意：将清空现有 ${preview.existingCourseCount} 门课程并整份导入，课程不可撤销。")
+                    append("注意：将清空现有 ${preview.existingCourseCount} 门课程，改用文件里的课程，且不可撤销。")
                     append("现有 ${preview.existingTaskCount} 条待办不会被删除：")
                     append("${preview.tasksKeepingCourse} 条继续挂在原课程下")
                     if (preview.tasksLosingCourse > 0) {

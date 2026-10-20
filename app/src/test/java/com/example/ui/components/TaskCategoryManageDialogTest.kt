@@ -127,8 +127,8 @@ class TaskCategoryManageDialogTest {
             }
         }
 
-        // 验证上层的「新建待办类型」标题和输入框可见且可正常交互输入
-        composeTestRule.onNodeWithText("新建待办类型").assertIsDisplayed()
+        // 验证上层的「新建待办分类」标题和输入框可见且可正常交互输入
+        composeTestRule.onNodeWithText("新建待办分类").assertIsDisplayed()
         composeTestRule.onNodeWithTag("new_task_type_label_input", useUnmergedTree = true)
             .performTextInput("期末复习")
 
@@ -170,8 +170,7 @@ class TaskCategoryManageDialogTest {
             com.example.ui.screens.SettingsScreen(
                 state = state,
                 onOpenTransferDialog = {},
-                onOpenCategoryManageDialog = { openedCategoryManage = true },
-                onResetDemoData = {}
+                onOpenCategoryManageDialog = { openedCategoryManage = true }
             )
         }
 

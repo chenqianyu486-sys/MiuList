@@ -27,22 +27,25 @@ class TaskTypeRepository(
     suspend fun getAllOnce(): List<CustomTaskType> = dao.getAllOnce().map { it.toModel() }
 
     /**
-     * 新建一个类型。
+     * 新建一个分类。
      *
-     * [paletteIndex] 必须在 [TaskTypePalettes] 的范围内——调用方（新建类型弹层）
+     * [paletteIndex] 必须在 [TaskTypePalettes] 的范围内——调用方（新建分类弹层）
      * 本来就是让用户在一排色块里点选的，不接受「算一个颜色」。
      *
-     * 重名直接拒绝：类型是筛选和分组的一级维度，两个同名类型会让
-     * 「按类型」视图里出现两行一模一样只靠颜色区分的组头。
+     * 重名直接拒绝：分类是筛选和分组的一级维度，两个同名分类会让
+     * 「按分类」视图里出现两行一模一样只靠颜色区分的组头。
+     *
+     * 抛出的异常消息会直接显示给用户，所以这里说的是「分类」——
+     * App 里待办这一轴统一叫分类，不叫类型。
      */
     suspend fun create(label: String, paletteIndex: Int): Result<String> {
         val trimmed = label.trim()
-        if (trimmed.isEmpty()) return Result.failure(IllegalArgumentException("类型名不能为空"))
+        if (trimmed.isEmpty()) return Result.failure(IllegalArgumentException("分类名不能为空"))
         if (dao.count() >= MAX_CUSTOM_TYPES) {
-            return Result.failure(IllegalStateException("自定义类型最多 $MAX_CUSTOM_TYPES 个"))
+            return Result.failure(IllegalStateException("自定义分类最多 $MAX_CUSTOM_TYPES 个"))
         }
         if (dao.getAllOnce().any { it.label.equals(trimmed, ignoreCase = true) }) {
-            return Result.failure(IllegalStateException("已经有叫「$trimmed」的类型了"))
+            return Result.failure(IllegalStateException("已经有叫「$trimmed」的分类了"))
         }
         val palette = TaskTypePalettes.getOrNull(paletteIndex)
             ?: return Result.failure(IllegalArgumentException("配色超出可选范围"))

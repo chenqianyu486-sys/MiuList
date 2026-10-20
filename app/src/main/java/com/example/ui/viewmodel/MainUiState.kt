@@ -35,10 +35,14 @@ enum class NavigationTab(val title: String) {
 
 // 「按类别」整条去掉了：课程类别本身已经是卡片上的一个标签，再做一遍分组等于把同一条
 // 信息说两遍，而且分组标题里只有类别名，扫不出任何新东西。
+//
+// 待办这一轴统一叫「分类」（设置页的「待办分类管理」、清单页的「全部分类」
+// 都是它）；「类型」是同一件东西的另一个叫法，App 里两套叫法混着出现，
+// 用户会以为是两种不同的东西。
 enum class TaskGroupingMode(val label: String) {
     BY_URGENCY("按截止"),
     BY_COURSE("按课程"),
-    BY_TYPE("按类型"),
+    BY_TYPE("按分类"),
     // 从「按优先级」改名而来：优先级从三档收成了星标两态之后，
     // 「高/中/低优先级」这个组头名已经指代不了任何东西。
     // 这只是内存态的 UI 选择，没有落库，所以改名不需要迁移。
@@ -266,7 +270,6 @@ data class MainUiState(
 
     val boundStudentId: String? = null,
     val isRememberCredentials: Boolean = false,
-    val isDemoMode: Boolean = false,
     val isCloudAccountDialogOpen: Boolean = false,
 
     /**

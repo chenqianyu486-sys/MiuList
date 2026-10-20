@@ -538,7 +538,9 @@ fun CourseLinkageSheet(
                             )
                             Spacer(modifier = Modifier.width(5.dp))
                             Text(
-                                text = "教师: ${course.teacher.ifBlank { "未指定" }}",
+                                // 全角冒号：中文正文里半角「:」跟英文标点排在一起
+                                // 是一处刺眼的例外，App 别处（「贡献者：」等）用的都是全角。
+                                text = "教师：${course.teacher.ifBlank { "未指定" }}",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -556,7 +558,7 @@ fun CourseLinkageSheet(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "地点: $commonRoom",
+                                text = "地点：$commonRoom",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSurface,
                                 maxLines = 2,
@@ -622,7 +624,13 @@ fun CourseLinkageSheet(
                                 }
                                 if (hasMultipleRooms && specificRoom.isNotBlank()) {
                                     Text(
-                                        text = "📍 $specificRoom",
+                                        // 原来写「📍 教室名」：emoji 当标签用，
+                                        // 而这个 App 的标签一向是图标或文字，
+                                        // 「@」那枚早被设计笔记判成程序员语法退场了，
+                                        // emoji 也只是同一类问题的另一种写法。
+                                        // 这一行说的是**这一节**在哪，跟上面那行
+                                        // 课程级的「地点」不是同一个口径，得说清楚。
+                                        text = "本节地点：$specificRoom",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = accentOnCourse(courseColor),
                                         maxLines = 1,

@@ -67,17 +67,6 @@ class SecureAccountStorageTest {
     }
 
     @Test
-    fun `data source mode persists across calls`() {
-        assertEquals(DataSourceMode.DEMO, storage.getDataSourceMode())
-
-        storage.setDataSourceMode(DataSourceMode.REAL)
-        assertEquals(DataSourceMode.REAL, storage.getDataSourceMode())
-
-        storage.setDataSourceMode(DataSourceMode.DEMO)
-        assertEquals(DataSourceMode.DEMO, storage.getDataSourceMode())
-    }
-
-    @Test
     fun `last sync timestamp and term persist correctly`() {
         assertNull(storage.getLastSyncTimestamp())
         assertNull(storage.getLastTerm())

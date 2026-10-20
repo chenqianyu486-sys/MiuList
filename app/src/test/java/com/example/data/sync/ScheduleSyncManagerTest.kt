@@ -16,8 +16,6 @@ import com.example.data.local.CourseEntity
 import com.example.data.local.CourseSlotEntity
 import com.example.data.local.TaskEntity
 import com.example.data.model.SlotWithWeeks
-import com.example.data.sample.SampleDataProvider
-import com.example.data.security.DataSourceMode
 import com.example.data.security.SecureAccountStorage
 import com.example.data.source.zju.ZjuException
 import com.example.data.source.zju.ZjuFailureKind
@@ -139,15 +137,10 @@ class ScheduleSyncManagerTest {
     }
 
     @Test
-    fun `sync replaces demo data and persists real courses to local cache`() = runBlocking {
-        // 1. 先植入默认演示数据
-        container.courseRepository.resetToDemoData(
-            SampleDataProvider.sampleCourses,
-            SampleDataProvider.sampleCourseSlots,
-            SampleDataProvider.createSampleTasks()
-        )
-        storage.setDataSourceMode(DataSourceMode.DEMO)
-        assertTrue(SampleDataProvider.isDemoCourseList(container.courseRepository.getAllCoursesOnce()))
+    fun `sync replaces the local timetable and persists real courses to local cache`() = runBlocking {
+        // 1. 本地先留一门课：同步走的是 REPLACE，它必须被整表顶掉
+        seedLocalCourse("过期课程", "OLD100", "王教授")
+        assertEquals(1, container.courseRepository.getAllCoursesOnce().size)
 
         // 2. 构造支持桩数据的 ZjuImportService
         val sampleJson = createSampleV2Json()
@@ -177,18 +170,15 @@ class ScheduleSyncManagerTest {
 
         assertTrue("同步应该成功：$result", result is SyncResult.Success)
         val success = result as SyncResult.Success
-        assertTrue("演示数据必须被干净替换", success.wasDemoReplaced)
         assertEquals(1, success.courseCount)
 
-        // 4. 验证本地 Room 缓存中不再包含演示课程，只有真实课程
+        // 4. 验证本地 Room 缓存里只剩云端那份课表
         val cachedCourses = container.courseRepository.getAllCoursesOnce()
         assertEquals(1, cachedCourses.size)
         assertEquals("智能物联网(AIoT)系统设计", cachedCourses.first().name)
         assertEquals("(2026-2027-1)-ISEE2020M", cachedCourses.first().code)
-        assertFalse("缓存中不应再被识别为演示数据", SampleDataProvider.isDemoCourseList(cachedCourses))
 
         // 5. 验证安全凭据已加密保存
-        assertEquals(DataSourceMode.REAL, storage.getDataSourceMode())
         assertTrue(storage.hasSavedCredentials())
         assertEquals("3190101234", storage.getStudentId())
         assertEquals("test_password_123", storage.getPassword())

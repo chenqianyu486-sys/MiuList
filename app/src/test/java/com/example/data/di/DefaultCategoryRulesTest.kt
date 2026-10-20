@@ -1,10 +1,7 @@
 package com.example.data.di
 
 import com.example.data.model.CourseCategory
-import com.example.data.sample.SampleDataProvider
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -13,8 +10,9 @@ import org.junit.Test
  * 纯 JUnit：这层写错不会崩，只会让「一键生成待办」安静地少生成或多数一类待办，
  * 而且现象是「今天没作业要写」，没人会去查默认值。
  *
- * 第二条用例把演示数据也钉住：规则说关、演示课却是开，用户在演示模式里看到的
- * 就不是这套规则的样子，等于给了一份假样品。
+ * 原来还有第三条用例，把示例课程逐条钉在这套规则上（规则说关、示例课却是开，
+ * 用户看到的就是一份假样品）。示例数据功能 2026-10-20 整项取消后，那条用例
+ * 一起没了 —— 通识课「三个都不勾」这条规格仍由第一条用例守住。
  */
 class DefaultCategoryRulesTest {
 
@@ -43,21 +41,5 @@ class DefaultCategoryRulesTest {
         val missing = (com.example.data.model.COURSE_CATEGORIES -
             AppContainer.DEFAULT_CATEGORY_RULES.map { it.category }).toSet()
         assertEquals("这些类别没有内置默认规则：$missing", emptySet<String>(), missing)
-    }
-
-    @Test
-    fun `demo courses carry the same switches their category defaults prescribe`() {
-        SampleDataProvider.sampleCourses.forEach { course ->
-            val (pre, post, lab) = switches(course.category)
-            assertEquals("${course.name} 的预习开关与类别规则不一致", pre, course.autoPreStudy)
-            assertEquals("${course.name} 的作业开关与类别规则不一致", post, course.autoPostHomework)
-            assertEquals("${course.name} 的实验报告开关与类别规则不一致", lab, course.autoLabReport)
-        }
-        // 顺带守住「通识课不勾」这条最容易被当成漏写而改回去的规格。
-        val english = SampleDataProvider.sampleCourses.first { it.category == "通识公共" }
-        assertFalse(english.autoPreStudy)
-        assertFalse(english.autoPostHomework)
-        assertFalse(english.autoLabReport)
-        assertTrue(english.name.isNotBlank())
     }
 }

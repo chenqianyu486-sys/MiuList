@@ -24,7 +24,6 @@ import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.ImportExport
-import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.Wallpaper
 import com.example.data.model.WallpaperPresets
 import com.example.data.model.WallpaperType
@@ -36,7 +35,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -62,13 +60,16 @@ import com.example.ui.viewmodel.MainUiState
 /**
  * 设置页。
  *
- * **只剩两件事：课表导入/导出、演示数据。**
+ * **只剩三件事：课表导入/导出、待办分类管理、自定义壁纸。**
  *
  * 原来这里是六个入口（账号同步 / 课程联动规则 / 待办生成规则 / 导入导出 /
  * 本学期校历 / 课程管理列表），其中**五个都已经搬到顶栏展开的「更多」页**：
  * 账号与学期是「我现在是什么身份」的读数，规则和课程管理是日常真正常改的东西，
  * 它们都属于「打开一次、看完就走」的低频入口，放在一个要滚很久的设置页里
- * 只是让人多滚几屏。留在这里的只剩两件不常动、动了要慎重的数据类操作。
+ * 只是让人多滚几屏。留在这里的只剩不常动、动了要慎重的数据类操作。
+ *
+ * 原来还有第四件：「示例数据」（一键恢复官方示例课表与待办）。**2026-10-20 整项取消** ——
+ * App 不再播种示例数据，这个入口也就没有存在理由了。
  *
  * 同一个入口在两个地方都能点，用户会犹豫该点哪个——所以搬走的同时，
  * 这一页里对应的入口**全部删除**，不做「这里也留一个」的重复。
@@ -79,7 +80,6 @@ fun SettingsScreen(
     onOpenTransferDialog: () -> Unit,
     onOpenCategoryManageDialog: () -> Unit,
     onOpenWallpaperDialog: () -> Unit = {},
-    onResetDemoData: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
@@ -98,7 +98,11 @@ fun SettingsScreen(
             SettingsActionCard(
                 icon = Icons.Outlined.ImportExport,
                 title = "数据导入 / 导出",
-                subtitle = "整机快照 · 课程与待办一起走",
+                // 原来写「整机快照 · 课程与待办一起走」：前半句是内部格式名，
+                // 后半句又把它解释了一遍，两句话说的是同一件事；
+                // 而且设置页里这一项只是众多功能之一，用「整机」这种范围词
+                // 修饰它，等于替整页说了话。改成直接列出文件里装的是什么。
+                subtitle = "课表、待办、分类与规则一起带走",
                 actionLabel = "管理",
                 actionTestTag = "open_transfer_button",
                 onAction = onOpenTransferDialog
@@ -139,47 +143,6 @@ fun SettingsScreen(
                 actionTestTag = "open_wallpaper_button",
                 onAction = onOpenWallpaperDialog
             )
-        }
-
-        item {
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .glassSurface(shape = RoundedCornerShape(18.dp))
-                        .padding(16.dp)
-                ) {
-                    Text(
-                        text = "演示数据",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "恢复官方示例课表与待办，含多次排课、长实验课与晚课。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedButton(
-                        onClick = onResetDemoData,
-                        shape = RoundedCornerShape(10.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                        modifier = Modifier.testTag("reset_demo_data_button")
-                    ) {
-                        // 主题绿只能当填充色，当图标前景压在近白卡面上只有 1.4:1。
-                        // 图标跟着下面这行文字走。
-                        Icon(Icons.Outlined.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurface)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("恢复示例数据", color = MaterialTheme.colorScheme.onSurface)
-                    }
-                }
-            }
         }
 
         item {

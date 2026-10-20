@@ -40,10 +40,10 @@ class CategoryLinkageRobolectricTest {
      * 收尾清空。
      *
      * Robolectric 里 `AppContainer` 拿的是 `AppDatabase` 单例，**测试类之间共用同一个库文件**。
-     * `ExampleRobolectricTest.repository initialization and multi-slot course schedule` 的重新
-     * 播种判据是「courses 为空，或第一门课的时段被删光了」——它读的是 `ORDER BY id` 的第一条。
-     * 本类用自增 id 建的课若留在库里，那条判据会看到一门**别的**课还有时段，于是跳过播种，
-     * 于是断言挂在一份没有「高等数学」的课表上。
+     * `ExampleRobolectricTest.repository initialization and multi-slot course schedule` 自己
+     * 播一门「高等数学」，并按「这门课有几个时段」判断要不要重播。
+     * 本类用自增 id 建的课若留在库里，那条用例会看到一门**别的**课还挂着时段，
+     * 于是把旧课改写而不是新播一份 —— 断言虽然还成立，验的却不是刚播出来的那门课。
      *
      * 不清理的结果就是：加一个 Robolectric 测试类能把一个不相干的冒烟测试搞挂，
      * 而且挂的原因从报错信息里完全看不出来。

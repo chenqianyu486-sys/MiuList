@@ -15,11 +15,6 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-enum class DataSourceMode {
-    DEMO,
-    REAL
-}
-
 /**
  * 安全凭据与缓存元数据存储。
  *
@@ -102,15 +97,6 @@ open class SecureAccountStorage(
             .remove(KEY_MASKED_ID)
             .putBoolean(KEY_REMEMBER, false)
             .apply()
-    }
-
-    fun setDataSourceMode(mode: DataSourceMode) {
-        prefs.edit().putString(KEY_DATA_MODE, mode.name).apply()
-    }
-
-    fun getDataSourceMode(): DataSourceMode {
-        val raw = prefs.getString(KEY_DATA_MODE, null)
-        return runCatching { DataSourceMode.valueOf(raw!!) }.getOrDefault(DataSourceMode.DEMO)
     }
 
     fun setLastSyncTimestamp(timestamp: Long) {
@@ -264,7 +250,6 @@ open class SecureAccountStorage(
         private const val KEY_ENC_PASSWORD = "enc_password"
         private const val KEY_REMEMBER = "pref_remember_credentials"
         private const val KEY_MASKED_ID = "pref_masked_student_id"
-        private const val KEY_DATA_MODE = "pref_data_source_mode"
         private const val KEY_LAST_SYNC_TIME = "pref_last_sync_timestamp"
         private const val KEY_LAST_SYNC_STATUS = "pref_last_sync_status"
         private const val KEY_LAST_SYNC_ATTEMPT_TIME = "pref_last_sync_attempt_time"

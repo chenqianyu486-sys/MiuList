@@ -43,7 +43,7 @@ class CourseDeletionRobolectricTest {
     /**
      * 收尾清空，理由同 `CategoryLinkageRobolectricTest` / `ScheduleTransferRobolectricTest`：
      * Robolectric 里 `AppDatabase` 是单例，**测试类之间共用同一个库文件**，
-     * 本类留下的课程会让 `ExampleRobolectricTest` 的播种判据误以为演示数据已就位。
+     * 本类留下的课程会让 `ExampleRobolectricTest` 的播种判据误判成「已经播好了」。
      *
      * 待办也要清：本类会往共享库里插待办，不清会漏到别的类里。
      */

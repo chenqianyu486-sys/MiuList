@@ -670,8 +670,7 @@ fun MainApp(viewModel: MainViewModel) {
                                     state = state,
                                     onOpenTransferDialog = { viewModel.openTransferDialog() },
                                     onOpenCategoryManageDialog = { viewModel.openTaskCategoryManageDialog() },
-                                    onOpenWallpaperDialog = { viewModel.openWallpaperDialog() },
-                                    onResetDemoData = { viewModel.resetDemoData() }
+                                    onOpenWallpaperDialog = { viewModel.openWallpaperDialog() }
                                 )
                             }
                         }
@@ -926,7 +925,6 @@ fun MainApp(viewModel: MainViewModel) {
                 lastSyncTimestamp = state.lastSyncTimestamp,
                 lastSyncAttemptTime = state.lastSyncAttemptTime,
                 lastSyncFailureKind = state.lastSyncFailureKind,
-                isDemoMode = state.isDemoMode,
                 isSyncing = state.isSyncing,
                 zjuTermOptions = state.zjuTermOptions,
                 syncFailure = state.syncFailure,

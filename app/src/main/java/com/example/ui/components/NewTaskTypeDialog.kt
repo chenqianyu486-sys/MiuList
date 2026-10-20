@@ -66,7 +66,7 @@ fun NewTaskTypeDialog(
         horizontalPadding = 16.dp,
         title = {
             Text(
-                text = "新建待办类型",
+                text = "新建待办分类",
                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                 color = MaterialTheme.colorScheme.onSurface
             )

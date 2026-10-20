@@ -28,11 +28,9 @@ import com.example.data.model.SlotWithWeeks
 import com.example.data.model.TaskStar
 import com.example.data.model.TaskType
 import com.example.data.repository.AcademicCalendarRepository
-import com.example.data.sample.SampleDataProvider
 import com.example.data.source.zju.CalendarUpdateService
 import com.example.data.source.zju.ZjuImportService
 import com.example.data.source.weather.WeatherService
-import com.example.data.security.DataSourceMode
 import com.example.data.sync.SyncFailure
 import com.example.data.sync.SyncResult
 import com.example.data.transfer.ImportReport
@@ -218,46 +216,38 @@ private val ruleFlow = combine(
             calendarRepo.ensureDefaultPeriods()
             // 清理历史残留的非法补课脏数据（如旧版本生成的「工作日补周末课」）
             calendarRepo.sanitizeMakeupDays()
-            // 给迁移后还没有同步身份的旧待办补上。放在播种这一步之前：
-            // 演示数据也会被一并补到，之后导出的快照文件里就不会有一段
-            // 「在库里存在、却无法参与跨设备合并」的待办。
+            // 给迁移后还没有同步身份的旧待办补上。
             taskRepo.ensureSyncUids()
+
+            // 旧版本会自动播种一份示例课表，2026-10-20 起这个功能已整项取消。
+            // 存量安装里那份示例数据还在，而界面上已经没有任何东西说明它是假的 ——
+            // 用户会把「高等数学(上)」当成自己的课。先清掉，再谈本地有什么。
+            courseRepo.clearLegacySampleData()
 
             val currentCourses = courseRepo.getAllCoursesOnce()
             val hasSavedCreds = secureStorage.hasSavedCredentials()
-            val dataMode = secureStorage.getDataSourceMode()
-            val isDemo = dataMode == DataSourceMode.DEMO || SampleDataProvider.isDemoCourseList(currentCourses)
 
             // 【离线优先 / 本地缓存优先】
-            // 只要本地数据库已有课表，立刻优先展示本地缓存，断网立即可用，绝不重置为演示数据
-            if (currentCourses.isEmpty()) {
-                if (hasSavedCreds) {
-                    _uiState.update { it.copy(isSyncing = true) }
-                    val res = syncManager.syncWithSavedCredentials()
-                    _uiState.update { it.copy(isSyncing = false) }
-                    when (res) {
-                        is SyncResult.Success ->
-                            _uiState.update {
-                                it.withSyncSuccess(
-                                    userMessage = "已从云端拉取 ${res.courseCount} 门课程并存入本地缓存" +
-                                        res.report.unlinkedTasksSuffix()
-                                )
-                            }
-                        // 冷启动自动同步失败：以前这里什么都不做，于是用户打开 App 看到一张
-                        // 空课表，既不知道是同步没成，也不知道本地本来就没有数据。
-                        // 只走 Snackbar、不弹弹层 —— 冷启动就推一个对话框过去太突兀。
-                        is SyncResult.Failed ->
-                            _uiState.update { it.withSyncFailure(res.failure, keepDialogOpen = false) }
-                    }
-                } else {
-                    // 全新空状态且无凭据：初始化演示数据
-                    courseRepo.resetToDemoData(
-                        SampleDataProvider.sampleCourses,
-                        SampleDataProvider.sampleCourseSlots,
-                        SampleDataProvider.createSampleTasks()
-                    )
-                    secureStorage.setDataSourceMode(DataSourceMode.DEMO)
-                    _uiState.update { it.copy(isDemoMode = true) }
+            // 只要本地数据库已有课表，立刻优先展示本地缓存，断网立即可用。
+            // 本地为空时才去云端拉；没存凭据就什么都不做 —— 全新安装就是一张空课表，
+            // 用户在总览页的账号入口登录或导入课表即可（不再有示例数据兜底）。
+            if (currentCourses.isEmpty() && hasSavedCreds) {
+                _uiState.update { it.copy(isSyncing = true) }
+                val res = syncManager.syncWithSavedCredentials()
+                _uiState.update { it.copy(isSyncing = false) }
+                when (res) {
+                    is SyncResult.Success ->
+                        _uiState.update {
+                            it.withSyncSuccess(
+                                userMessage = "已从云端拉取 ${res.courseCount} 门课程并存入本地缓存" +
+                                    res.report.unlinkedTasksSuffix()
+                            )
+                        }
+                    // 冷启动自动同步失败：以前这里什么都不做，于是用户打开 App 看到一张
+                    // 空课表，既不知道是同步没成，也不知道本地本来就没有数据。
+                    // 只走 Snackbar、不弹弹层 —— 冷启动就推一个对话框过去太突兀。
+                    is SyncResult.Failed ->
+                        _uiState.update { it.withSyncFailure(res.failure, keepDialogOpen = false) }
                 }
             }
 
@@ -268,9 +258,7 @@ private val ruleFlow = combine(
                     isRememberCredentials = secureStorage.isRememberCredentials(),
                     lastSyncTimestamp = secureStorage.getLastSyncTimestamp(),
                     lastSyncAttemptTime = secureStorage.getLastSyncAttemptTime(),
-                    lastSyncFailureKind = secureStorage.getLastSyncFailureKind(),
-                    isDemoMode = secureStorage.getDataSourceMode() == DataSourceMode.DEMO ||
-                        SampleDataProvider.isDemoCourseList(courseRepo.getAllCoursesOnce())
+                    lastSyncFailureKind = secureStorage.getLastSyncFailureKind()
                 )
             }
         }
@@ -405,18 +393,18 @@ private val ruleFlow = combine(
     fun closeNewTaskTypeDialog() = _uiState.update { it.copy(isNewTaskTypeDialogOpen = false) }
 
     /**
-     * 新建一个自定义待办类型。
+     * 新建一个自定义待办分类。
      *
-     * 失败（重名 / 超上限）不静默：类型是筛选和分组的一级维度，
+     * 失败（重名 / 超上限）不静默：分类是筛选和分组的一级维度，
      * 一个「没建上但也不吭声」的反馈会让用户以为是自己哪里点错了。
      */
     fun createTaskType(label: String, paletteIndex: Int) = viewModelScope.launch {
         val result = taskTypeRepo.create(label, paletteIndex)
         _uiState.update {
             if (result.isSuccess) {
-                it.copy(isNewTaskTypeDialogOpen = false, userMessage = "已新建类型")
+                it.copy(isNewTaskTypeDialogOpen = false, userMessage = "已新建分类")
             } else {
-                it.copy(userMessage = result.exceptionOrNull()?.message ?: "新建类型失败")
+                it.copy(userMessage = result.exceptionOrNull()?.message ?: "新建分类失败")
             }
         }
     }
@@ -593,21 +581,6 @@ private val ruleFlow = combine(
             SlotWithWeeks(slot = it, weeks = weeksBySlot[it.id].orEmpty())
         }
         courseRepo.saveCourseWithSlots(updated, slots)
-    }
-
-    fun resetDemoData() = viewModelScope.launch {
-        courseRepo.resetToDemoData(
-            SampleDataProvider.sampleCourses,
-            SampleDataProvider.sampleCourseSlots,
-            SampleDataProvider.createSampleTasks()
-        )
-        secureStorage.setDataSourceMode(DataSourceMode.DEMO)
-        _uiState.update {
-            it.copy(
-                isDemoMode = true,
-                userMessage = "已重置为示例课表（支持一周多次、1-13 节）与作业待办"
-            )
-        }
     }
 
     // ------------------------------------------------------------ 自动生成待办
@@ -871,13 +844,11 @@ private val ruleFlow = combine(
         _uiState.update { it.copy(isImporting = true) }
         val report = withContext(Dispatchers.IO) { container.importService.commit(pending) }
         pendingPreview = null
-        secureStorage.setDataSourceMode(DataSourceMode.REAL)
         _uiState.update {
             it.copy(
                 isImporting = false,
                 importPreview = null,
                 importReport = report,
-                isDemoMode = false,
                 // 待办那部分也要报出来，否则用户点完「确认导入」只看到课程数字，
                 // 会以为同步没生效 —— 而他真正关心的往往就是待办。
                 userMessage = "导入完成：课程新增 ${report.inserted} 门、更新 ${report.updated} 门" +
@@ -904,7 +875,7 @@ private val ruleFlow = combine(
         _uiState.update {
             it.copy(
                 isImporting = false,
-                userMessage = if (ok) "数据已导出（整机快照）" else "导出失败：无法写入所选位置"
+                userMessage = if (ok) "数据已导出到所选位置" else "导出失败：无法写入所选位置"
             )
         }
     }
@@ -914,7 +885,7 @@ private val ruleFlow = combine(
     /**
      * 拉一次公共校历配置，填学期的下拉。
      *
-     * 由浙大同步的入口触发（「更多」抽屉的浙大学号、总览页翻面卡的快捷登录）：
+     * 由浙大同步的入口触发（「更多」抽屉的 ZJU 账号、总览页翻面卡的快捷登录）：
      * 下拉里没有学期用户就无从选起。
      */
     fun loadZjuTerms() = viewModelScope.launch {
@@ -967,9 +938,13 @@ private val ruleFlow = combine(
             }
             secureStorage.saveLastTerm(option.year, option.term)
             val currentCourses = courseRepo.getAllCoursesOnce()
-            val isDemo = secureStorage.getDataSourceMode() == DataSourceMode.DEMO ||
-                SampleDataProvider.isDemoCourseList(currentCourses)
-            val strategy = if (isDemo) ImportStrategy.REPLACE else ImportStrategy.MERGE
+            // 本地一张课表都没有 → 整表替换；已经有课表 → 合并，
+            // 别把用户自己加过、改过的课冲掉。
+            //
+            // 这里的判据原来是「当前是不是示例数据」：示例数据本来就该被整表顶掉，
+            // 而真实数据不该。示例数据功能取消后，「本地有没有东西」就成了同一件事
+            // ——本地空 = 没什么可丢的，语义完全一致。
+            val strategy = if (currentCourses.isEmpty()) ImportStrategy.REPLACE else ImportStrategy.MERGE
             _uiState.update {
                 it.copy(
                     isZjuImportRunning = false,
@@ -1017,11 +992,8 @@ private val ruleFlow = combine(
         _uiState.update { state ->
             when (result) {
                 is SyncResult.Success -> state.withSyncSuccess(
-                    userMessage = if (result.wasDemoReplaced) {
-                        "已替换演示数据，云端拉取完成：${result.courseCount} 门课程、${result.slotCount} 个时段已存入本地缓存"
-                    } else {
-                        "云端同步完成：${result.courseCount} 门课程已更新到本地缓存"
-                    } + result.report.unlinkedTasksSuffix(),
+                    userMessage = "云端同步完成：${result.courseCount} 门课程已更新到本地缓存" +
+                        result.report.unlinkedTasksSuffix(),
                     closeDialog = true
                 )
                 is SyncResult.Failed -> state.withSyncFailure(result.failure)
@@ -1079,7 +1051,6 @@ private val ruleFlow = combine(
         isSyncing = false,
         isCloudAccountDialogOpen = if (closeDialog) false else isCloudAccountDialogOpen,
         isTransferDialogOpen = if (closeDialog) false else isTransferDialogOpen,
-        isDemoMode = false,
         boundStudentId = secureStorage.getMaskedStudentId(),
         isRememberCredentials = secureStorage.isRememberCredentials(),
         lastSyncTimestamp = secureStorage.getLastSyncTimestamp(),

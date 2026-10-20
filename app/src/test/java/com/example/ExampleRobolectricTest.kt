@@ -3,7 +3,9 @@ package com.example
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.di.AppContainer
-import com.example.data.sample.SampleDataProvider
+import com.example.data.local.CourseEntity
+import com.example.data.local.CourseSlotEntity
+import com.example.data.model.SlotWithWeeks
 import com.example.data.timetable.PeriodTable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -93,6 +95,41 @@ class ExampleRobolectricTest {
         assertEquals(500, periods.first().startMinute)
     }
 
+    /**
+     * 播一门带两个时段的课。
+     *
+     * **不再用 App 的示例数据**：那个功能 2026-10-20 已整项取消，播种得自己来。
+     * 判据是「这门课有几个时段」而不是「库里有没有课」——
+     * 别的测试类建过课，库里非空不代表有这门课；
+     * 而「删时段级联」那条用例会真删掉课表的时段，只看「有没有这门课」
+     * 会以为播种过了，断言就挂在一份没有时段的课表上。
+     */
+    private suspend fun AppContainer.seedHigherMath() {
+        val existing = courseRepository.getAllCoursesWithSlots().first()
+            .firstOrNull { it.course.name.contains("高等数学") }
+        val slots = listOf(
+            SlotWithWeeks(
+                CourseSlotEntity(courseId = 0, dayOfWeek = 1, startPeriod = 1, endPeriod = 2),
+                weeks = emptySet()
+            ),
+            SlotWithWeeks(
+                CourseSlotEntity(courseId = 0, dayOfWeek = 4, startPeriod = 3, endPeriod = 5),
+                weeks = emptySet()
+            )
+        )
+        if (existing == null) {
+            courseRepository.saveCourseWithSlots(
+                CourseEntity(
+                    name = "高等数学", code = "TEST101", category = "公共基础",
+                    teacher = "王教授", classroom = "教二-301", colorHex = "#93C5FD"
+                ),
+                slots
+            )
+        } else if (existing.slots.size < 2) {
+            courseRepository.saveCourseWithSlots(existing.course, slots)
+        }
+    }
+
     @Test
     fun `repository initialization and multi-slot course schedule`() = runBlocking {
         val container = container()
@@ -111,19 +148,7 @@ class ExampleRobolectricTest {
         )
         container.calendarRepository.ensureDefaultPeriods()
 
-        // 同类的「删时段级联」那条用例会真删掉课表的时段，所以**不能只看「有没有课程」**
-        // 来决定要不要播种：这两种顺序下这个判断都会给出「已经播好了」，然后断言挂在
-        // 一份没有时段的课表上。
-        val courses = courseRepo.getAllCoursesOnce()
-        val slotsMissing = courses.isNotEmpty() &&
-            courseRepo.getAllSlotsOnce().none { it.courseId == courses.first().id }
-        if (courses.isEmpty() || slotsMissing) {
-            courseRepo.resetToDemoData(
-                SampleDataProvider.sampleCourses,
-                SampleDataProvider.sampleCourseSlots,
-                SampleDataProvider.createSampleTasks()
-            )
-        }
+        container.seedHigherMath()
 
         val coursesWithSlots = courseRepo.getAllCoursesWithSlots().first()
         assertTrue("Courses should be pre-seeded", coursesWithSlots.isNotEmpty())
@@ -145,6 +170,10 @@ class ExampleRobolectricTest {
         // 测试不该为了拿个 DAO 去撬仓库的内部字段。
         val slotDao = container.database.courseSlotDao()
         val weekDao = container.database.courseSlotWeekDao()
+
+        // 时段是上一条用例播的，但用例之间不保证顺序 —— 自己补一次，
+        // 免得这条在「先跑」时因为没有时段而整条跳过。
+        container.seedHigherMath()
 
         val slot = slotDao.getAllSlotsOnce().firstOrNull() ?: return@runBlocking
         weekDao.insertAll(

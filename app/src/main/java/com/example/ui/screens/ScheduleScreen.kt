@@ -1389,7 +1389,10 @@ private fun ScheduleCourseCard(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "@$room · ${course.teacher} · ${course.category}",
+                // 不带「@」：设计笔记的现状诊断第 6 条写着
+                // 「@ 教室胶囊的『@』是程序员语法，不是学生语言」，
+                // 总览页的加高主卡早就照这条改掉了，这里却还留着。
+                text = "$room · ${course.teacher} · ${course.category}",
                 style = MaterialTheme.typography.labelSmall,
                 // 和总览页课程卡同一个理由用 TextSecondary：这一行压在**这门课的粉彩**上，
                 // 实测全局的 onSurfaceVariant（= TextMuted #78827B）只有 2.2~3.7:1，

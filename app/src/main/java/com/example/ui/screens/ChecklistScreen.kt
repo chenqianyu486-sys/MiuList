@@ -578,7 +578,7 @@ fun ChecklistScreen(
         ) {
             item {
                 SelectableChip(
-                    label = "全部类型",
+                    label = "全部分类",
                     selected = state.selectedTaskTypeKey == null,
                     onClick = { onSelectTaskTypeKey(null) }
                 )

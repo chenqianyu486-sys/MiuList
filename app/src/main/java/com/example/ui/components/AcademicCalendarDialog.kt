@@ -10,16 +10,20 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -33,6 +37,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -397,7 +403,11 @@ fun AcademicCalendarDialog(
                             isError = text.isNotBlank() && parseNoClassRange(text) == null
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        TextButton(onClick = { noClassDrafts.removeAt(index) }) { Text("删", fontSize = 11.sp) }
+                        RemoveDraftButton(
+                            contentDescription = "删除停课日期",
+                            testTag = "remove_no_class_row_$index",
+                            onClick = { noClassDrafts.removeAt(index) }
+                        )
                     }
                 }
                 OutlinedButton(
@@ -441,7 +451,11 @@ fun AcademicCalendarDialog(
                                 EpochDays.parse(draft.sourceText) == null
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        TextButton(onClick = { makeupDrafts.removeAt(index) }) { Text("删", fontSize = 11.sp) }
+                        RemoveDraftButton(
+                            contentDescription = "删除补课日期",
+                            testTag = "remove_makeup_row_$index",
+                            onClick = { makeupDrafts.removeAt(index) }
+                        )
                     }
                 }
                 OutlinedButton(
@@ -849,6 +863,42 @@ private fun SectionLabel(text: String) {
         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
         modifier = Modifier.padding(top = 6.dp)
     )
+}
+
+/**
+ * 草稿行尾的删除按钮：一枚叉。
+ *
+ * 原来是一个写着「删」的 TextButton——一个字占掉一整个按钮的宽度，
+ * 而它表达的事只有「去掉这一行」。叉是这件事的通用形状，
+ * 腾出来的宽度还给日期输入框（补课那行本来就有两个输入框挤在一起）。
+ *
+ * **不用 IconButton**：它的 `minimumInteractiveComponentSize` 不看父级高度，
+ * 会把这一行顶高（MoreDrawer 的课程行也是这么绕开的）。这里自己给 32dp 见方。
+ *
+ * 颜色用 error：这个 App 里「删除」一律走错误色（更多页的删除课程、
+ * 课程详情里的确认删除），叉号在主题绿底下会被读成「确认 / 关闭」。
+ */
+@Composable
+private fun RemoveDraftButton(
+    contentDescription: String,
+    testTag: String,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(32.dp)
+            .clip(RoundedCornerShape(9.dp))
+            .clickable(onClick = onClick)
+            .testTag(testTag),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Close,
+            contentDescription = contentDescription,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(16.dp)
+        )
+    }
 }
 
 /**

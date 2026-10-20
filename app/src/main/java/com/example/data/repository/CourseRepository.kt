@@ -15,10 +15,10 @@ import com.example.data.local.TaskDao
 import com.example.data.local.TaskEntity
 import com.example.data.local.toDomain
 import com.example.data.model.SlotWithWeeks
+import com.example.data.sample.LegacySampleData
 import com.example.data.timetable.WeekSet
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import java.util.UUID
 
 /**
  * 课程、时段与开课周次的读写。
@@ -138,7 +138,7 @@ class CourseRepository(
     }
 
     /**
-     * 清空全部课程与时段（导入 REPLACE 策略 / 重置示例数据用）。
+     * 清空全部课程与时段（导入 REPLACE 策略用）。
      *
      * **待办不在清空范围内**，这一点是刻意的：
      * 待办是用户自己的数据（手写的、勾选状态、截止日期），换一份课表不该把它清掉。
@@ -146,40 +146,51 @@ class CourseRepository(
      * 由调用方在同一个事务里接着处理（见 `ScheduleImportService.applyTaskLinks`）：
      * 课程还在的改挂到新 id 上，不在的移入「未关联课程」。
      *
-     * 真要连待办一起清（重置演示数据那种场景）请显式调 [TaskRepository] / `taskDao` 的
-     * 清空方法 —— 这个方法的名字里没有 tasks，就不要让它替用户做这个决定。
+     * 真要连待办一起清，请显式调 [TaskRepository] / `taskDao` 的清空方法 ——
+     * 这个方法的名字里没有 tasks，就不要让它替用户做这个决定。
      */
     suspend fun clearAllCourses() = db.withTransaction {
         slotDao.clearSlots()
         courseDao.clearCourses()
     }
 
-    suspend fun resetToDemoData(
-        courses: List<CourseEntity>,
-        slots: List<CourseSlotEntity>,
-        tasks: List<TaskEntity>
-    ) = db.withTransaction {
-        taskDao.clearTasks()
-        slotDao.clearSlots()
-        courseDao.clearCourses()
-        weekDao.clear()
-        courseDao.insertCourses(courses.map { it.withDedupeKey() })
-        slotDao.insertSlots(slots)
-        // 示例数据的时段一律按每周处理：开课周次表留空 = 每周
+    /**
+     * 清掉旧版本自动播种的示例课表与示例待办。
+     *
+     * 2026-10-20 起 App 不再播种示例数据、也不再提供「恢复示例数据」的入口。
+     * 但存量安装里那份示例数据还在，而界面上已经没有任何东西说明它是假的 ——
+     * 用户会把「高等数学(上)」当成自己的课，把示例作业当成真作业。
+     * 识别判据见 [LegacySampleData]（**宁可漏清、不可误删**）。
+     *
+     * **用户挂在示例课程上的手写待办不删**，只跟着课程一起失去归属
+     * （移入「未关联课程」），与 [deleteCourse] 的既有约定一致。
+     *
+     * @return 清掉的课程数
+     */
+    suspend fun clearLegacySampleData(): Int = db.withTransaction {
+        // 示例待办先删，**且不依赖示例课程还在不在**。
         //
-        // 同步身份在这里就分配好，而不是等启动时的惰性补齐：演示待办同样会被
-        // 用户导出成快照文件，带着空 uid 出去会让文件里出现一整段「无法参与
-        // 跨设备合并」的条目。`updatedAt` 也盖上，免得它们在任何一次后写覆盖里
-        // 都判负、永远被别的设备覆盖。
-        val now = System.currentTimeMillis()
-        taskDao.insertTasks(
-            tasks.map {
-                it.copy(
-                    syncUid = it.syncUid.ifBlank { UUID.randomUUID().toString() },
-                    updatedAt = now
-                )
-            }
-        )
+        // 判据是标题而不是归属：用户删过示例课程的话，那 7 条示例待办早就挂到
+        // 「未关联课程」上了（删课程只改归属、不删待办），courseId 已经不是示例课程，
+        // 只按 courseId 认就漏掉了 —— 而「未关联课程」里挂着七条假作业，
+        // 恰恰是最容易被当成真待办的地方。
+        taskDao.getAllTasksOnce()
+            .filter { LegacySampleData.isSampleTask(it) }
+            .forEach { taskDao.deleteTaskById(it.id) }
+
+        val sampleCourses = courseDao.getAllCoursesOnce().filter { LegacySampleData.isSampleCourse(it) }
+        // 剩下的待办（用户自己写的）跟着课程走 unlink，留在「未关联课程」里。
+        sampleCourses.forEach { course ->
+            taskDao.unlinkTasksByCourseId(
+                courseId = course.id,
+                unlinkedId = TaskEntity.UNLINKED_COURSE_ID,
+                unlinkedName = TaskEntity.UNLINKED_COURSE_NAME,
+                unlinkedColor = TaskEntity.UNLINKED_COLOR_HEX
+            )
+            slotDao.deleteSlotsByCourseId(course.id)
+            courseDao.deleteCourseById(course.id)
+        }
+        sampleCourses.size
     }
 
     /**

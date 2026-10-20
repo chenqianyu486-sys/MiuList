@@ -35,8 +35,7 @@ class SettingsScreenWallpaperTest {
                 state = state,
                 onOpenTransferDialog = {},
                 onOpenCategoryManageDialog = {},
-                onOpenWallpaperDialog = { openedWallpaper = true },
-                onResetDemoData = {}
+                onOpenWallpaperDialog = { openedWallpaper = true }
             )
         }
 
@@ -63,8 +62,7 @@ class SettingsScreenWallpaperTest {
                 state = presetState,
                 onOpenTransferDialog = {},
                 onOpenCategoryManageDialog = {},
-                onOpenWallpaperDialog = {},
-                onResetDemoData = {}
+                onOpenWallpaperDialog = {}
             )
         }
 

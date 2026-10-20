@@ -63,9 +63,6 @@ class WallpaperSettingDialogTest {
         composeTestRule.onNodeWithText("Nega").assertExists()
         composeTestRule.onNodeWithText("Salt Mountain").assertExists()
 
-        // 验证破晓壁纸推荐链接存在
-        composeTestRule.onNodeWithText("寻找高质量壁纸 · 访问破晓壁纸 (pxlab.cn)").assertExists()
-
         // 点击预设 Rare Wind
         composeTestRule.onNodeWithTag("wallpaper_preset_rare_wind")
             .performSemanticsAction(SemanticsActions.OnClick)

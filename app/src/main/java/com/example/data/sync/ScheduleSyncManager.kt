@@ -2,8 +2,6 @@ package com.example.data.sync
 
 import com.example.data.repository.AcademicCalendarRepository
 import com.example.data.repository.CourseRepository
-import com.example.data.sample.SampleDataProvider
-import com.example.data.security.DataSourceMode
 import com.example.data.security.SecureAccountStorage
 import com.example.data.source.zju.ZjuException
 import com.example.data.source.zju.ZjuFailureKind
@@ -21,8 +19,7 @@ sealed interface SyncResult {
         val courseCount: Int,
         val slotCount: Int,
         val termLabel: String,
-        val report: ImportReport,
-        val wasDemoReplaced: Boolean
+        val report: ImportReport
     ) : SyncResult
 
     /**
@@ -37,7 +34,7 @@ sealed interface SyncResult {
 /**
  * 云端同步管理器。
  *
- * 贯通「云端抓取 → 演示数据干净替换 → 本地 Room 缓存落盘 → 安全凭据更新 → 离线保全」。
+ * 贯通「云端抓取 → 整表替换 → 本地 Room 缓存落盘 → 安全凭据更新 → 离线保全」。
  */
 class ScheduleSyncManager(
     private val zjuImportService: ZjuImportService,
@@ -80,12 +77,10 @@ class ScheduleSyncManager(
                 option = option
             )
 
-            // 2. 无论当前是不是演示数据，都整表替换。
+            // 2. 整表替换。
             //    早先这里写的是 `if (isDemo) REPLACE else REPLACE` —— 两个分支一样，
             //    于是读代码的人会以为「非演示数据其实还有另一条更温和的路」，去查一个不存在的分支。
-            val currentCourses = courseRepo.getAllCoursesOnce()
-            val isDemo = secureStorage.getDataSourceMode() == DataSourceMode.DEMO ||
-                SampleDataProvider.isDemoCourseList(currentCourses)
+            //    现在示例数据功能已取消，只剩一条路：云端那份就是权威，整表换过去。
 
             // 3. 校验并落库到本地 Room 缓存（单事务安全提交）
             val previewResult = importService.preview(scheduleJson, ImportStrategy.REPLACE)
@@ -108,7 +103,6 @@ class ScheduleSyncManager(
                 secureStorage.saveMaskedStudentIdOnly(studentId)
             }
             secureStorage.saveLastTerm(option.year, option.term)
-            secureStorage.setDataSourceMode(DataSourceMode.REAL)
 
             // 5. 校历后置处理
             //
@@ -133,8 +127,7 @@ class ScheduleSyncManager(
                 courseCount = finalCourses.size,
                 slotCount = finalSlots.size,
                 termLabel = option.label,
-                report = report,
-                wasDemoReplaced = isDemo
+                report = report
             )
         } catch (e: ZjuException) {
             fail(e.kind, e.message ?: "取课表失败", committed)
