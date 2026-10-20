@@ -1,12 +1,12 @@
 {
-  "lastUpdated": 1792472482762,
+  "lastUpdated": 1792489590267,
   "cityName": "杭州",
   "date": "2026-10-20",
   "textDay": "小雨",
   "textNight": "中雨",
   "high": 30,
   "low": 18,
-  "aqi": 154,
+  "aqi": 155,
   "aqiQuality": null,
   "aqiError": null
 }
