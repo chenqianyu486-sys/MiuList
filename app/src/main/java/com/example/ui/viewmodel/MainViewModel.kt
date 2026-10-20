@@ -64,6 +64,7 @@ class MainViewModel(
     private val syncManager = container.syncManager
     private val weatherService = container.weatherService
     private val wallpaperRepo = container.wallpaperRepository
+    private val onboardingRepo = container.onboardingRepository
     private val zjuCoursesClient = container.zjuCoursesClient
     private val coursesTodoCache = container.coursesTodoCache
 
@@ -260,6 +261,20 @@ private val ruleFlow = combine(
                     lastSyncAttemptTime = secureStorage.getLastSyncAttemptTime(),
                     lastSyncFailureKind = secureStorage.getLastSyncFailureKind()
                 )
+            }
+
+            // 【空态引导】
+            //
+            // 本地一门课都没有、而且用户还没看过引导时，给一份上手说明。
+            //
+            // 判据是「没有课程」而不是「没绑定浙大账号」：有课的用户照样看得见课表，
+            // 这时弹引导是在打断一个能正常用的人。
+            //
+            // 放在同步**之后**判断：存了凭据的用户冷启动会自动同步，
+            // 同步成功就有课了，不该再弹引导；同步失败（或者压根没存凭据）
+            // 才轮到引导接手。
+            if (courseRepo.getAllCoursesOnce().isEmpty() && !onboardingRepo.hasSeenOnboarding) {
+                _uiState.update { it.copy(isOnboardingGuideOpen = true, onboardingStep = 0) }
             }
         }
     }
@@ -1385,6 +1400,60 @@ private val ruleFlow = combine(
 
     fun setWallpaperSoftFocus(value: Float) {
         wallpaperRepo.setSoftFocus(value)
+    }
+
+    // ------------------------------------------------------------ 上手引导
+
+    /**
+     * 打开引导。设置页的入口走这里，**从第一步开始** ——
+     * 用户主动来翻就是想从头看。
+     */
+    fun openOnboardingGuide() = _uiState.update {
+        it.copy(isOnboardingGuideOpen = true, onboardingStep = 0)
+    }
+
+    /**
+     * 关掉引导。
+     *
+     * **任何一种关闭方式都算「看过」**：空态自动弹出之后，用户跳过、返回、
+     * 点「去看看」或走完最后一步，都是「我知道了」——
+     * 下次冷启动不该再弹一次打断他。
+     */
+    fun closeOnboardingGuide() {
+        onboardingRepo.hasSeenOnboarding = true
+        _uiState.update { it.copy(isOnboardingGuideOpen = false) }
+    }
+
+    /**
+     * 下一步；已经是最后一步就收掉引导。
+     *
+     * 步数取 [GuideTarget] 的枚举个数：引导一步对应一个目标，
+     * 两边是同一份清单（`GuideSteps` 一步一个目标，见那里的说明）。
+     */
+    fun advanceOnboardingStep() = _uiState.update { state ->
+        if (state.onboardingStep >= GuideTarget.entries.size - 1) {
+            onboardingRepo.hasSeenOnboarding = true
+            state.copy(isOnboardingGuideOpen = false)
+        } else {
+            state.copy(onboardingStep = state.onboardingStep + 1)
+        }
+    }
+
+    /**
+     * 「去看看」：收掉引导，打开那个功能。
+     *
+     * **收掉而不是叠在上面**：叠着的话弹层的遮罩会叠着引导的遮罩，
+     * 背后被压两遍，玻璃面也就糊了；两张面板还会重叠成一堆。
+     * 用户想重看可以从设置页再进，不必靠「暂停」续读。
+     */
+    fun openOnboardingTarget(target: GuideTarget) {
+        closeOnboardingGuide()
+        when (target) {
+            GuideTarget.ZJU_SYNC -> openCloudAccountDialog()
+            GuideTarget.COURSE_CATEGORY -> openAddCourseDialog()
+            GuideTarget.LINKAGE_RULES -> openCategoryRulesDialog()
+            GuideTarget.WALLPAPER -> openWallpaperDialog()
+        }
     }
 
     /**

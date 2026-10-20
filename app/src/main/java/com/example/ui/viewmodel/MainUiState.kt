@@ -234,6 +234,23 @@ data class MainUiState(
     val wallpaperConfig: WallpaperConfig = WallpaperConfig(),
     val isWallpaperDialogOpen: Boolean = false,
 
+    // 上手引导
+    /**
+     * 引导是否打开。
+     *
+     * 两条来路：**空态自动触发**（本地一门课都没有、且用户还没看过）与
+     * **设置页的入口**。后者不受「看过」标记限制 —— 想重看随时能看。
+     */
+    val isOnboardingGuideOpen: Boolean = false,
+
+    /**
+     * 引导当前第几步（0 起）。
+     *
+     * 放在 state 里而不是引导组件的局部变量：组件可能被整体重建（配置变化、
+     * 进程恢复），而「用户读到第几步」是这次引导的进度，不该在重建后从头再来。
+     */
+    val onboardingStep: Int = 0,
+
     // 浙大同步（账号 / 学期下拉 / 取课表）与文件导入导出各自的状态
     val isZjuImportRunning: Boolean = false,
     /** 学期的下拉选项，来自 zju-ical 的公共校历配置。 */

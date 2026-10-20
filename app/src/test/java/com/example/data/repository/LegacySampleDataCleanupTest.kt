@@ -8,6 +8,7 @@ import com.example.data.local.CourseSlotEntity
 import com.example.data.local.TaskEntity
 import com.example.data.model.SlotWithWeeks
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -33,6 +34,21 @@ class LegacySampleDataCleanupTest {
     @Before
     fun setUp() = runBlocking {
         container = AppContainer(ApplicationProvider.getApplicationContext<Context>())
+        container.database.taskDao().clearTasks()
+        container.courseRepository.clearAllCourses()
+    }
+
+    /**
+     * 收尾清空。
+     *
+     * Robolectric 里 `AppDatabase` 是单例，**测试类之间共用同一个库文件**。
+     * 本类会在库里留下待办（清理逻辑要验「手写待办留着」，
+     * 那几条正是它留下的），不清掉就会漏到别的类里 ——
+     * `TaskCategoryDeletionRobolectricTest` 只在收尾清、没有开场清，
+     * 于是它的条数断言会被本类的残留撑多一条。
+     */
+    @After
+    fun tearDown() = runBlocking {
         container.database.taskDao().clearTasks()
         container.courseRepository.clearAllCourses()
     }

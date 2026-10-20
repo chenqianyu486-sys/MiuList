@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.ImportExport
 import androidx.compose.material.icons.outlined.Wallpaper
@@ -60,7 +61,7 @@ import com.example.ui.viewmodel.MainUiState
 /**
  * 设置页。
  *
- * **只剩三件事：课表导入/导出、待办分类管理、自定义壁纸。**
+ * **只剩四件事：课表导入/导出、待办分类管理、自定义壁纸、使用引导。**
  *
  * 原来这里是六个入口（账号同步 / 课程联动规则 / 待办生成规则 / 导入导出 /
  * 本学期校历 / 课程管理列表），其中**五个都已经搬到顶栏展开的「更多」页**：
@@ -80,6 +81,7 @@ fun SettingsScreen(
     onOpenTransferDialog: () -> Unit,
     onOpenCategoryManageDialog: () -> Unit,
     onOpenWallpaperDialog: () -> Unit = {},
+    onOpenOnboardingGuide: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
@@ -142,6 +144,21 @@ fun SettingsScreen(
                 actionLabel = "更换",
                 actionTestTag = "open_wallpaper_button",
                 onAction = onOpenWallpaperDialog
+            )
+        }
+
+        item {
+            // 引导放在三张数据卡之后、关于之前：这一页的前三张都是
+            // 「不常动、动了要慎重」的数据操作，而引导是**看不懂的时候想找的事**，
+            // 排在它们后面才不打断那条主线。
+            // 空态时引导会自动弹一次，但用户没准错过了 —— 想重看就该有个入口。
+            SettingsActionCard(
+                icon = Icons.Outlined.Explore,
+                title = "使用引导",
+                subtitle = "四步走一遍：浙大同步、课程类别、联动规则与壁纸",
+                actionLabel = "打开",
+                actionTestTag = "open_onboarding_guide_button",
+                onAction = onOpenOnboardingGuide
             )
         }
 

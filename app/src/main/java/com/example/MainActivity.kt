@@ -96,6 +96,7 @@ import com.example.ui.components.IslandBottomInset
 import com.example.ui.components.MoreDrawer
 import com.example.ui.components.DeleteTaskTypeConfirmDialog
 import com.example.ui.components.NewTaskTypeDialog
+import com.example.ui.components.OnboardingGuide
 import com.example.ui.components.QuickGenerateDialog
 import com.example.ui.components.QuickZjuLoginDialog
 import com.example.ui.components.ScheduleTransferDialog
@@ -670,7 +671,8 @@ fun MainApp(viewModel: MainViewModel) {
                                     state = state,
                                     onOpenTransferDialog = { viewModel.openTransferDialog() },
                                     onOpenCategoryManageDialog = { viewModel.openTaskCategoryManageDialog() },
-                                    onOpenWallpaperDialog = { viewModel.openWallpaperDialog() }
+                                    onOpenWallpaperDialog = { viewModel.openWallpaperDialog() },
+                                    onOpenOnboardingGuide = { viewModel.openOnboardingGuide() }
                                 )
                             }
                         }
@@ -762,6 +764,19 @@ fun MainApp(viewModel: MainViewModel) {
     // SnackbarHost 留在 Scaffold 里的话会被上面每一层满屏 overlay 整个盖住，
     // 于是所有「在弹层里点的按钮」的结果提示都看不见 —— 保存、检查更新、删除课程全是。
     Box(modifier = Modifier.fillMaxSize()) {
+        // 上手引导。放在这一摞 overlay 的**最下面**：
+        // 它是入口层的东西，Snackbar 与别的弹层都该画在它上面，
+        // 而不是被它盖住。引导的「去看看」会先收掉引导再打开目标功能，
+        // 所以两者不会叠在一起（叠着的话遮罩压两遍、面板也糊成一堆）。
+        if (state.isOnboardingGuideOpen) {
+            OnboardingGuide(
+                stepIndex = state.onboardingStep,
+                onDismiss = { viewModel.closeOnboardingGuide() },
+                onNext = { viewModel.advanceOnboardingStep() },
+                onOpenTarget = { viewModel.openOnboardingTarget(it) }
+            )
+        }
+
         // Inspect Course Linkage Sheet (课表课程详情与关联待办弹层：待办详情与编辑弹层置于其上层)
         state.inspectingCourse?.let { courseWithSlots ->
             val linkedTasks = state.tasks.filter { it.courseId == courseWithSlots.course.id }

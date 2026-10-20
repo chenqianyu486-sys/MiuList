@@ -9,6 +9,7 @@ import com.example.data.model.CategoryRule
 import com.example.data.model.CourseCategory
 import com.example.data.repository.AcademicCalendarRepository
 import com.example.data.repository.CourseRepository
+import com.example.data.repository.OnboardingRepository
 import com.example.data.repository.ScheduleSettingsRepository
 import com.example.data.repository.TaskRepository
 import com.example.data.repository.TaskTypeRepository
@@ -74,6 +75,17 @@ class AppContainer(context: Context) {
 
     val wallpaperRepository: WallpaperRepository by lazy {
         WallpaperRepository(appContext)
+    }
+
+    /**
+     * 上手引导的「看过」标记。
+     *
+     * 单独一个仓储而不是塞进 [secureAccountStorage]：那儿放的是凭据与同步元数据，
+     * 而这个是**界面状态**（用户看过没有），混进去会让「安全存储」这个类名
+     * 名不副实。
+     */
+    val onboardingRepository: OnboardingRepository by lazy {
+        OnboardingRepository(appContext)
     }
 
     val codec: ScheduleCodec by lazy { JsonScheduleCodec() }
