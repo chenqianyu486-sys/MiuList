@@ -127,6 +127,21 @@ echo "versionCode $OLD_CODE → $NEW_CODE    versionName $OLD_NAME → $VERSION_
 cp app/build.gradle.kts ".tmp/release_backup_build.gradle.kts"
 cp README.md ".tmp/release_backup_README.md"
 
+# **任何退出都要还原**（dry-run 模式下）。
+# 上一版就栽在这：构建失败时脚本直接退出，版本号就留在 1.0.2 没还原，
+# 下一跑又因为「工作区不干净」直接拒绝 —— 一个失败卡死后面所有操作。
+restore_versions() {
+  if [ "$DRY_RUN" -eq 1 ] && [ "$RESTORED" -eq 0 ] && [ -f ".tmp/release_backup_build.gradle.kts" ]; then
+    cp ".tmp/release_backup_build.gradle.kts" app/build.gradle.kts
+    cp ".tmp/release_backup_README.md" README.md
+    RESTORED=1
+    echo ""
+    echo "（已还原版本号到 $OLD_NAME / versionCode $OLD_CODE）"
+  fi
+}
+RESTORED=0
+trap restore_versions EXIT
+
 sed -i "s/^\([[:space:]]*\)versionCode[[:space:]]*=[[:space:]]*[0-9]\+/\1versionCode = $NEW_CODE/" app/build.gradle.kts
 sed -i "s/^\([[:space:]]*\)versionName[[:space:]]*=[[:space:]]*\"[^\"]*\"/\1versionName = \"$VERSION_NO_V\"/" app/build.gradle.kts
 # README 的下载入口跟着换
@@ -145,8 +160,14 @@ if [ -d "$JDK_HOME" ]; then
   export JAVA_HOME="$JDK_HOME"
   export PATH="$JAVA_HOME/bin:$PATH"
 fi
-# 签名密码从 keystore.properties 导进环境变量（构建脚本读的是环境变量）
+# 签名密码从 keystore.properties 导进环境变量（构建脚本读的是环境变量）。
+#
+# **必须去掉行尾的 \r**：这个文件是 CRLF 行尾，不剥掉的话密码末尾会多一个 \r，
+# 签名校验直接失败（报 validateSigningRelease FAILED），而报错里一个字都不提密码。
 while IFS='=' read -r key value; do
+  key="${key%$'\r'}"
+  value="${value%$'\r'}"
+  value="$(printf '%s' "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
   case "$key" in
     KEYSTORE_PATH|STORE_PASSWORD|KEY_PASSWORD) export "$key=$value" ;;
   esac
@@ -227,9 +248,8 @@ fi
 if [ "$DRY_RUN" -eq 1 ]; then
   echo ""
   echo "== dry-run：还原版本号 =="
-  cp ".tmp/release_backup_build.gradle.kts" app/build.gradle.kts
-  cp ".tmp/release_backup_README.md" README.md
-  echo "已还原（工作区状态：$(git status --porcelain | wc -l) 项变更）"
+  restore_versions
+  echo "工作区状态：$(git status --porcelain | wc -l) 项变更"
   echo ""
   echo "dry-run 结果："
   echo "  版本号   $OLD_NAME → $VERSION_NO_V（versionCode $NEW_CODE）"
