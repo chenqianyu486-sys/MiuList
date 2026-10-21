@@ -62,9 +62,47 @@ if ! adb devices | tail -n +2 | grep -q "device"; then
   exit 1
 fi
 
-ORIG_SIZE="$(adb shell wm size 2>/dev/null | tr -d '\r' | sed -n 's/^Override size: //p')"
-ORIG_DENSITY="$(adb shell wm density 2>/dev/null | tr -d '\r' | sed -n 's/^Override density: //p')"
-ORIG_FONT="$(adb shell settings get system font_scale 2>/dev/null | tr -d '\r')"
+ORIG_FILE=".tmp/adapt/orig_device.txt"
+CUR_SIZE="$(adb shell wm size 2>/dev/null | tr -d '\r' | sed -n 's/^Override size: //p')"
+CUR_DENSITY="$(adb shell wm density 2>/dev/null | tr -d '\r' | sed -n 's/^Override density: //p')"
+CUR_FONT="$(adb shell settings get system font_scale 2>/dev/null | tr -d '\r')"
+
+# 当前设备是不是**矩阵里的某一档**（即上一轮跑剩下的中间状态）。
+is_matrix_state() {
+  local size=$1 density=$2
+  [ -z "$size" ] && return 1
+  for entry in "${MATRIX[@]}"; do
+    local rest="${entry#*|}"
+    local s="${rest%%|*}"
+    local d="${rest#*|}"
+    d="${d%%|*}"
+    if [ "$s" = "$size" ] && [ "$d" = "$density" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# 原始设置的取法见 capture-matrix.sh 里的同一段注释：
+# 只有当前状态**不是**矩阵里的任何一档时才算原始设置，否则从文件里读。
+if is_matrix_state "$CUR_SIZE" "$CUR_DENSITY"; then
+  if [ -f "$ORIG_FILE" ]; then
+    ORIG_SIZE="$(sed -n 1p "$ORIG_FILE")"
+    ORIG_DENSITY="$(sed -n 2p "$ORIG_FILE")"
+    ORIG_FONT="$(sed -n 3p "$ORIG_FILE")"
+  else
+    ORIG_SIZE=""
+    ORIG_DENSITY=""
+    ORIG_FONT="1.0"
+  fi
+  echo "（当前设备停在矩阵的某一档上，按上一次记下的原始设置还原）"
+else
+  mkdir -p "$(dirname "$ORIG_FILE")"
+  printf '%s\n%s\n%s\n' "$CUR_SIZE" "$CUR_DENSITY" "$CUR_FONT" > "$ORIG_FILE"
+  ORIG_SIZE="$CUR_SIZE"
+  ORIG_DENSITY="$CUR_DENSITY"
+  ORIG_FONT="$CUR_FONT"
+fi
 
 restore() {
   if [ -n "$ORIG_SIZE" ]; then
