@@ -64,6 +64,11 @@ class WeatherCaptionBudgetTest {
 
     private fun assertFits(text: String) {
         val w = widthDp(text)
+        // 守的是 [BlockWidth]（108.dp）：天气块**不随屏宽收窄**。
+        //
+        // 最坏那句按上界模型约 105.9dp，只比 108dp 少 2dp 余量，
+        // 任何更窄的下限都会让指数被 Ellipsis 截掉。窄屏上省空间靠的是
+        // 把左边那一列的日期退回读数字号（见 MiuType.HeroDate），不是压扁天气块。
         assertTrue(
             "「$text」按上界模型约 ${"%.1f".format(w)}dp，放不进 ${BlockWidth.value}dp 的格子，" +
                 "指数会被 Ellipsis 截掉。放宽 BlockWidth 或缩短文案，**别缩字号**。",

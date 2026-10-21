@@ -1,10 +1,11 @@
-package com.example.ui.screens
+﻿package com.example.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,6 +17,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -58,9 +61,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import com.example.ui.theme.cardRevealAt
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -69,9 +75,12 @@ import com.example.data.local.CourseSlotEntity
 import com.example.data.local.CourseWithSlots
 import com.example.data.local.TaskEntity
 import com.example.data.source.zju.CoursesTodoItem
-import com.example.ui.components.IslandBottomInset
+import com.example.ui.components.islandBottomInset
 import com.example.ui.components.TaskItemCard
 import com.example.ui.components.WeatherBlock
+import com.example.ui.components.WeatherLayout
+import com.example.ui.components.weatherStripHeight
+import com.example.ui.components.BlockWidth
 import com.example.ui.components.formatPeriodRange
 import com.example.ui.components.formatRemaining
 import com.example.ui.components.periodStartMillis
@@ -95,6 +104,26 @@ import com.example.ui.theme.TeaOnColor
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.glassSurface
+import com.example.ui.theme.heroDateFontSize
+import com.example.ui.theme.heroDateMaxSpFor
+import com.example.ui.theme.heroDateStyle
+import com.example.ui.theme.heroMinDateColumnWidth
+import com.example.ui.theme.HeroDateMinTierSp
+import com.example.ui.theme.nextSmallerHeroDateTier
+import com.example.ui.theme.contentMaxWidthFor
+import com.example.ui.theme.rememberLayoutWidthDp
+import com.example.ui.theme.rememberIsShortWindow
+import com.example.ui.theme.widthClassFor
+import com.example.ui.theme.typeScaleFor
+import com.example.ui.theme.WindowWidthClass
+import com.example.ui.theme.rememberWindowWidthClass
+import com.example.ui.theme.HeroDateMaxSpCompact
+import com.example.ui.theme.LocalEffectiveFontScale
+import com.example.ui.theme.LocalEffectiveFontScale
+import com.example.ui.theme.cardHeightAnchor
+import com.example.ui.theme.measureTextHeight
+import com.example.ui.theme.measureTextSize
+import com.example.ui.theme.scaledWithText
 import com.example.ui.theme.wallpaperBlur
 import com.example.ui.theme.LocalCardRevealProgress
 import com.example.ui.theme.LocalWallpaperIsCustom
@@ -104,7 +133,189 @@ import java.util.Calendar
 import java.util.Locale
 import kotlin.math.roundToInt
 
+/**
+ * 主卡的**设计高度**（dp）：基准屏、系统字号 1.0 时的那一版。
+ *
+ * 这不是写死的「卡就该这么高」，而是**设计的锚点**：卡里的内容在基准屏上占 112dp，
+ * 剩下 28dp 是设计留白。主角（日期）的字号变了时，留白要跟着放大
+ * （见 [cardHeightAnchor]），否则字在卡里越占越满 —— 同一张设计在不同字号下长得不一样。
+ *
+ * 真正的卡高 = max(本锚点 × 锚点系数, 实测内容高)，见 [heroCardHeightFor]。
+ */
 private val HeroCardHeight = 140.dp
+
+/**
+ * 主卡正面与天气块之间的间隔（并排排法）。
+ *
+ * 与改版前一致：基准屏上这一行左右各 12dp 的空档是量过的，不是随手写的。
+ */
+internal val HeroWeatherGap = 12.dp
+
+/**
+ * 窄屏上下两段之间，日期段与天气条之间的间距（dp）。
+ *
+ * 10dp：比卡内边距（16dp）小一档，让这两段读起来是**一张卡里的两行**，
+ * 而不是「上面一块、下面一块」两个东西。
+ *
+ * ## 这一段只在「缩字救不了」时才会出现
+ *
+ * 常态是并排（日期降档即可）；只有窄屏 + 用户把系统字号放大、
+ * 或者任何宽度上的极端字号，才需要把天气挪到第二段。
+ *
+ * ## 间距随字号放大
+ *
+ * 这一段是**垂直**间距：字大了，两段之间就该隔开一点，
+ * 否则它们会挤成一坨。放大倍数见 [LocalEffectiveFontScale]。
+ */
+internal val HeroStripGap = 10.dp
+
+/** 主卡的上下内边距（设计值，dp）。 */
+private val HeroCardPaddingV = 16.dp
+
+/** 主卡左列里「周次行 → 日期」的间距（设计值，dp）。 */
+private val HeroMetaGap = 8.dp
+
+/** 主卡左列里「日期 → 副标题」的间距（设计值，dp）。 */
+private val HeroDateMetaGap = 4.dp
+
+/** 周次 chip 的上下内边距（设计值，dp）。 */
+private val HeroWeekChipPadV = 3.5.dp
+
+/**
+ * 窄屏上下两段之间的实际间距：随字号放大。
+ */
+@Composable
+internal fun heroStripGap(): Dp = HeroStripGap * LocalEffectiveFontScale
+
+/**
+ * 宽屏两栏排法下，日期列的宽度上限（dp）。
+ *
+ * 360dp 是「26.sp 的日期（324dp）+ 一点余量」：26.sp 那句在宽屏字阶 1.18 下
+ * 渲染宽 324dp，所以 360 刚好装下它、又不至于把右边那一栏推得太远。
+ */
+internal val HeroWideMetaMax = 360.dp
+
+/** 宽屏两栏排法下，两栏之间的间距（dp）。 */
+internal val HeroWideGap = 32.dp
+
+/**
+ * 宽屏两栏排法下，天气那一栏的宽度（dp）。
+ *
+ * 160dp：宽屏字阶 1.18 之后，那句最长的「杭州 · 空气轻度污染 138」
+ * 要 105.9 × 1.18 ≈ 125dp，160 留得下余量。
+ * 比竖排版的 108.dp 宽，因为宽屏上这一栏是**独占一栏**的，不再和日期抢位置。
+ */
+internal val HeroWideWeatherWidth = 160.dp
+
+/**
+ * 宽屏两栏排法需要的最小卡内容宽（dp）。
+ *
+ * 600dp：两栏排法的整组宽度上限是 360 + 32 + 160 = 552dp，
+ * 卡内容宽至少要有 600dp 才不会挤在一起。
+ * 换算成窗口宽度约 790dp —— 也就是说 600–790dp 的窗口仍是并排排法，
+ * 只是字号跟着宽屏字阶走了一档。
+ */
+internal val HeroWideMinInner = 600.dp
+
+/**
+ * 主卡正面的排法结果。
+ *
+ * 由 [heroLayoutFor] 一处算出，界面与单测共用同一份 ——
+ * 排法有三个维度（上下两段 / 两栏 / 并排）各自带一个宽度，
+ * 分成三个函数各算各的，早晚会对不上，而对不上的那一天
+ * 界面和测试会各说各话。
+ */
+internal data class HeroLayout(
+    /** 窄屏上下两段：日期与天气各占一段，日期拿整行宽度。 */
+    val stacked: Boolean,
+    /** 宽屏两栏：日期与天气不再被 `SpaceBetween` 推到两端。 */
+    val wide: Boolean,
+    /** 天气块竖排的宽度。 */
+    val weatherWidth: Dp,
+    /** 日期那一列的宽度。 */
+    val dateColumnWidth: Dp
+)
+
+/**
+ * 窗口宽度 → 主卡排法。
+ *
+ * ## 判据只有一条：**缩字够不够**
+ *
+ * 自适应的基础是字体自适应（见 [contentScaleFor]）：屏窄了先让字等比缩小，
+ * 整页的比例和留白关系就都保持住了，**版式一个字都不用改**。
+ *
+ * 所以这里的顺序是：
+ *
+ * 1. 先按屏宽算出**并排**时日期列有多宽；
+ * 2. 再问一句：日期缩到**最小档** [HeroDateMinTierSp] 都放不下吗？
+ *    - 放得下 → **并排**，一个字都不改版式。窄屏上日期会降档
+ *      （320dp 上 22.sp → 16.sp，渲染 138.8dp，落在 152dp 的列里），
+ *      但整页仍然是「411dp 的设计等比缩进小屏」。
+ *    - 放不下 → 缩字救不了（窄屏 + 用户把系统字号放大，或任何宽度上的
+ *      极端字号），这时才把天气块挪到第二段去（**上下两段**）。
+ *
+ * ## 为什么改版式只能当兜底
+ *
+ * 改版式 = 主卡多出一行 = 卡片变高、这一屏的信息密度变了，
+ * 整页比例就和设计时的那一版对不上了。缩字则不会：字变小，围着它的
+ * 框、卡片、胶囊跟着变小，整页还是那个设计。
+ *
+ * ## 天气块的宽度跟着**宽屏字阶**走
+ *
+ * 竖排版固定 108.dp 是因为最坏那句「杭州 · 空气轻度污染 138」在字号 1.0 时
+ * 要 105.9.dp。宽屏字阶放大之后它要 105.9 × 1.1 ≈ 116.5.dp —— **108 装不下了，
+ * 指数会被 Ellipsis 截掉**（指数恰恰是最需要看全的那个数）。
+ *
+ * 所以这里按字阶**等比**放大块宽：108 × 字阶。比例放大保留了原来那 2dp 余量。
+ * 只跟字阶走、不跟用户的系统字号走：用户的字号放大时块本来就该跟着重排，
+ * 而这一块宽是要跟日期抢位置的，不能无底线地长。
+ *
+ * @param physicalWidthDp 窗口的**物理**宽度（dp）。决定设备档位：宽屏字阶、
+ *   日期字号上限档都按它判。
+ * @param layoutWidthDp 窗口的**排版**宽度（dp）。决定版面里实际有多宽：
+ *   缩放之后它比物理宽大（320dp 的屏 → 排版 390dp），
+ *   拿物理宽去比排版空间会算错一段。
+ * @param effectiveFontScale 有效字号缩放（系统 × 内容缩放 × 宽屏字阶）。
+ */
+internal fun heroLayoutFor(
+    physicalWidthDp: Int,
+    layoutWidthDp: Int,
+    effectiveFontScale: Float
+): HeroLayout {
+    val inner = heroInnerWidthOf(layoutWidthDp)
+    val widthClass = widthClassFor(physicalWidthDp)
+    val typeScale = typeScaleFor(physicalWidthDp)
+    val wide = widthClass != WindowWidthClass.COMPACT && inner >= HeroWideMinInner
+    val weatherWidth = if (wide) HeroWideWeatherWidth else BlockWidth * typeScale
+    // 并排时日期列的宽度
+    val sideBySideColumn = inner - HeroWeatherGap - weatherWidth
+    // 缩字缩到底（最小档）还放不下 → 只能改版式
+    val minColumnNeeded = heroMinDateColumnWidth(effectiveFontScale)
+    val stacked = !wide && sideBySideColumn < minColumnNeeded
+    val layout = HeroLayout(
+        stacked = stacked,
+        wide = wide,
+        weatherWidth = weatherWidth,
+        dateColumnWidth = 0.dp
+    )
+    return layout.copy(dateColumnWidth = heroDateColumnWidth(inner, layout))
+}
+
+/**
+ * 日期那一列实际能拿到的宽度（dp）。
+ *
+ * 三种排法各算各的：并排时是「卡内容宽 − 间隔 − 天气块」，
+ * 上下两段时是整行，宽屏两栏时是「卡内容宽 − 间距 − 天气栏」并封顶 [HeroWideMetaMax]。
+ *
+ * 界面里算两次：一次用**估算**的卡内容宽（在卡片外面定排法与字号时用），
+ * 一次用 `BoxWithConstraints` 拿到的**实际**卡内容宽（复核「这句字放不放得下」时用）。
+ * 两处共用这一个公式，所以它们不会打架。
+ */
+internal fun heroDateColumnWidth(innerWidth: Dp, layout: HeroLayout): Dp = when {
+    layout.stacked -> innerWidth
+    layout.wide -> minOf(innerWidth - HeroWideGap - layout.weatherWidth, HeroWideMetaMax)
+    else -> innerWidth - HeroWeatherGap - layout.weatherWidth
+}
 
 @Composable
 fun DashboardScreen(
@@ -125,6 +336,18 @@ fun DashboardScreen(
         // 顶部的「2026年10月19日 星期一」是**北京**的日期。
         // 无参 SimpleDateFormat 走设备时区，GMT 设备在北京凌晨会显示昨天的星期几。
         AppZone.format("yyyy年M月d日 EEEE", System.currentTimeMillis(), Locale.CHINESE)
+    }
+    // 大字号 / 窄屏下完整日期放不进左列时的**降级写法**。
+    //
+    // 原先只有「按宽度逐档降字号」一条路：332dp + 2.0 字号时 14sp 的完整日期
+    // 仍要 296dp，而左列只有 243dp，最后被截成「2026年10月21日 星…」——
+    // 日期是主卡的主角，读不出星期几比字号小一点更糟。
+    // 所以先降字号，再降**信息密度**：保留月日 + 短星期，最后才保留月日。
+    val compactDateStr = remember {
+        AppZone.format("M月d日 EEE", System.currentTimeMillis(), Locale.CHINESE)
+    }
+    val shortDateStr = remember {
+        AppZone.format("M月d日", System.currentTimeMillis(), Locale.CHINESE)
     }
 
     // 课程状态每 30 秒自己走一次，不能等用户碰一下屏幕才更新。
@@ -216,7 +439,75 @@ fun DashboardScreen(
     // 组头文案沿用原来的 todayStatusLabel：
     // 正在上课 →「还有 X 分 下课」；还没到下一节 →「下节课还有 X 开始」；
     // 全部上完 / 今天没课 →「课都上完啦，休息一下吧~」。
-    val coursesHeader = todayStatusLabel(todayCalendar, todaySlots, nowMillis, state.periodTable)
+    // 大字号下用短句，否则长句会断成「…开 / 始」两行。
+    val compactStatus = LocalEffectiveFontScale > 1.3f
+    val coursesHeader = todayStatusLabel(
+        todayCalendar,
+        todaySlots,
+        nowMillis,
+        state.periodTable,
+        compact = compactStatus
+    )
+
+    // 主卡的**排法**要在卡片外面定：卡片的高度得先知道，而高度又取决于排法
+    // （窄屏的上下两段比并排多一段天气条）。
+    //
+    // 所以这里用与卡内**同源**的宽度推算排法与字号（见 [heroInnerWidthOf]），
+    // 卡内再用 BoxWithConstraints 拿到的实际宽度复核「这句字放不放得下」。
+    // 两处算的是同一个数（都来自排版宽与 contentMaxWidthFor），不会打架。
+    // **物理宽**：设备是什么样（宽屏分档、字阶、日期上限档都按它判）。
+    val physicalWidthDp = LocalConfiguration.current.screenWidthDp
+    // **排版宽**：版面里实际有多宽 —— 主卡的排法与日期列宽都按它算。
+    // 版式被缩放之后这两者不再相等（320dp 的屏 → 排版里是 390dp），
+    // 拿物理宽去比排版空间会凭空算错一段。
+    val layoutWidthDp = rememberLayoutWidthDp()
+    // 排法要问「缩字够不够」，所以得带上**有效字号缩放**：
+    // 同样的屏宽，用户把系统字号放到 2.0 时，缩字救不了 → 改版式。
+    val effectiveFontScale = LocalEffectiveFontScale
+    val heroLayout = remember(physicalWidthDp, layoutWidthDp, effectiveFontScale) {
+        heroLayoutFor(physicalWidthDp, layoutWidthDp, effectiveFontScale)
+    }
+    val heroStacked = heroLayout.stacked
+    val heroWide = heroLayout.wide
+    // 矮屏（横屏 / 分屏窄条）：高度是最贵的资源，主卡与浮岛都按矮版排。
+    val shortWindow = rememberIsShortWindow()
+    val widthClass = rememberWindowWidthClass()
+    val dateColumnWidth = heroLayout.dateColumnWidth
+    // 选档要把**有效字号缩放**算进去：系统字号 1.5 时，
+    // 22.sp 实际渲染成 1.5 倍的宽度，只比 232.8dp 会判成「放得下」，
+    // 然后被 maxLines=1 截成「2026年10月20日 ...」（实测过）。
+    val dateFontSize = heroDateFontSize(
+        leftColumnWidth = dateColumnWidth,
+        fontScale = LocalEffectiveFontScale,
+        maxSp = heroDateMaxSpFor(widthClass)
+    )
+    // 行高跟着字号走（22.sp × 1.27 = 28.sp，基准屏观感不变；26.sp 时不再被裁）。
+    // 这一份是**卡外**的：它只用来算卡高（卡要先知道多高才能排版）。
+    // 真正渲染用的档位在卡内按**实际列宽**再修一道（见 heroDateTierWithMeasuredFit）——
+    // 估算值与实际值可能差 1dp，而字宽正好卡在两者之间时，判定就成了掷硬币。
+    val dateStyle = heroDateStyle(dateFontSize)
+
+    // 主卡高度：**按这一屏真实要渲染的那几行字量出来**，不是写死 140dp。
+    //
+    // 140dp 是按 411dp 屏 + 系统字号 1.0 定的。系统字号 2.0 时，同一张卡里
+    // 日期、学期名、副标题三行都跟着长，140dp 装不下——实测副标题「12 门课 ·
+    // 31.3 小时」被裁掉下半截。这不是「再加两 dp」能修的，得让卡高跟着内容走。
+    //
+    // 正反两面必须同高（翻转时下方列表不能跳），所以这里算的是**正面**所需高度，
+    // 反面那几行在更大字号下也会长，但它没有比正面更高的固有原因：
+    // 反面 64dp 的横向卡片已改成 heightIn(min = 64dp)，整体仍装得进这个高度。
+    val heroHeight = heroCardHeightFor(
+        weekText = "第 ${state.currentWeek} 周",
+        termText = state.semester?.name?.ifBlank { null } ?: "本学期",
+        dateText = todayDateStr,
+        metaText = "${state.courses.size} 门课 · $weekHoursText",
+        // 卡高用**卡外**的档位算（公式估的那个）：卡内按实际列宽修出来的档位
+        // 只在真正放不下时更小一档，卡高按大的算 → 只会略宽，不会裁到内容。
+        dateStyle = dateStyle,
+        stacked = heroStacked,
+        compact = shortWindow,
+        mainSp = dateFontSize.value
+    )
 
     val cardRevealProgress = LocalCardRevealProgress.current
 
@@ -233,7 +524,7 @@ fun DashboardScreen(
             .padding(horizontal = PageHInset),
         verticalArrangement = Arrangement.spacedBy(CardBlockGap),
         // 底部给浮岛导航留出收尾空间，内容本身仍会滚到岛底下被毛玻璃糊住
-        contentPadding = PaddingValues(bottom = IslandBottomInset)
+        contentPadding = PaddingValues(bottom = islandBottomInset())
     ) {
         item {
             Spacer(modifier = Modifier.height(6.dp))
@@ -246,11 +537,12 @@ fun DashboardScreen(
             )
 
             // Semester Overview & Progress Hero Card (3D Flip: 正面=日期天气，反面=学在浙大待交作业)
-            // 固定 HeroCardHeight = 140.dp，确保卡片翻转过程中与正反两面高度绝对一致，防止下方列表发生跳变。
+            // 正反两面用同一个 heroHeight（见上方计算），翻转过程中高度绝对一致，
+            // 下方列表不会跳。基准字号下它仍然是 140.dp。
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(HeroCardHeight)
+                    .height(heroHeight)
                     .cardRevealAt(cardRevealProgress, 0)
                     .testTag("dashboard_semester_card")
                     .graphicsLayer {
@@ -265,7 +557,11 @@ fun DashboardScreen(
                     // 正面：日期与天气卡片（点击卡片主体翻转至背面学在浙大）。
                     // 浅色壁纸不铺白衬底，只保留原来那层 10% 白玻璃；
                     // 深色壁纸才按亮度把衬底推到 0.90，保证日期和正文读得出来。
-                    Box(
+                    //
+                    // 用 BoxWithConstraints 是为了拿到主卡内容区的**实际宽度**：
+                    // 日期字号要按左列实际能放多宽来选档（见 heroDateFontSize），
+                    // 写死一个值在窄屏上必然放不下。
+                    BoxWithConstraints(
                         modifier = Modifier
                             .fillMaxSize()
                             .clip(MiuSurface.HeroShape)
@@ -283,64 +579,118 @@ fun DashboardScreen(
                             ) {
                                 isHeroFlipped = true
                             }
-                            .padding(horizontal = 18.dp, vertical = 16.dp),
+                            .padding(
+                                horizontal = 18.dp,
+                                // 垂直内边距随字号放大：字大了，卡里的呼吸也要跟着大。
+                                vertical = HeroCardPaddingV * LocalEffectiveFontScale
+                            ),
                         contentAlignment = Alignment.CenterStart
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(MaterialTheme.colorScheme.primary)
-                                            .clickable { onOpenWeekPicker() }
-                                            .padding(horizontal = 9.dp, vertical = 3.5.dp)
-                                    ) {
-                                        Text(
-                                            text = "第 ${state.currentWeek} 周",
-                                            color = MaterialTheme.colorScheme.onPrimary,
-                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                            fontSize = 11.5.sp
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = state.semester?.name?.ifBlank { null } ?: "本学期",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = TextSecondary
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                Text(
-                                    text = todayDateStr,
-                                    style = MaterialTheme.typography.titleLarge.copy(
-                                        fontWeight = FontWeight.ExtraBold,
-                                        letterSpacing = (-0.3).sp
-                                    ),
-                                    color = MaterialTheme.colorScheme.onSurface
+                        // 卡内实际拿到的宽度，用来复核「这句字放不放得下」。
+                        // 排法与字号在外面按同源的宽度定好了（见上），
+                        // 这里只用实际宽度做最后一次确认。
+                        val actualDateColumnWidth = heroDateColumnWidth(
+                            innerWidth = maxWidth,
+                            layout = heroLayout
+                        )
+                        // 档位按**实际列宽**再修一道。
+                        //
+                        // 为什么不能信外面的估算值：估算的列宽（卡外算的）与
+                        // 卡内的实际列宽可能差 1dp（实测 332dp 上是 237.0 vs 236.1），
+                        // 而 22.sp 那句日期的实测宽是 236.59 —— 正好卡在两者之间。
+                        // 这时候「放不放得下」的判定就成了掷硬币：估得下、实际放不下，
+                        // 日期就直接从完整写法跳成「只有月日和星期」。
+                        //
+                        // 修法是**按实际列宽降一档字号**：
+                        // 宁可字号小一点，也保住完整日期
+                        // （原则见 Responsive.kt：读不出星期几比字号小一点更糟）。
+                        val dateTier = heroDateTierWithMeasuredFit(
+                            startTier = dateFontSize.value,
+                            text = todayDateStr,
+                            columnWidth = actualDateColumnWidth
+                        )
+                        val actualDateStyle = heroDateStyle(dateTier.sp)
+                        // 字号降到最小档之后如果还放不下，就**降信息密度**：
+                        // 完整日期 → 月日 + 短星期 → 只有月日。三档都按实际渲染宽度
+                        // 量过再选，仍然放不下才交给省略号。
+                        val dateText = when {
+                            measureTextSize(todayDateStr, actualDateStyle).width <= actualDateColumnWidth ->
+                                todayDateStr
+                            measureTextSize(compactDateStr, actualDateStyle).width <= actualDateColumnWidth ->
+                                compactDateStr
+                            measureTextSize(shortDateStr, actualDateStyle).width <= actualDateColumnWidth ->
+                                shortDateStr
+                            else -> todayDateStr
+                        }
+                        if (heroStacked) {
+                            // 上下两段：**缩字救不了时的兜底**。
+                            //
+                            // 常态是并排 —— 日期按左列宽度降档即可，整页版式一个字不改。
+                            // 只有当日期缩到最小档（14.sp）仍放不下（窄屏 + 用户把系统字号
+                            // 放大，或任何宽度上的极端字号），才把天气挪到第二段。
+                            //
+                            // 为什么值得多这一行：并排时日期列是 `W − 168`，
+                            // 而最小档 14.sp × 有效缩放 2.0 = 296dp，320dp 的屏上
+                            // 左列只有 152dp —— 差着一倍多，缩字救不了，只能改版式。
+                            //
+                            // 挪到第二段之后日期拿整行宽度（`W − 48`），
+                            // 天气那一行同时变宽：那句「杭州 · 空气轻度污染 138」
+                            // 在 272dp 里不会再被 Ellipsis 截掉指数。
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                HeroMetaColumn(
+                                    weekText = "第 ${state.currentWeek} 周",
+                                    termText = state.semester?.name?.ifBlank { null } ?: "本学期",
+                                    dateText = dateText,
+                                    dateStyle = actualDateStyle,
+                                    metaText = "${state.courses.size} 门课 · $weekHoursText",
+                                    onOpenWeekPicker = onOpenWeekPicker,
+                                    modifier = Modifier.fillMaxWidth()
                                 )
-
-                                Spacer(modifier = Modifier.height(4.dp))
-
-                                Text(
-                                    text = "${state.courses.size} 门课 · $weekHoursText",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = TextSecondary
+                                Spacer(modifier = Modifier.height(heroStripGap()))
+                                WeatherBlock(
+                                    state = state.weather,
+                                    hourOfDay = AppZone.hourOfDayNow(),
+                                    layout = WeatherLayout.STRIP,
+                                    modifier = Modifier.fillMaxWidth()
                                 )
                             }
-
-                            Spacer(modifier = Modifier.width(12.dp))
-
-                            WeatherBlock(
-                                state = state.weather,
-                                hourOfDay = AppZone.hourOfDayNow()
-                            )
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = if (heroWide) {
+                                    // 宽屏两栏：**居中**并排，中间留一道固定间距。
+                                    // 原来这里是 SpaceBetween，把天气甩到天边，
+                                    // 656dp 的内容列上那个空洞能有 255dp ——
+                                    // 读起来像坏了，而不是像宽。
+                                    Arrangement.spacedBy(HeroWideGap, Alignment.CenterHorizontally)
+                                } else {
+                                    Arrangement.SpaceBetween
+                                }
+                            ) {
+                                HeroMetaColumn(
+                                    weekText = "第 ${state.currentWeek} 周",
+                                    termText = state.semester?.name?.ifBlank { null } ?: "本学期",
+                                    dateText = dateText,
+                                    dateStyle = actualDateStyle,
+                                    metaText = "${state.courses.size} 门课 · $weekHoursText",
+                                    onOpenWeekPicker = onOpenWeekPicker,
+                                    modifier = if (heroWide) {
+                                        Modifier.widthIn(max = HeroWideMetaMax)
+                                    } else {
+                                        Modifier.weight(1f)
+                                    }
+                                )
+                                if (!heroWide) {
+                                    Spacer(modifier = Modifier.width(HeroWeatherGap))
+                                }
+                                WeatherBlock(
+                                    state = state.weather,
+                                    hourOfDay = AppZone.hourOfDayNow(),
+                                    layout = WeatherLayout.COLUMN,
+                                    blockWidth = heroLayout.weatherWidth
+                                )
+                            }
                         }
                     }
                 } else {
@@ -366,7 +716,10 @@ fun DashboardScreen(
                             ) {
                                 isHeroFlipped = false
                             }
-                            .padding(horizontal = 18.dp, vertical = 16.dp)
+                            .padding(
+                                horizontal = 18.dp,
+                                vertical = HeroCardPaddingV * LocalEffectiveFontScale
+                            )
                     ) {
                         Column(
                             modifier = Modifier.fillMaxSize(),
@@ -381,7 +734,9 @@ fun DashboardScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Box(
                                         modifier = Modifier
-                                            .size(26.dp)
+                                            // 徽标是固定盒子：它跟「学在浙大」那行字并排，
+                                            // 字放大时徽标要跟着大，否则它缩成一个小点。
+                                            .size(26.dp.scaledWithText())
                                             .clip(CircleShape)
                                             .background(TeaColor)
                                             .border(0.5.dp, TeaColorBorder, CircleShape),
@@ -391,7 +746,7 @@ fun DashboardScreen(
                                             imageVector = Icons.Outlined.School,
                                             contentDescription = null,
                                             tint = TeaOnColor,
-                                            modifier = Modifier.size(15.dp)
+                                            modifier = Modifier.size(15.dp.scaledWithText())
                                         )
                                     }
                                     Spacer(modifier = Modifier.width(8.dp))
@@ -422,7 +777,10 @@ fun DashboardScreen(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(6.dp))
                                             .background(badgeBg)
-                                            .padding(horizontal = 7.dp, vertical = 2.dp)
+                                            .padding(
+                                                horizontal = 7.dp,
+                                                vertical = 2.dp.scaledWithText()
+                                            )
                                     ) {
                                         Text(
                                             text = badgeText,
@@ -493,7 +851,7 @@ fun DashboardScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(64.dp)
+                                        .heightIn(min = 64.dp.scaledWithText())
                                         .clip(RoundedCornerShape(14.dp))
                                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
                                         .padding(horizontal = 14.dp),
@@ -514,7 +872,7 @@ fun DashboardScreen(
                                         onClick = onOpenQuickLoginDialog,
                                         shape = RoundedCornerShape(8.dp),
                                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                        modifier = Modifier.height(32.dp)
+                                        modifier = Modifier.heightIn(min = 32.dp)
                                     ) {
                                         Text("填写学号密码", fontSize = 11.5.sp)
                                     }
@@ -525,7 +883,7 @@ fun DashboardScreen(
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .height(64.dp)
+                                            .heightIn(min = 64.dp.scaledWithText())
                                             .clip(RoundedCornerShape(14.dp))
                                             .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f))
                                             .padding(horizontal = 14.dp),
@@ -552,7 +910,7 @@ fun DashboardScreen(
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .height(64.dp)
+                                            .heightIn(min = 64.dp.scaledWithText())
                                             .clip(RoundedCornerShape(14.dp))
                                             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
                                         contentAlignment = Alignment.Center
@@ -625,7 +983,7 @@ fun DashboardScreen(
                                 style = MiuType.CourseTitle,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(4.dp * LocalEffectiveFontScale))
                             Text(
                                 text = pendingTasksSummary(pendingTasks.size),
                                 style = MiuType.CourseMeta,
@@ -721,41 +1079,61 @@ fun DashboardScreen(
                             Spacer(modifier = Modifier.width(12.dp))
 
                             Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = course.name,
-                                        style = MiuType.CourseTitle.copy(fontSize = 14.5.sp),
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        modifier = Modifier.weight(1f, fill = false),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    if (room.isNotBlank()) {
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        val roomShape = RoundedCornerShape(6.dp)
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(roomShape)
-                                                .background(courseColor.copy(alpha = 0.16f))
-                                                .border(0.5.dp, courseColor.copy(alpha = 0.28f), roomShape)
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        ) {
-                                            Text(
-                                                // 不带「@」：设计笔记的现状诊断第 6 条写着
-                                                // 「@ 教室胶囊的『@』是程序员语法，不是学生语言」，
-                                                // 加高主卡早就照这条改掉了，这一枚小胶囊
-                                                // 却还留着。同一个 App 里同一件事实用两种写法，
-                                                // 改掉一处就等于把另一处也标成了待办。
-                                                text = room,
-                                                color = accentOnCourse(courseColor),
-                                                fontSize = 10.sp,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
+                                // 这一行里挤着课程名与教室胶囊，两样都是**内容**，
+                                // 所以必须先知道这一行到底有多宽，才谈得上分配。
+                                //
+                                // 之前没有上限：胶囊是 Row 里没挂 weight 的子项，
+                                // Row 量它的时候给的是整行的约束，于是它按内容原宽铺开；
+                                // 课程名虽然挂了 weight(1f, fill=false)，但那份额是
+                                // 「整行减去胶囊实际占的宽」——胶囊把行占满了，
+                                // 课程名分到 0，而胶囊自己又溢出了这一列，
+                                // 直接画到右边的徽标底下（系统字号 1.5 时实测：
+                                // 「紫金港西2-105」压在「●1」上）。
+                                //
+                                // 现在给胶囊一个上限：它最多占这一行的 45%，
+                                // 剩下的留给课程名。45% 是按「课程名是主、教室是速查项」
+                                // 定的 —— 411dp 基准屏上最长的那颗胶囊约 120dp，
+                                // 在 305dp 的行里占 39%，所以 45% 不改变基准屏的观感，
+                                // 只在真的挤不下时才开始截断。
+                                BoxWithConstraints {
+                                    val roomMaxWidth = maxWidth * 0.45f
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = course.name,
+                                            style = MiuType.CourseTitle.copy(fontSize = 14.5.sp),
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.weight(1f, fill = false),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (room.isNotBlank()) {
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            val roomShape = RoundedCornerShape(6.dp)
+                                            Box(
+                                                modifier = Modifier
+                                                    .widthIn(max = roomMaxWidth)
+                                                    .clip(roomShape)
+                                                    .background(courseColor.copy(alpha = 0.16f))
+                                                    .border(0.5.dp, courseColor.copy(alpha = 0.28f), roomShape)
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text(
+                                                    // 不带「@」：设计笔记的现状诊断第 6 条写着
+                                                    // 「@ 教室胶囊的『@』是程序员语法，不是学生语言」，
+                                                    // 加高主卡早就照这条改掉了，这一枚小胶囊
+                                                    // 却还留着。同一个 App 里同一件事实用两种写法，
+                                                    // 改掉一处就等于把另一处也标成了待办。
+                                                    text = room,
+                                                    color = accentOnCourse(courseColor),
+                                                    fontSize = 10.sp,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
                                         }
                                     }
                                 }
-                                Spacer(modifier = Modifier.height(4.dp))
+                                Spacer(modifier = Modifier.height(4.dp * LocalEffectiveFontScale))
                                 Text(
                                     text = "${formatPeriodRange(slot.startPeriod, slot.endPeriod)} ($timeStart-$timeEnd) · ${course.teacher}",
                                     style = MiuType.CourseMeta.copy(fontSize = 10.5.sp),
@@ -808,7 +1186,7 @@ fun DashboardScreen(
                                 style = MiuType.CourseTitle,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(4.dp * LocalEffectiveFontScale))
                             Text(
                                 text = "这一周可以轻松一点了",
                                 style = MiuType.CourseMeta,
@@ -843,6 +1221,233 @@ fun DashboardScreen(
     }
 }
 
+/**
+ * 主卡日期的档位修正：按**实测**宽度往下修，差一点点就降一档字号。
+ *
+ * ## 为什么公式还不够
+ *
+ * [heroDateFontSize] 是按比例外推的（22.sp 那句的实测宽 × 档位比例 × 字号缩放），
+ * 而渲染出来的真实宽度与外推值可能差 1–2dp —— 字距（-0.3.sp）、中文回退字形的
+ * 取整都会带来这点差。
+ *
+ * 差这一点点的后果却不是「小一点」：日期的写法是三选一
+ * （完整日期 → 月日+短星期 → 月日），一旦完整那句差 1dp 放不下，
+ * 就直接跳到「月日+短星期」，**星期几没了**。
+ *
+ * ## 实测（332dp 屏，探针打出来的数）
+ *
+ * ```
+ * 卡内实际列宽 = 236.10dp      ← 判定要用的数
+ * 卡外估算列宽 = 237.00dp      ← 公式估的，差 0.9dp
+ * 22.sp 实测字宽 = 236.59dp     ← 正好卡在两者之间
+ * ```
+ *
+ * 估算值说「放得下」，实际值说「放不下」—— 判定成了掷硬币。
+ * 所以修正一律用**卡内实际列宽**，不信任卡外的估算值。
+ *
+ * ## 判据
+ *
+ * 「读不出星期几比字号小一点更糟」——
+ * 所以先降字号（最多降到 [HeroDateMinTierSp]），实在降不动了才降信息密度。
+ *
+ * @param startTier 公式估出来的档位（sp）。只会往下修，不会往上。
+ * @param text 要保证放得下的那段文字（这里是完整日期）。
+ * @param columnWidth 日期列的**实际**宽度（dp，排版 dp）。
+ * @return 修正后的档位（sp）。
+ */
+@Composable
+private fun heroDateTierWithMeasuredFit(
+    startTier: Float,
+    text: String,
+    columnWidth: Dp
+): Float {
+    var tier = startTier
+    while (tier > HeroDateMinTierSp &&
+        measureTextSize(text, heroDateStyle(tier.sp)).width > columnWidth
+    ) {
+        tier = nextSmallerHeroDateTier(tier) ?: break
+    }
+    return tier
+}
+
+/**
+ * 主卡正面左列：周次 chip + 学期名 / 大号日期 / 门课数。
+ *
+ * 抽出来是因为三种排法（并排 / 上下两段 / 两栏）都要这一段，
+ * 抄三遍的话改一处就得记得改三处 —— 而这一段里的每个决定都是量过的。
+ */
+@Composable
+private fun HeroMetaColumn(
+    weekText: String,
+    termText: String,
+    dateText: String,
+    dateStyle: TextStyle,
+    metaText: String,
+    onOpenWeekPicker: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.primary)
+                    .clickable { onOpenWeekPicker() }
+                    // chip 的上下内边距随字号放大，卡高算的时候用的是同一个值。
+                    .padding(
+                        horizontal = 9.dp,
+                        vertical = HeroWeekChipPadV * LocalEffectiveFontScale
+                    )
+            ) {
+                Text(
+                    text = weekText,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    fontSize = 11.5.sp
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            // 学期名是**用户可编辑的自由文本**（"2026-2027学年 秋冬 学期"），
+            // 原来既没有 maxLines 也没有宽度上限：窄屏上它会折成三行，
+            // 把下面整块内容顶出卡高 → 被裁。
+            // 现在单行 + 省略号：宁可少看几个字，也不改卡的结构。
+            Text(
+                text = termText,
+                style = MaterialTheme.typography.labelMedium,
+                color = TextSecondary,
+                modifier = Modifier.weight(1f, fill = false),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        Spacer(modifier = Modifier.height(HeroMetaGap * LocalEffectiveFontScale))
+
+        // 日期是主卡的**主角**，V3 定稿就是 22sp
+        // （用户明确否掉过"日期变小"的方案，见设计笔记）。
+        // 窄屏上 22sp 放不下时**先改排法**（上下两段，日期拿整行），
+        // 排法也救不回来才按可用宽降档 ——
+        // 而不是让文字折行把卡高顶破、被裁掉半截。
+        Text(
+            text = dateText,
+            style = dateStyle,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+
+        Spacer(modifier = Modifier.height(HeroDateMetaGap * LocalEffectiveFontScale))
+
+        Text(
+            text = metaText,
+            style = MaterialTheme.typography.bodySmall,
+            color = TextSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+/**
+ * 主卡**内容区**在当前窗口下的宽度（dp）。
+ *
+ * 宽度链是：窗口 → 内容列上限（[contentMaxWidthFor]）→ 页面左右留白
+ * （[PageHInset] × 2）→ 卡内左右内边距（18dp × 2）。
+ *
+ * ## 为什么要在卡片**外面**算它
+ *
+ * 主卡的高度得先知道才能排版，而高度又取决于排法（缩字救不了时改成两段）。
+ * 所以排法必须在进卡片之前就定下来 → 宽度也得在外面能算出来。
+ * 这里的数与卡内 `BoxWithConstraints` 拿到的 `maxWidth` 是同一个来源
+ * （排版宽 + contentMaxWidthFor），所以两边不会打架。
+ *
+ * @param layoutWidthDp 窗口的**排版**宽度（dp），见 [rememberLayoutWidthDp]。
+ */
+internal fun heroInnerWidthOf(layoutWidthDp: Int): Dp =
+    (minOf(contentMaxWidthFor(layoutWidthDp).value, layoutWidthDp.toFloat()) - HeroChromeWidth)
+        .coerceAtLeast(120f)
+        .dp
+
+/** 页面留白 6×2 + 卡内留白 18×2 = 48dp：从窗口宽到卡内容宽要吃掉的两层。 */
+internal const val HeroChromeWidth = 48f
+
+/**
+ * 主卡需要多高：把正面那几行字的**实际排版高度**量出来，再补上内边距与间距。
+ *
+ * 为什么不按 `fontScale × 系数` 估：中文回退字体的行高比字号本身大不少，
+ * 系数在大字号这一档正好估小——而大字号恰恰就是卡被裁掉的那一档。
+ * 这里用的是和卡片里完全相同的 style（含 lineHeight），量多少算多少。
+ *
+ * 入参都是**这一屏真的要显示的文字**：周次 chip、学期名、日期、副标题。
+ * 换文案（比如日期里带不带星期）高度会跟着重算，不需要谁记得回来改常量。
+ *
+ * @param dateStyle 日期那一行的实际样式（含随字号走的行高）。
+ *   必须传进来而不是在这里重建：宽屏上日期是 26.sp，
+ *   用 22.sp 那份量出来的高度会少一截，字被裁。
+ * @param stacked 窄屏上下两段时为 true —— 那时多出一段天气条的高度。
+ * @param compact 矮屏（横屏 / 分屏窄条）时为 true —— 那时高度是最贵的资源，
+ *   主卡按**并排**内容的高度算，不占设计那 140dp。
+ * @param mainSp 这一屏上日期实际用到的字号（sp）。它是这张卡的**主角**，
+ *   高度锚点跟着它走 —— 窄屏降档、宽屏升档时，锚点跟着一起动，
+ *   「主角在卡里占多少」才不变（见 [cardHeightAnchor]）。
+ */
+@Composable
+private fun heroCardHeightFor(
+    weekText: String,
+    termText: String,
+    dateText: String,
+    metaText: String,
+    dateStyle: TextStyle,
+    stacked: Boolean,
+    compact: Boolean,
+    mainSp: Float
+): Dp {
+    // 周次 chip：labelSmall + 11.5sp，上下各 3.5dp 内边距。
+    val weekChipHeight = measureTextHeight(
+        text = weekText,
+        style = MaterialTheme.typography.labelSmall.copy(
+            fontWeight = FontWeight.Bold,
+            fontSize = 11.5.sp
+        )
+    ) + HeroWeekChipPadV * 2 * LocalEffectiveFontScale
+    val termHeight = measureTextHeight(termText, MaterialTheme.typography.labelMedium)
+    // 日期固定单行，档位只改 fontSize；行高由 [heroDateStyle] 按字号给，
+    // 所以量出来的就是这一档真实占的高度。
+    val dateHeight = measureTextHeight(dateText, dateStyle)
+    val metaHeight = measureTextHeight(metaText, MaterialTheme.typography.bodySmall)
+
+    val firstRow = maxOf(weekChipHeight, termHeight)
+    // 卡内**垂直**间距随字号放大（见 [LocalEffectiveFontScale]）：
+    // 字大了、行与行之间就该隔开一点，否则卡里挤成一坨、卡外空得慌。
+    // 基准屏上系数是 1.0 —— 观感一分不变。
+    val gap = LocalEffectiveFontScale
+    // 左列（日期那一列）的高度：周次行 + 间距 + 日期 + 间距 + 副标题。
+    val metaColumnHeight =
+        firstRow + HeroMetaGap * gap + dateHeight + HeroDateMetaGap * gap + metaHeight
+    // 窄屏两段时底下多一条天气条，高度得算进去，否则字压到条上。
+    val stripHeight = if (stacked) heroStripGap() + weatherStripHeight() else 0.dp
+    // 矮屏时主卡按**并排**内容的高度算：天气在右边，不占垂直空间。
+    // 设计那 140dp 是竖排时定的（天气在下面一行）；横屏里它会吃掉半屏。
+    val cardPaddingV = HeroCardPaddingV * gap
+    val needed = if (compact) {
+        cardPaddingV + metaColumnHeight + cardPaddingV
+    } else {
+        cardPaddingV + metaColumnHeight + stripHeight + cardPaddingV
+    }
+    // 矮屏不套 140dp 那个下限：那是竖排时定的，矮屏里它会吃掉半屏。
+    //
+    // 竖排时套的下限是**设计锚点**：设计高度按「主角（日期）比设计稿大了多少倍」放大，
+    // 这样设计留白（140 − 内容 112 = 28dp）跟着字号一起放大，比例才守得住。
+    // 基准屏上日期仍是 22.sp、字号 1.0 → 锚点 140.dp，**观感一分不变**。
+    val designAnchor = cardHeightAnchor(
+        designHeight = HeroCardHeight,
+        designMainSp = HeroDateMaxSpCompact,
+        mainSp = mainSp,
+        effectiveFontScale = LocalEffectiveFontScale
+    )
+    return if (compact) needed else maxOf(designAnchor, needed)
+}
+
 @Composable
 private fun CoursesMiniCard(
     item: CoursesTodoItem,
@@ -859,25 +1464,37 @@ private fun CoursesMiniCard(
         colors = CardDefaults.cardColors(containerColor = Color.Transparent),
         elevation = CardDefaults.cardElevation(0.dp),
         modifier = modifier
-            .width(156.dp)
-            .height(64.dp)
+            // 宽度保持固定：这张卡在 LazyRow 里，横向测量是**无界**的，
+            // 宽度写成 min 时行内的 weight 分不到确定的剩余宽度（标题会被压没）。
+            // 高度则可以长：Row 上挂了 heightIn(min = 64.dp)。
+            //
+            // 但「固定」不等于「不跟字走」：作业名 12.5.sp 在 156.dp 的卡里，
+            // 字号一放大到 150% 名字就装不下（会被 Ellipsis 截掉）。
+            // 所以宽度与高度都按文字放大倍数走（见 [scaledWithText]）——
+            // 它在 LazyRow 里，卡变宽了用户横向滚就是了。
+            .width(156.dp.scaledWithText())
     ) {
         Row(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                // 高度下限挂在这里而不是外面：Row 里的 glassSurface 需要覆盖
+                // 「至少有 64dp」的那块面。不能再用 fillMaxSize —— 外层是
+                // LazyRow，把高度下限写成 min 之后，fillMaxSize 会按 LazyRow
+                // 的可用高度把每张小卡拉满（而不是 64dp）。
+                .heightIn(min = 64.dp.scaledWithText())
                 .glassSurface(
                     shape = RoundedCornerShape(14.dp),
                     tint = cardTint(courseColor, 0.08f),
                     tintAlpha = 0.08f,
                     baseCoatAlpha = contentBase
                 )
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(horizontal = 10.dp, vertical = 8.dp.scaledWithText()),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 左侧课程色细条
             Box(
                 modifier = Modifier
-                    .size(3.5.dp, 36.dp)
+                    .size(3.5.dp, 36.dp.scaledWithText())
                     .clip(RoundedCornerShape(2.dp))
                     .background(accentBarColor(courseColor))
             )
@@ -898,7 +1515,7 @@ private fun CoursesMiniCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(3.dp))
+                Spacer(modifier = Modifier.height(3.dp * LocalEffectiveFontScale))
 
                 // 备注行：DDL（紧急状态突出显示）· 课程名
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1134,6 +1751,15 @@ private fun FeaturedStateChip(
  * lineHeight 逐条写死，行高立刻省出 20dp 上下，教室这一行才塞得进去而
  * 不必把卡继续加高。
  */
+/**
+ * 课程卡的**主角字号**：课名（sp）。
+ *
+ * 这张卡的主角是课名 —— 教室、节次、进度都是配角。高度锚点跟着它走
+ * （见 [cardHeightAnchor]），所以这个数改了，锚点也要跟着改：
+ * 两处写的是同一个常量，不会对不上。
+ */
+private const val CourseCardTitleFontSize = 17f
+
 @Composable
 private fun FeaturedCourseCard(
     course: CourseEntity,
@@ -1178,7 +1804,22 @@ private fun FeaturedCourseCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         modifier = modifier
             .fillMaxWidth()
-            .height(124.dp)
+            // 高度是**下限**：这张卡里叠着状态 chip、课程名、教室、节次、进度五样东西，
+            // 系统字号放大后 124dp 装不下（实测 2.0 时最后一行被裁）。
+            // 基准字号下内容刚好 124dp，观感不变。
+            //
+            // 下限本身是**设计锚点**：它跟着这张卡的主角（课名）放大，
+            // 基准屏上 17sp 的课名占卡高 13.7%，2.0 倍字号下不放大下限就变成 17% ——
+            // 同一张卡在不同字号下长得不一样。
+            // 课名没有档位，主角放大倍数就是字号缩放本身。
+            .heightIn(
+                min = cardHeightAnchor(
+                    designHeight = 124.dp,
+                    designMainSp = CourseCardTitleFontSize,
+                    mainSp = CourseCardTitleFontSize,
+                    effectiveFontScale = LocalEffectiveFontScale
+                )
+            )
     ) {
         Row(
             modifier = Modifier
@@ -1195,7 +1836,11 @@ private fun FeaturedCourseCard(
                     washAlpha = 0.10f,
                     sheenAlpha = 0.12f
                 )
-                .padding(horizontal = 16.dp, vertical = 14.dp),
+                .padding(
+                    horizontal = 16.dp,
+                    // 卡内垂直间距随字号放大（见 [LocalEffectiveFontScale]）。
+                    vertical = 14.dp * LocalEffectiveFontScale
+                ),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 左轨贯通整个内容区。原来只有 56dp，在 112dp 的卡里像半截没画完。
@@ -1221,7 +1866,7 @@ private fun FeaturedCourseCard(
                     Spacer(modifier = Modifier.width(7.dp))
                     Text(
                         text = course.name,
-                        fontSize = 17.sp,
+                        fontSize = CourseCardTitleFontSize.sp,
                         lineHeight = 24.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -1230,7 +1875,7 @@ private fun FeaturedCourseCard(
                         modifier = Modifier.weight(1f, fill = false)
                     )
                 }
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(4.dp * LocalEffectiveFontScale))
                 // 教室：速查项，单独一行。图标跟课程详情弹层用同一个（LocationOn）。
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (room.isNotBlank()) {
@@ -1248,11 +1893,15 @@ private fun FeaturedCourseCard(
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            // 挂 weight(1f, fill=false)：教室名是用户输入的自由文本，
+                            // 系统字号放大后可能比这一行还长。不给约束的话它会
+                            // 画到卡片外面去（不是被截断，是直接溢出到隔壁卡上）。
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(3.dp))
+                Spacer(modifier = Modifier.height(3.dp * LocalEffectiveFontScale))
                 Text(
                     text = "${formatPeriodRange(slot.startPeriod, slot.endPeriod)} ($timeStart-$timeEnd) · ${course.teacher}",
                     style = MiuType.CourseMeta.copy(fontSize = 11.sp),
@@ -1260,7 +1909,7 @@ private fun FeaturedCourseCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(8.dp * LocalEffectiveFontScale))
                 // 底部：时间进度。**轨道只属于「现在」**——
                 // 进度条是「这节课上了百分之多少」的量表，「下一节」还没有百分比可言，
                 // 画一条空轨道只是拿一根没有含义的线占位置。
@@ -1321,7 +1970,10 @@ private fun FeaturedCourseCard(
             )
             Spacer(modifier = Modifier.width(10.dp))
             Column(
-                modifier = Modifier.width(64.dp),
+                // 64dp 是基准字号下「08:00」加左右呼吸的宽度。系统字号放大后
+                // 21sp 的时间会排到 40dp 宽，写死 64dp 只会显示成「08:」——
+                // 实测 2.0 时就是这样。改成下限：装得下仍是 64dp，装不下按内容长。
+                modifier = Modifier.widthIn(min = 64.dp),
                 horizontalAlignment = Alignment.End
             ) {
                 // 标签在上、读数在下：旧版把「开始」压在数字底下，
@@ -1381,7 +2033,10 @@ private fun DashboardSectionHeader(
                 fontSize = titleSize,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
+                // 两行：18sp 的组头文案（「下节课还有 7 小时 52 分 开始」）
+                // 在系统字号 2.0 时一行放不下，单行会截成「下节课还有 7 小时 52 分开…」。
+                // 基准字号下它本来就只占一行，这个上限不改变基准观感。
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
             if (!meta.isNullOrBlank()) {

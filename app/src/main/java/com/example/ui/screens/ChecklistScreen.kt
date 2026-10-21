@@ -48,7 +48,7 @@ import com.example.data.model.CustomTaskType
 import com.example.data.model.TASK_TYPE_NONE
 import com.example.data.model.TaskStar
 import com.example.data.model.TaskTypes
-import com.example.ui.components.IslandBottomInset
+import com.example.ui.components.islandBottomInset
 import com.example.ui.components.NO_DUE_TEXT
 import com.example.ui.components.TaskItemCard
 import com.example.ui.components.parseColor
@@ -659,7 +659,7 @@ fun ChecklistScreen(
                     .weight(1f),
                 verticalArrangement = Arrangement.spacedBy(CardListGap),
                 // 底部给浮岛导航留出收尾空间，内容本身仍会滚到岛底下被毛玻璃糊住
-                contentPadding = PaddingValues(bottom = IslandBottomInset)
+                contentPadding = PaddingValues(bottom = islandBottomInset())
             ) {
                 // 逐行一个 item：视口外的卡片不会被 compose，这才是真正的懒加载。
                 // animateItem 只取位移这一半：折叠时下方已有卡平滑让位、收起时反向收走，

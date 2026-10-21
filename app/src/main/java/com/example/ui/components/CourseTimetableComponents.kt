@@ -725,7 +725,7 @@ fun CourseLinkageSheet(
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(200.dp),
+                        .height(panelScrollMaxHeight(200.dp)),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(linkedTasks, key = { it.id }) { task ->

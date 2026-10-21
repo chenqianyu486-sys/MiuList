@@ -67,6 +67,7 @@ import com.example.data.model.SlotWithWeeks
 import com.example.data.timetable.PeriodTable
 import com.example.data.timetable.WeekSet
 import com.example.ui.theme.LimeGreenOnLight
+import com.example.ui.theme.LocalEffectiveFontScale
 
 val DAYS_OF_WEEK = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
@@ -337,6 +338,11 @@ fun CourseEditDialog(
                                 Spacer(modifier = Modifier.height(6.dp))
 
                                 // Select Day of Week
+                                // 七颗等宽 chip 在 2.0 倍字号下每颗只有 ~48dp，
+                                // 「周一」两个字 + chip 内边距放不下，会折成上下两行。
+                                // 大字号时只留「一」～「日」：上面那行摘要已经写明「周几」，
+                                // 这一排只是选择器，不必每个都重复「周」。
+                                val singleCharWeekday = LocalEffectiveFontScale > 1.6f
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -348,7 +354,12 @@ fun CourseEditDialog(
                                             onClick = {
                                                 slotDrafts[index] = draft.copy(dayOfWeek = dayNum)
                                             },
-                                            label = { Text(dName, fontSize = 10.sp) },
+                                            label = {
+                                                Text(
+                                                    if (singleCharWeekday) dName.removePrefix("周") else dName,
+                                                    fontSize = 10.sp
+                                                )
+                                            },
                                             shape = RoundedCornerShape(10.dp),
                                             colors = micaChipColors(),
                                             border = micaChipBorder(draft.dayOfWeek == dayNum),

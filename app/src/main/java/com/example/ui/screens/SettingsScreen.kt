@@ -51,7 +51,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.components.IslandBottomInset
+import com.example.ui.components.islandBottomInset
 import com.example.ui.theme.CardBlockGap
 import com.example.ui.theme.PageHInset
 import com.example.ui.theme.TextSecondary
@@ -90,7 +90,7 @@ fun SettingsScreen(
             .padding(horizontal = PageHInset),
         verticalArrangement = Arrangement.spacedBy(CardBlockGap),
         // 底部给浮岛导航留出收尾空间，内容本身仍会滚到岛底下被毛玻璃糊住
-        contentPadding = PaddingValues(bottom = IslandBottomInset)
+        contentPadding = PaddingValues(bottom = islandBottomInset())
     ) {
         item {
             Spacer(modifier = Modifier.height(4.dp))

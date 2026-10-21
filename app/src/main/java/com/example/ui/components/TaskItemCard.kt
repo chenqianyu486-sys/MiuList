@@ -48,6 +48,7 @@ import com.example.ui.theme.cardTint
 import com.example.data.calendar.AppZone
 import com.example.ui.theme.glassSurface
 import com.example.ui.theme.readableOn
+import com.example.ui.theme.scaledWithText
 import java.util.Calendar
 
 /**
@@ -170,7 +171,11 @@ fun TaskItemCard(
                     // 已完成的待办压扁一点，别跟没做完的抢注意力
                     faceAlphaScale = if (task.isCompleted) 0.78f else 1f
                 )
-                .padding(horizontal = 13.dp, vertical = 11.dp),
+                .padding(
+                    horizontal = 13.dp,
+                    // 垂直内边距随字号放大：标题放大后，卡里的呼吸也要跟着大。
+                    vertical = 11.dp.scaledWithText()
+                ),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 勾选圈的填色是这门课的粉彩，**比卡面淡**（不透明度 0.15 < 卡片的 0.30），
@@ -183,7 +188,9 @@ fun TaskItemCard(
             )
             Box(
                 modifier = Modifier
-                    .size(32.dp)
+                    // 勾选圈是**固定盒子**：字放大 1.5 倍、圈不变，圈就小得像个句号。
+                    // 所以圈跟字一起放大（见 [scaledWithText]）。
+                    .size(32.dp.scaledWithText())
                     .clip(CircleShape)
                     .clickable { onToggleComplete() }
                     .testTag("task_checkbox_${task.id}"),
@@ -191,7 +198,7 @@ fun TaskItemCard(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(24.dp)
+                        .size(24.dp.scaledWithText())
                         .clip(CircleShape)
                         .background(checkboxBg)
                         .border(
@@ -206,7 +213,7 @@ fun TaskItemCard(
                             imageVector = Icons.Default.Check,
                             contentDescription = "已完成",
                             tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(14.dp)
+                            modifier = Modifier.size(14.dp.scaledWithText())
                         )
                     }
                 }
@@ -228,7 +235,7 @@ fun TaskItemCard(
                     overflow = TextOverflow.Ellipsis
                 )
 
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(4.dp.scaledWithText()))
 
                 // 名称以外的信息全部压在这一行：ddl · 课程名 · 待办类别。
                 // 课程名沿用它自己的深色墨，不再额外加一枚色点：
@@ -277,7 +284,7 @@ fun TaskItemCard(
             TaskStarToggle(
                 isStarred = isStarred,
                 onToggle = onToggleStar,
-                size = 24.dp,
+                size = 24.dp.scaledWithText(),
                 unstarredColor = Color.White.copy(alpha = ControlRimAlpha),
                 unstarredFill = starFill,
                 modifier = Modifier.testTag("task_star_${task.id}")

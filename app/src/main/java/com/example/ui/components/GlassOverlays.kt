@@ -18,15 +18,21 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
@@ -34,13 +40,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,14 +66,21 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import com.example.ui.theme.GlassTintNeutral
+import com.example.ui.theme.LocalEffectiveFontScale
+import com.example.ui.theme.LocalLayoutScale
 import com.example.ui.theme.OverlayHazeState
+import com.example.ui.theme.adaptivePanelPadding
 import com.example.ui.theme.glassSurface
+import com.example.ui.theme.panelSafeArea
+import com.example.ui.theme.rememberContentMaxWidth
+import com.example.ui.theme.scaledWithText
 import kotlinx.coroutines.launch
 
 /** 弹层圆角。原来所有 AlertDialog 都写死 20.dp，页内卡片也是同一档。 */
@@ -249,6 +265,7 @@ fun GlassOverlayHost(
     val coroutineScope = rememberCoroutineScope()
     var isDismissing by remember { mutableStateOf(false) }
     val enterAnimatable = remember { Animatable(0f) }
+    val density = LocalDensity.current
 
     val dismissWithAnimation: () -> Unit = {
         if (!isDismissing) {
@@ -279,6 +296,11 @@ fun GlassOverlayHost(
 
     val currentProgress = enterAnimatable.value.coerceIn(0f, 1f)
     val currentScrimAlpha = scrimAlpha * currentProgress
+    // 面板宽度上限跟着**内容列**走：宽屏上弹层比底下那一列还宽，
+    // 看起来就像弹层不属于这个 App；而内容列本身现在会随窗口放宽
+    // （手机 480dp、平板最高 680dp，见 Responsive.kt）。
+    val contentMaxWidth = rememberContentMaxWidth()
+    val effectiveFontScale = LocalEffectiveFontScale
 
     BoxWithConstraints(
         modifier = modifier
@@ -292,65 +314,149 @@ fun GlassOverlayHost(
             ) { dismissWithAnimation() },
         contentAlignment = alignment,
     ) {
-        Column(
-            modifier = panelModifier
-                .padding(horizontal = horizontalPadding)
-                .padding(bottom = imeCompensation(maxHeight))
-                .widthIn(max = 560.dp)
-                .heightIn(max = maxHeight - 32.dp)
-                .graphicsLayer {
-                    alpha = currentProgress
-                    val scale = 0.92f + 0.08f * currentProgress
-                    scaleX = scale
-                    scaleY = scale
-                }
-                .glassOverlaySurface(shape)
-                // 面板根吃掉点击，否则点面板的空白会当成「点外面」把弹层关掉。
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) {}
-                .selectableGroup()
-                .padding(24.dp),
+        // 弹层面板只在**安全区**内排布。
+        //
+        // 之前 maxHeight 直接取整屏高度、面板垂直居中，于是高弹层（教务同步、
+        // 课程编辑这些表单长的）会一头钻进状态栏、一头压住导航栏。异形屏上
+        // 刘海/挖孔正好落在那儿，标题被系统图标压住，底部按钮被导航条切掉。
+        //
+        // 现在把面板整体放进安全区（状态栏 + 导航栏 + 刘海/挖孔 + 键盘），
+        // 并用**安全区后的可用高度**作为上限。
+        val safeInsets = panelSafeArea
+        val layoutDirection = LocalLayoutDirection.current
+        val safeTopPx = safeInsets.getTop(density)
+        val safeBottomPx = safeInsets.getBottom(density)
+        // 左右两侧要按布局方向取：RTL 下 getLeft 会变成右边。
+        val safeLeftPx = safeInsets.getLeft(density, layoutDirection)
+        val safeRightPx = safeInsets.getRight(density, layoutDirection)
+        val safeTop = with(density) { safeTopPx.toDp() }
+        val safeBottom = with(density) { safeBottomPx.toDp() }
+        val safeLeft = with(density) { safeLeftPx.toDp() }
+        val safeRight = with(density) { safeRightPx.toDp() }
+        // 可用高度 = 整屏 - 上下安全区，再留 32dp 呼吸。
+        val availableHeight =
+            (maxHeight - safeTop - safeBottom - 32.dp).coerceAtLeast(0.dp)
+        // 屏幕宽度在**外层**取：内层 Box 拿不到 BoxWithConstraints 的 scope。
+        val screenWidth = maxWidth
+        // 面板左右留白：基准屏 40dp；窄屏按屏宽收；
+        // **大字号时再收到 16dp**——40dp 在系统字号 2.0 时会把 411dp 的屏
+        // 压成 331dp 的面板，标题、按钮全被挤成两三行。
+        // 调用点显式给了更小值的（长表单那三个）仍然照它自己的来。
+        val horizontalMargin =
+            if (effectiveFontScale > 1.3f) {
+                minOf(horizontalPadding, 16.dp)
+            } else {
+                minOf(horizontalPadding, adaptivePanelPadding(screenWidth))
+            }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(start = safeLeft, end = safeRight, top = safeTop, bottom = safeBottom),
+            contentAlignment = alignment
         ) {
-            title?.let {
-                Box(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)) { it() }
-            }
-            text?.let {
-                Box(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) { it() }
-            }
-            belowContent?.let {
-                Box(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { it() }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
+            // 把「这块面板还剩多少高度」告诉内容区：
+            // 弹层里那些**写死高度**的可滚动区（课程详情的关联待办列表、
+            // 快速生成的预览、导入预览）要按它封顶 ——
+            // 写死的 dp 在大字号下装不下放大的内容，在矮屏上又白占一截。
+            CompositionLocalProvider(LocalPanelAvailableHeight provides availableHeight) {
+            Column(
+                modifier = panelModifier
+                    .padding(horizontal = horizontalMargin)
+                    // 面板宽度上限跟着**内容列**走（见上面的 contentMaxWidth）：
+                    // 宽屏上弹层比底下那一列还宽，看起来就像弹层不属于这个 App。
+                    .widthIn(max = contentMaxWidth)
+                    .heightIn(max = availableHeight)
+                    .graphicsLayer {
+                        alpha = currentProgress
+                        val scale = 0.92f + 0.08f * currentProgress
+                        scaleX = scale
+                        scaleY = scale
+                    }
+                    .glassOverlaySurface(shape)
+                    // 面板根吃掉点击，否则点面板的空白会当成「点外面」把弹层关掉。
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) {}
+                    .selectableGroup()
+                    .padding(24.dp),
             ) {
-                dismissButton?.invoke()
-                confirmButton()
+                title?.let {
+                    Box(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)) { it() }
+                }
+                text?.let {
+                    // 文本区**按内容高度占位**（fill = false）：
+                    //
+                    // - 内容短时面板跟着收，不留一大片空白（周次选择这种三行弹层
+                    //   以前会被撑到整屏高，按钮孤零零贴在底部）；
+                    // - 内容长时会被约束在剩余高度内，由内层的 verticalScroll 滚动，
+                    //   按钮行始终在面板底部可见（这一条各表单弹层自己保证）。
+                    //
+                    // 直接写死 `fill = true` 会把「始终占满」和「按钮不被裁」
+                    // 当成同一件事：前者其实只是让短内容的面板变高，不良观感。
+                    Box(modifier = Modifier.fillMaxWidth().weight(1f, fill = false)) { it() }
+                }
+                belowContent?.let {
+                    Box(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { it() }
+                }
+                // 按钮行：大字号时**竖排**。
+                //
+                // 横排时两个按钮各自按内容宽度量，字号 2.0 下「修改账号/学期」
+                // 与「清除已存凭据」加起来超过面板宽，于是各自在按钮内部折成
+                // 两三行（实测截图）。竖排让每个按钮独占一行、文字不折，
+                // 顺序仍是「取消/次要 → 确认/主要」，和横排时从左到右一致。
+                if (effectiveFontScale > 1.3f) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        dismissButton?.invoke()
+                        confirmButton()
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        dismissButton?.invoke()
+                        confirmButton()
+                    }
+                }
+            }
             }
         }
     }
 }
 
 /**
- * 键盘顶起的高度，**只在窗口没被系统收缩过时才补**。
+ * 当前弹层面板的**可用高度**（dp）。
  *
- * 这一段是 Dialog 换成 overlay 之后最容易埋雷的地方：Compose 的 `imePadding()` 无条件
- * 加上 IME inset，但 Activity 若还是 `adjustResize`，窗口已经先被系统缩过一次了，
- * 两笔一起加，弹层会被顶出屏幕顶部（而且是「越高越离谱」，因为 inset 是固定的）。
+ * 弹层里那些「写死高度的可滚动区」要按它封顶：
+ * 写死的 dp 在大字号下装不下放大的内容，在矮屏上又会白占一截。
  *
- * 所以改成先量：这个 overlay 的高度明显小于屏幕高度，就说明系统已经 resize 过了，
- * 这时 `maxHeight` 本身就是可见区，补 0；否则才用 IME inset 顶上去。
- * 判据用 24.dp 容差，避开状态栏/导航栏那点零头。
+ * 不在弹层里时是 [Dp.Unspecified] —— 调用方按「没有上限」处理。
+ */
+val LocalPanelAvailableHeight: ProvidableCompositionLocal<Dp> =
+    staticCompositionLocalOf { Dp.Unspecified }
+
+/**
+ * 弹层内**可滚动区**的高度上限：跟着字号放大，但不许超过面板的可用高度。
+ *
+ * ## 为什么两个都要
+ *
+ * 只按字号放大：矮屏上这块区会顶出面板（面板自己会裁，裁掉的就是内容）。
+ * 只按可用高度：大字号时字变高了、框没变，条目被挤得只剩半行。
+ *
+ * @param designHeight 基准字号下这块区的高度（dp）。
  */
 @Composable
-private fun imeCompensation(overlayHeight: Dp): Dp {
-    val density = LocalDensity.current
-    val screenHeight = with(LocalConfiguration.current) { screenHeightDp.dp }
-    if (overlayHeight < screenHeight - 24.dp) return 0.dp
-    return with(density) { WindowInsets.ime.getBottom(this).toDp() }
+fun panelScrollMaxHeight(designHeight: Dp): Dp {
+    val scaled = designHeight.scaledWithText()
+    val panel = LocalPanelAvailableHeight.current
+    return if (panel == Dp.Unspecified) scaled else minOf(scaled, panel)
 }
 
 /**
@@ -382,7 +488,14 @@ fun GlassBottomSheetHost(
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
-    val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+    // 屏幕高度要**物理**像素，不能拿缩放后的 density 去换算：
+    // `screenHeightDp` 是物理 dp，而 density 现在带着版式缩放系数（窄屏 0.82），
+    // 直接 `.dp.toPx()` 会得到「物理高度 × 系数」——比真实屏幕高一截，
+    // 于是首帧起始位置偏低、拖拽阈值（屏高的 28%）也跟着偏。
+    //
+    // 物理密度 = 现在的 density ÷ 版式缩放系数。
+    val layoutScale = LocalLayoutScale.current
+    val screenHeightPx = configuration.screenHeightDp * (density.density / layoutScale)
 
     // 弹层高度（像素），测量完成后更新
     var sheetHeightPx by remember { mutableFloatStateOf(0f) }
@@ -514,7 +627,14 @@ fun GlassBottomSheetHost(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .navigationBarsPadding()
+                // 底部弹层原来只避让导航栏。异形屏横过来时，刘海/挖孔在**左右两侧**，
+                // 导航栏 inset 管不到那儿，弹层的内容会压在挖孔下面。
+                // 改用完整安全区：底部仍是导航栏，左右补上挖孔。
+                .windowInsetsPadding(
+                    WindowInsets.navigationBars
+                        .union(WindowInsets.displayCutout)
+                        .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
+                )
                 .onGloballyPositioned { coordinates ->
                     if (coordinates.size.height > 0) {
                         sheetHeightPx = coordinates.size.height.toFloat()

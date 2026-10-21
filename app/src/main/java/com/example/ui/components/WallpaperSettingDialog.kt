@@ -428,7 +428,9 @@ private fun WallpaperLivePreviewCard(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(128.dp)
+            // 高度是下限：128dp 是按基准字号定的，系统字号 2.0 时
+            // 预览卡里那两行字要更高的空间，写死高度会把第二行裁掉（实测截图）。
+            .heightIn(min = 128.dp)
             .clip(RoundedCornerShape(14.dp))
             .border(
                 width = 1.dp,
@@ -446,7 +448,9 @@ private fun WallpaperLivePreviewCard(
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
-                        .fillMaxSize()
+                        // matchParentSize 不参与父级测量：背景图跟着**内容**定出来的
+                        // 卡片高度走，而不是反过来把卡片撑到父级最大高度。
+                        .matchParentSize()
                         .then(
                             if (config.softFocus > 0.01f) Modifier.blur(previewBlur)
                             else Modifier
@@ -458,7 +462,7 @@ private fun WallpaperLivePreviewCard(
                     painter = painterResource(WallpaperPresets.getResOrDefault(config.presetId)),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.matchParentSize()
                 )
             }
             else -> {
@@ -466,7 +470,7 @@ private fun WallpaperLivePreviewCard(
                     painter = painterResource(DefaultWallpaperRes),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.matchParentSize()
                 )
             }
         }
@@ -475,7 +479,7 @@ private fun WallpaperLivePreviewCard(
         if (config.dimOpacity > 0f) {
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .matchParentSize()
                     .background(Color.White.copy(alpha = config.dimOpacity.coerceIn(0f, 0.6f)))
             )
         }

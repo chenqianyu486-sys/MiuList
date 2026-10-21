@@ -100,12 +100,18 @@ const val ALL_DAY_DONE_TEXT = "课都上完啦，休息一下吧~"
  * 多久开始」，而不是继续显示「还有 0 分下课」。
  *
  * [now] 是绝对时刻，与时区无关；和课表钟点的对齐由 [AppZone] 负责。
+ *
+ * @param compact 大字号下的短句。长句「下节课还有 7 小时 49 分 开始」在系统字号
+ *   2.0 时放不进一行，会断在「开 / 始」之间，最后一个字单独占一行。
+ *   短句「距下节课 7 小时 49 分」少四个字，411dp 屏上能收回一行。
+ *   默认 false：基准字号与所有既有测试文案保持不变。
  */
 fun todayStatusLabel(
     date: java.util.Calendar,
     slots: List<com.example.data.local.CourseSlotEntity>,
     now: Long,
-    periodTable: com.example.data.timetable.PeriodTable
+    periodTable: com.example.data.timetable.PeriodTable,
+    compact: Boolean = false
 ): String {
     val windows = slots.mapNotNull { slot ->
         val start = periodStartMillis(date, slot, periodTable)
@@ -118,7 +124,13 @@ fun todayStatusLabel(
         ?.let { (_, end) -> return "还有 ${formatRemaining(end - now)} 下课" }
 
     windows.firstOrNull { (start, _) -> start > now }
-        ?.let { (start, _) -> return "下节课还有 ${formatRemaining(start - now)} 开始" }
+        ?.let { (start, _) ->
+            return if (compact) {
+                "距下节课 ${formatRemaining(start - now)}"
+            } else {
+                "下节课还有 ${formatRemaining(start - now)} 开始"
+            }
+        }
 
     return ALL_DAY_DONE_TEXT
 }

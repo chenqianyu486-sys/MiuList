@@ -284,7 +284,7 @@ private fun PreviewBlock(preview: ImportPreview, issues: List<ImportIssue>) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(max = 260.dp)
+            .heightIn(max = panelScrollMaxHeight(260.dp))
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {

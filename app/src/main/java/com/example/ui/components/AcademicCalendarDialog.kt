@@ -57,6 +57,7 @@ import com.example.data.timetable.PeriodDraft
 import com.example.data.timetable.PeriodTable
 import com.example.data.timetable.resizePeriodDrafts
 import com.example.data.timetable.toDrafts
+import com.example.ui.theme.LocalEffectiveFontScale
 
 /**
  * 本学期校历：**官方校历**与**你自己的校历**分开摆。
@@ -173,6 +174,11 @@ fun AcademicCalendarDialog(
         "第 1 周 = ${EpochDays.formatCn(firstMonday)} – ${EpochDays.formatCn(firstMonday + 6)}"
     } else null
 
+    // 表单可视高度上限：460dp 是按基准字号定的。系统字号 2.0 时同样的字段要高出一倍，
+    // 死守 460dp 会让表单被截在一个半截的位置、下面留一大片空白（实测截图）。
+    // 上限跟着字号放大，最终仍由弹层安全区后的可用高度兜住。
+    val formMaxHeight = panelScrollMaxHeight(460.dp)
+
     GlassOverlayHost(
         onDismissRequest = onDismiss,
         shape = GlassDialogShape,
@@ -187,7 +193,7 @@ fun AcademicCalendarDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 460.dp)
+                    .heightIn(max = formMaxHeight)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -282,26 +288,53 @@ fun AcademicCalendarDialog(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedButton(
-                                onClick = onCheckUpdate,
-                                enabled = !isCheckingUpdate,
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(10.dp)
+                        // 两个按钮：大字号时竖排，否则各拿一半。
+                        // 横排时「应用到本机校历」在 2.0 字号下会在半宽里折成两行，
+                        // 竖排后每个按钮独占一行。
+                        if (LocalEffectiveFontScale > 1.3f) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text(
-                                    if (isCheckingUpdate) "检查中…" else "检查更新",
-                                    fontSize = 12.sp
-                                )
+                                OutlinedButton(
+                                    onClick = onCheckUpdate,
+                                    enabled = !isCheckingUpdate,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Text(
+                                        if (isCheckingUpdate) "检查中…" else "检查更新",
+                                        fontSize = 12.sp
+                                    )
+                                }
+                                OutlinedButton(
+                                    onClick = onPreviewDiff,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) { Text("应用到本机校历", fontSize = 12.sp) }
                             }
-                            // 「应用到本机校历」不直接写库：它走差异预览。
-                            // 直接一键全量替换过一次，用户自己敲的停课会被无声抹掉。
-                            Spacer(modifier = Modifier.width(8.dp))
-                            OutlinedButton(
-                                onClick = onPreviewDiff,
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(10.dp)
-                            ) { Text("应用到本机校历", fontSize = 12.sp) }
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedButton(
+                                    onClick = onCheckUpdate,
+                                    enabled = !isCheckingUpdate,
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Text(
+                                        if (isCheckingUpdate) "检查中…" else "检查更新",
+                                        fontSize = 12.sp
+                                    )
+                                }
+                                // 「应用到本机校历」不直接写库：它走差异预览。
+                                // 直接一键全量替换过一次，用户自己敲的停课会被无声抹掉。
+                                Spacer(modifier = Modifier.width(8.dp))
+                                OutlinedButton(
+                                    onClick = onPreviewDiff,
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) { Text("应用到本机校历", fontSize = 12.sp) }
+                            }
                         }
 
                         // 拉到新版才出现。**只提示不自动应用** —— 校历一变就悄悄
@@ -806,7 +839,9 @@ private fun PeriodDraftRow(
         Text(
             text = "第${draft.period}节",
             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
-            modifier = Modifier.width(44.dp),
+            // 下限 44dp、不设上限：两位数节次在系统字号 2.0 时会超过 44dp，
+            // 写死宽度会把它截成「第1…」。基准字号下仍按 44dp 对齐。
+            modifier = Modifier.widthIn(min = 44.dp),
             textAlign = TextAlign.Start
         )
         OutlinedTextField(

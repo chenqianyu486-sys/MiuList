@@ -4,8 +4,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 
 /**
  * 总览页这一版设计定的字阶与表面常量。
@@ -32,11 +34,37 @@ object MiuType {
         fontWeight = FontWeight.Medium
     )
 
-    /** 主卡上的日期读数。 */
+    /**
+     * 主卡上的日期**读数**（13sp）。
+     *
+     * ⚠️ 当前主卡的日期走的是 [HeroDateLarge]，不是这个。
+     * V3 定稿要的是 22sp 大号日期（见下），这个 13sp 是当初设计层
+     * 给「日期是读数」那版留的档位。
+     *
+     * **别因为它小就拿它去改主卡**：V1/V2 把日期改小被用户否过，
+     * 「日期天气栏要回原样」。窄屏上放不下时的正确做法是
+     * [heroDateFontSize] 逐档降，而不是换成这个固定的小字号。
+     */
     val HeroDate = TextStyle(
         fontSize = 13.sp,
         lineHeight = 18.sp,
         fontWeight = FontWeight.SemiBold
+    )
+
+    /**
+     * 主卡上的**大号日期**（V3 定稿：日期天气栏回原版，22sp）。
+     *
+     * 这是「回原版」的结果，不是随手定的：V1/V2 曾把日期改小，被否，
+     * 用户要的是「日期天气栏回原样」。所以基准宽屏上它就是 22sp。
+     *
+     * 窄屏上 22sp 放不下（见 [heroDateFontSize]），那不是推翻定稿，
+     * 而是定稿在更窄的屏上**放不下**——取舍仍然是「保留 22sp 的观感」优先。
+     */
+    val HeroDateLarge = TextStyle(
+        fontSize = 22.sp,
+        lineHeight = 28.sp,
+        fontWeight = FontWeight.ExtraBold,
+        letterSpacing = (-0.3).sp
     )
 
     /** 分区标题。比正文重一档，但不再用 18sp 去和主卡抢。 */
@@ -85,6 +113,40 @@ object MiuType {
         fontWeight = FontWeight.Normal
     )
 }
+
+/**
+ * 主卡日期的样式：字号按可用宽选，行高跟着字号走。
+ *
+ * ## 为什么行高要跟着字号走，而不是固定 28.sp
+ *
+ * [MiuType.HeroDateLarge] 的行高 28.sp 是配 22.sp 定的。宽屏上日期放到 26.sp，
+ * 而中文回退字体的 ascent + descent 大约是 1.16em —— 26.sp 的字实际要 30.sp 高，
+ * **行盒只有 28.sp 时上下会被裁掉**（字顶和字底各差 1.sp）。
+ *
+ * 所以行高按字号的比例算（[HeroDateLineHeightRatio] = 28 / 22 ≈ 1.27），
+ * 22.sp 时正好还是 28.sp —— **基准屏的观感一分不变**。
+ *
+ * ## 为什么行高比例是 1.27 而不是 1.16
+ *
+ * 1.16 是字形自己的高度；1.27 是**行盒**——行盒要比字形高一点，
+ * 才放得下同一行里不同字号的混排（数字是拉丁字形，基线与 CJK 不同）。
+ * 22.sp × 1.27 = 27.9 ≈ 28.sp，和原来那个数对得上。
+ */
+const val HeroDateLineHeightRatio = 1.27f
+
+/**
+ * 主卡日期的样式。
+ *
+ * @param fontSize 字号（sp）。由 [heroDateFontSize] 按左列可用宽选出来。
+ */
+fun heroDateStyle(fontSize: TextUnit): TextStyle = MiuType.HeroDateLarge.copy(
+    fontSize = fontSize,
+    // 行高按字号比例算，但要**取整到 sp**：
+    // 22 × 1.27 = 27.94，不取整的话基准屏的行盒是 27.94sp 而不是 28.sp ——
+    // 差 0.06sp，肉眼看不见，但「基准屏一分不变」这句话就不成立了。
+    // 取整后 22.sp → 28.sp（和改版前一模一样），26.sp → 33.sp。
+    lineHeight = (fontSize.value * HeroDateLineHeightRatio).roundToInt().sp
+)
 
 /**
  * 形状常量。不做深色模式，也不按壁纸亮度自动切换；

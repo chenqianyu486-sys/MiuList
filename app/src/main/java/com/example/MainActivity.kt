@@ -25,12 +25,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import com.example.ui.theme.topSafeArea
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -83,6 +85,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.di.AppContainer
 import com.example.ui.theme.LocalGlassHazeState
+import com.example.ui.theme.measureTextHeight
+import com.example.ui.theme.rememberContentMaxWidth
 import com.example.ui.theme.LocalCardRevealProgress
 import com.example.ui.theme.LocalWallpaperIsCustom
 import com.example.ui.components.AcademicCalendarDialog
@@ -93,7 +97,7 @@ import com.example.ui.components.CourseEditDialog
 import com.example.ui.components.CourseLinkageSheet
 import com.example.ui.components.DeleteCourseConfirmDialog
 import com.example.ui.components.FloatingIslandNav
-import com.example.ui.components.IslandBottomInset
+import com.example.ui.components.islandBottomInset
 import com.example.ui.components.MoreDrawer
 import com.example.ui.components.DeleteTaskTypeConfirmDialog
 import com.example.ui.components.NewTaskTypeDialog
@@ -121,6 +125,7 @@ import com.example.ui.theme.TopBarHeight
 import com.example.ui.theme.controlSurface
 import com.example.ui.theme.rememberCardRevealProgress
 import com.example.ui.theme.pageChangeSpec
+import com.example.ui.theme.scaledWithText
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.MainViewModelFactory
 import com.example.ui.viewmodel.NavigationTab
@@ -203,49 +208,66 @@ private fun TopBarStrip(
     // 整行是一个落点：左边学期名、右边下拉箭头都只是这一行的视觉组成。
     // 单独再给箭头挂一个 clickable 就会在一行里出现两个含义相同的落点，
     // 用户会先点箭头、发现没反应、再点整行——和卡片「只留一个落点」的约定一致。
+    val contentMaxWidth = rememberContentMaxWidth()
     Row(
         modifier = Modifier
+            // 限宽 + 居中：顶栏跟着下面那一列内容对齐，宽屏上不会一个标题在
+            // 屏幕最左、两个按钮在最右，中间空出半屏。
+            .widthIn(max = contentMaxWidth)
             .fillMaxWidth()
-            .statusBarsPadding()
-            .height(TopBarHeight)
+            .windowInsetsPadding(topSafeArea)
+            // 高度是**下限**不是定值：系统字号放大后学期名那行会变高，
+            // 写死 40dp 会把字的上下裁掉。基准屏（14sp）仍只有 40dp，
+            // 观感一分不变；大字号时这一行跟着字长。
+            .heightIn(min = TopBarHeight.scaledWithText())
             .padding(horizontal = PageHInset)
             .clip(RoundedCornerShape(10.dp))
             .clickable { onOpenMoreMenu() }
             .testTag("topbar_more_menu_button"),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 学期名。**纯文本，不带 chip 底色也不描边**：它是一个读数，不是一个按钮。
-        // 右边那两个动作是圆角色块（有底色 = 可点），一旦学期名也套一层底色，
-        // 这一行里就出现了三个长得一样的东西，读起来分不清哪个能点。
-        // 去掉底色之后字号要跟着提上来——11.5.sp 配 chip 才够读，
-        // 纯文本同一个字号会缩成一行小字。
-        Text(
-            text = termName,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            // 未配置校历时学期名是空的：这时用次级墨色，让它读起来像
-            // 「还没填的信息」而不是一个真的学期名。
-            color = if (termConfigured) {
-                MaterialTheme.colorScheme.onSurface
-            } else {
-                TextSecondary
-            },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        Spacer(modifier = Modifier.width(3.dp))
+        // 学期名 + 下拉箭头合成一个**占剩余宽度**的标题组。
+        //
+        // 之前两者是顶栏 Row 的直接子项、都没有 weight：学期名按内容宽度量，
+        // 系统字号 2.0 + 320dp 屏时它把整行吃满，右边两个动作被挤到屏幕外
+        // （实测只剩一小条绿色）。标题组拿 weight(1f) 之后，动作先占固定宽度，
+        // 剩下多少才是学期名的，超出就省略号——两个常驻动作永远在拇指侧。
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 学期名。**纯文本，不带 chip 底色也不描边**：它是一个读数，不是一个按钮。
+            // 右边那两个动作是圆角色块（有底色 = 可点），一旦学期名也套一层底色，
+            // 这一行里就出现了三个长得一样的东西，读起来分不清哪个能点。
+            // 去掉底色之后字号要跟着提上来——11.5.sp 配 chip 才够读，
+            // 纯文本同一个字号会缩成一行小字。
+            Text(
+                text = termName,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                // 未配置校历时学期名是空的：这时用次级墨色，让它读起来像
+                // 「还没填的信息」而不是一个真的学期名。
+                color = if (termConfigured) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    TextSecondary
+                },
+                modifier = Modifier.weight(1f, fill = false),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.width(3.dp))
 
-        // 下拉箭头紧跟在文字后面而不是顶到行尾：它是这个标题的「可展开」记号，
-        // 离远了就成了另一个独立的控件。它自己不可点（整行才是落点），
-        // contentDescription 走 null —— 读屏念的是整行的语义，多念一遍是噪音。
-        Icon(
-            imageVector = Icons.Outlined.KeyboardArrowDown,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(19.dp)
-        )
-
-        Spacer(modifier = Modifier.weight(1f))
+            // 下拉箭头紧跟在文字后面而不是顶到行尾：它是这个标题的「可展开」记号，
+            // 离远了就成了另一个独立的控件。它自己不可点（整行才是落点），
+            // contentDescription 走 null —— 读屏念的是整行的语义，多念一遍是噪音。
+            Icon(
+                imageVector = Icons.Outlined.KeyboardArrowDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(19.dp.scaledWithText())
+            )
+        }
 
         // 两个常驻动作。顺序是「生成 → 搜索」：搜索是最高频的读操作，放最右（拇指侧）；
         // 生成是低频的写操作，紧挨着它。两个都不给文字标签——顶栏只有 40.dp，
@@ -260,7 +282,7 @@ private fun TopBarStrip(
             onClick = onGenerateWeekTasks,
             containerColor = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary,
-            iconSize = 18.dp,
+            iconSize = 18.dp.scaledWithText(),
             testTag = "topbar_generate_tasks_button",
             accent = true
         )
@@ -268,15 +290,14 @@ private fun TopBarStrip(
         Spacer(modifier = Modifier.width(4.dp))
 
         // 搜索入口：常驻，点它会先跳到清单页再展开搜索（见 MainApp 的 onOpenSearch）。
-        // 学期名那组不占 weight（按内容宽度排，箭头才能紧跟文字），
-        // 全部剩余空间推给这一个 Spacer，两个图标就永远在最右边。
+        // 标题组占满剩余宽度，两个图标就永远贴在最右边。
         TopBarAction(
             icon = Icons.Outlined.Search,
             contentDescription = "搜索待办",
             onClick = onOpenSearch,
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
             contentColor = MaterialTheme.colorScheme.onSurface,
-            iconSize = 19.dp,
+            iconSize = 19.dp.scaledWithText(),
             testTag = "topbar_search_button"
         )
     }
@@ -310,11 +331,14 @@ private fun SearchFieldStrip(
         keyboard?.show()
     }
 
+    val contentMaxWidth = rememberContentMaxWidth()
     Row(
         modifier = Modifier
+            .widthIn(max = contentMaxWidth)
             .fillMaxWidth()
-            .statusBarsPadding()
-            .height(TopBarHeight)
+            .windowInsetsPadding(topSafeArea)
+            // 同 TopBarStrip：高度是下限，系统字号放大时这一行跟着字长。
+            .heightIn(min = TopBarHeight.scaledWithText())
             .padding(horizontal = PageHInset)
             .testTag("topbar_search_strip"),
         verticalAlignment = Alignment.CenterVertically
@@ -323,7 +347,7 @@ private fun SearchFieldStrip(
         // minimumInteractiveComponentSize 不看父级高度，40.dp 的行里会溢出）。
         Box(
             modifier = Modifier
-                .size(TopBarActionSize)
+                .size(TopBarActionSize.scaledWithText())
                 .clip(RoundedCornerShape(10.dp))
                 .clickable {
                     keyboard?.hide()
@@ -336,27 +360,36 @@ private fun SearchFieldStrip(
                 imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
                 contentDescription = "收起搜索",
                 tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(19.dp)
+                modifier = Modifier.size(19.dp.scaledWithText())
             )
         }
 
         Spacer(modifier = Modifier.width(6.dp))
 
         val shape = RoundedCornerShape(10.dp)
+        val inputTextStyle = TextStyle(
+            fontSize = 13.5.sp,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        // 输入框高度**量出来**，不用 `heightIn(min)`：后者只有下限、没有上限，
+        // 而 BasicTextField 的 decorationBox 是 fillMaxSize —— 在顶栏这种
+        // 「父级高度由内容决定」的地方，没有上限等于让它铺满整屏
+        // （实测：搜索框从顶栏一路长到屏幕底部，把页面挤没了）。
+        val inputHeight = maxOf(
+            32.dp,
+            measureTextHeight("搜索课程或待办", inputTextStyle) + 12.dp
+        )
         BasicTextField(
             value = query,
             onValueChange = onQueryChange,
             singleLine = true,
-            textStyle = TextStyle(
-                fontSize = 13.5.sp,
-                color = MaterialTheme.colorScheme.onSurface
-            ),
+            textStyle = inputTextStyle,
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
             modifier = Modifier
                 .weight(1f)
-                .height(32.dp)
+                .height(inputHeight)
                 .clip(shape)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .focusRequester(focusRequester)
@@ -404,7 +437,7 @@ private fun SearchFieldStrip(
                                 Icons.Outlined.Close,
                                 contentDescription = "清除搜索",
                                 tint = TextSecondary,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(16.dp.scaledWithText())
                             )
                         }
                     }
@@ -438,7 +471,7 @@ private fun TopBarAction(
 ) {
     Box(
         modifier = Modifier
-            .size(TopBarActionSize)
+            .size(TopBarActionSize.scaledWithText())
             .controlSurface(
                 shape = RoundedCornerShape(10.dp),
                 color = containerColor,
@@ -524,6 +557,9 @@ fun MainApp(viewModel: MainViewModel) {
     // 用的是进程级的 [OverlayHazeState] 而不是 remember 一个新的：弹层在独立窗口里，
     // 拿不到这里挂的 CompositionLocal，源和效果必须指着同一个实例才接得上。
     val hazeState = OverlayHazeState
+    // 内容列最大宽度随窗口变化：手机 480dp 封顶，平板 / 折叠屏展开后
+    // 按 82% 屏宽放宽到 680dp（见 Responsive.kt 的 contentMaxWidthFor）。
+    val contentMaxWidth = rememberContentMaxWidth()
 
     AppBackgroundLayer(wallpaperConfig = state.wallpaperConfig) {
         CompositionLocalProvider(LocalGlassHazeState provides hazeState) {
@@ -539,7 +575,7 @@ fun MainApp(viewModel: MainViewModel) {
             // 顶栏直接压在照片上，深色/花壁纸里学期名会消失。
             // 固定铺一层很浅的白色渐隐（不是深色模式，也不随壁纸切换），
             // 让文本在任何照片上都有最低限度的承托。
-            Box(modifier = Modifier.fillMaxWidth()) {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
                 if (LocalWallpaperIsCustom.current) {
                     Box(
                         modifier = Modifier
@@ -583,7 +619,7 @@ fun MainApp(viewModel: MainViewModel) {
             //
             // 这里刻意不给底部留 92dp：内容要能滚到浮岛导航底下去，
             // 浮岛才真的是毛玻璃，而不是浮在一片空背景上。
-            // 收尾靠各页滚动容器自己的 contentPadding（IslandBottomInset）。
+            // 收尾靠各页滚动容器自己的 contentPadding（islandBottomInset）。
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -591,7 +627,10 @@ fun MainApp(viewModel: MainViewModel) {
                     // 页面底（默认壁纸）由外层 AppBackgroundLayer 提供：
                     // 它自己也挂了一份 hazeSource，把壁纸录进模糊源，
                     // 否则浮岛底下那片壁纸在源层里是空的，会被兜底色填出一圈脏边。
-                    .hazeSource(hazeState)
+                    .hazeSource(hazeState),
+                // 宽屏上内容收进一个居中的内容列（宽度随窗口变化，见 rememberContentMaxWidth）：
+                // 不收的话主卡会在 800dp 屏上被拉出 600dp 的空洞。
+                contentAlignment = Alignment.TopCenter
             ) {
             if (state.isLoading) {
                 Box(
@@ -609,6 +648,11 @@ fun MainApp(viewModel: MainViewModel) {
                     targetState = state.currentTab,
                     transitionSpec = { pageChangeSpec() },
                     modifier = Modifier
+                        // 宽度上限在**外层**、fillMaxSize 在内层：
+                        // widthIn 先把约束的 maxWidth 收到内容列宽，
+                        // fillMaxSize 再按这个收窄后的 max 把页面铺满。
+                        // 顺序反了的话 fillMaxSize 会先按整屏宽铺开，限宽就不起作用了。
+                        .widthIn(max = contentMaxWidth)
                         .fillMaxSize()
                         .clipToBounds(),
                     label = "tab_screen_transition"
@@ -699,29 +743,49 @@ fun MainApp(viewModel: MainViewModel) {
 
             // FAB 抬到浮岛之上，别和岛叠在一起
             val fabVisible = !moreDrawerVisible && (state.currentTab == NavigationTab.CHECKLIST || state.currentTab == NavigationTab.SCHEDULE)
-            AnimatedVisibility(
-                visible = fabVisible,
-                enter = fadeIn(tween(150, easing = LinearOutSlowInEasing)) + scaleIn(initialScale = 0.82f, animationSpec = tween(150, easing = LinearOutSlowInEasing)),
-                exit = fadeOut(tween(100, easing = FastOutLinearInEasing)) + scaleOut(targetScale = 0.82f, animationSpec = tween(100, easing = FastOutLinearInEasing)),
+            // FAB 贴在**内容列**的右下角，不是整屏的右下角：
+            // 宽屏上内容收进居中的内容列，FAB 却还贴着屏幕右边，就飘到内容之外去了。
+            //
+            // 外层这里必须用 BottomCenter：内层是一个限宽后的 Box，
+            // 外层若写 BottomEnd，会把那个 Box 整个推到屏幕右边，
+            // 里面再 BottomEnd 也只是「屏幕右边缘再右移 24dp」——实测 800dp 屏上
+            // FAB 就是这么飘到内容列外面去的。外层居中、内层靠右，才是列内右下角。
+            Box(
                 modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .navigationBarsPadding()
-                    // 底部跟着 IslandBottomInset 走，别写死数字：
-                    // 岛一改高度，这里写死的值就会悄悄和岛错开。
-                    .padding(end = 24.dp, bottom = IslandBottomInset)
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.BottomCenter
             ) {
-                FloatingActionButton(
-                    onClick = { viewModel.openAddTaskDialog() },
-                    shape = RoundedCornerShape(20.dp),
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(
-                        defaultElevation = 6.dp,
-                        pressedElevation = 10.dp
-                    ),
-                    modifier = Modifier.testTag("fab_add_task")
+                Box(
+                    modifier = Modifier
+                        .widthIn(max = contentMaxWidth)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.BottomEnd
                 ) {
-                    Icon(imageVector = Icons.Outlined.Add, contentDescription = "添加待办")
+                    AnimatedVisibility(
+                        visible = fabVisible,
+                        enter = fadeIn(tween(150, easing = LinearOutSlowInEasing)) + scaleIn(initialScale = 0.82f, animationSpec = tween(150, easing = LinearOutSlowInEasing)),
+                        exit = fadeOut(tween(100, easing = FastOutLinearInEasing)) + scaleOut(targetScale = 0.82f, animationSpec = tween(100, easing = FastOutLinearInEasing)),
+                        modifier = Modifier
+                            .navigationBarsPadding()
+                            // 底部跟着 islandBottomInset 走，别写死数字：
+                            // 岛一改高度，这里写死的值就会悄悄和岛错开。
+                            .padding(end = 24.dp, bottom = islandBottomInset())
+                    ) {
+                        FloatingActionButton(
+                            onClick = { viewModel.openAddTaskDialog() },
+                            shape = RoundedCornerShape(20.dp),
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                            elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(
+                                defaultElevation = 6.dp,
+                                pressedElevation = 10.dp
+                            ),
+                            modifier = Modifier.testTag("fab_add_task")
+                        ) {
+                            Icon(imageVector = Icons.Outlined.Add, contentDescription = "添加待办")
+                        }
+                    }
                 }
             }
         }
@@ -1071,10 +1135,18 @@ fun MainApp(viewModel: MainViewModel) {
             )
         }
 
-        // 贴底 + 让开导航栏，和它在 Scaffold 里时占的位置一致。
+        // 贴底 + 让开导航栏和浮岛导航。
+        //
+        // 原来只避让了导航栏，浮岛导航（总览/课表/清单）就压在 Snackbar 上面：
+        // 窄屏上 Snackbar 那一行正好被浮岛盖住，文字读不出来（实测截图里
+        // 「第 6 周作业与实验报告，预习取至第 7 周末…」被浮岛切成两半）。
+        // 浮岛是 64dp 高 + 上下 14dp 留白，这里用 [islandBottomInset] 让开整块。
         SnackbarHost(
             snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = islandBottomInset())
+                .navigationBarsPadding()
         )
     }
 }

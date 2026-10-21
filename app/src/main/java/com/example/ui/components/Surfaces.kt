@@ -1,4 +1,4 @@
-package com.example.ui.components
+﻿package com.example.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -10,7 +10,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.size
@@ -49,6 +55,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -58,8 +65,12 @@ import com.example.ui.theme.LimeGreenPrimary
 import com.example.ui.theme.GlassEdgeBottom
 import com.example.ui.theme.GlassIslandShape
 import com.example.ui.theme.GlassTintNeutral
+import com.example.ui.theme.LocalEffectiveFontScale
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.glassSurface
+import com.example.ui.theme.measureTextHeight
+import com.example.ui.theme.rememberIsShortWindow
+import com.example.ui.theme.scaledWithText
 import com.example.ui.viewmodel.NavigationTab
 
 /**
@@ -192,13 +203,71 @@ private const val IslandNoiseFactor = 0.045f
  * 所有滚动容器都要拿它当 contentPadding 的底部内边距：内容因此能从浮岛底下滚过去
  * （好让浮岛的毛玻璃真的能糊到东西），滚到底时最后一项又正好停在岛的上方。
  *
- * = 外侧上下各 14dp + 岛高 64dp + 8dp 余量。岛高一改这里就得跟着改，
- * 否则最后一项会埋进岛里，或者和岛之间空出一截。
+ * = 外侧上下各 14dp + 岛高 + 8dp 余量。**岛高会随字号长高**（见 [islandHeight]），
+ * 所以这里不是常量而是一个函数：岛一长，占位跟着长，否则最后一项会埋进岛里。
  */
-val IslandBottomInset = 100.dp
+@Composable
+fun islandBottomInset(): Dp =
+    IslandOuterPadV.scaledWithText() * 2 + islandHeight() + IslandBottomSlack
 
 /** 浮岛本体高度，不含外侧 14dp 的上下留白。 */
 private val IslandHeight = 64.dp
+
+/** 浮岛外侧的上下留白。 */
+private val IslandOuterPadV = 14.dp
+
+/** 浮岛底部多留的余量。 */
+private val IslandBottomSlack = 8.dp
+
+/** 浮岛本体的内边距（上下）。 */
+private val IslandInnerPadV = 4.dp
+
+/** 浮岛入口的内边距（上下）。 */
+private val IslandEntryPadV = 6.dp
+
+/** 图标与标签之间的间距。 */
+private val IslandIconLabelGap = 3.dp
+
+/** 浮岛入口里标签的字号。 */
+private val IslandLabelFontSize = 11.5.sp
+
+/**
+ * 浮岛实际高度：**装得下就是 64dp，装不下就按内容长高**。
+ *
+ * ## 矮屏（横屏 / 分屏窄条）时改用纯图标版
+ *
+ * 矮屏上高度是最贵的资源：顶栏 40dp + 浮岛 92dp + 主卡 110dp 已经吃掉 242dp，
+ * 剩下的留给列表就不多了。浮岛那三个文字标签（「总览 / 课表 / 清单」）在矮屏上
+ * 是**冗余信息**——图标已经够表意，文字反而把岛撑高、把宽度也占了。
+ *
+ * 所以矮屏时：标签不画、入口变窄（72dp → 48dp）、岛身高 64dp → 48dp，
+ * 底部让位从 100dp 降到 84dp。**省下来的 16dp 全给内容。**
+ */
+@Composable
+fun islandHeight(): Dp {
+    val short = rememberIsShortWindow()
+    // 岛里的间距与图标都跟着字放大：字大了，岛里的呼吸与图形也要跟着大，
+    // 否则标签变成一堵墙、图标缩成一个小点。
+    // 岛高本身是**内容驱动**的（下面那个 needed），所以这些一放大，岛自然就长高。
+    val gap = LocalEffectiveFontScale
+    // 矮屏不画标签，也就没有标签行高与它上面的间距。
+    val labelBlock = if (short) {
+        0.dp
+    } else {
+        IslandIconLabelGap * gap + measureTextHeight(
+            text = "总览",
+            style = TextStyle(fontSize = IslandLabelFontSize, fontWeight = FontWeight.Medium)
+        )
+    }
+    val needed = IslandInnerPadV * gap * 2 +
+        IslandEntryPadV * gap * 2 +
+        IslandIconSize.scaledWithText() +
+        labelBlock
+    return maxOf(if (short) IslandHeightShort else IslandHeight, needed)
+}
+
+/** 矮屏时浮岛只留图标，这一档的最小高度。 */
+private val IslandHeightShort = 48.dp
 
 /** 浮岛入口的图标尺寸。 */
 private val IslandIconSize = 22.dp
@@ -210,6 +279,19 @@ private val IslandIconSize = 22.dp
  * 72dp 配 64dp 岛高，比例协调舒展，触摸更舒适稳妥。
  */
 private val IslandEntryMinWidth = 72.dp
+
+/**
+ * 矮屏时单个入口的宽度：只放图标，够点就行。
+ *
+ * 48dp 仍高于 Material 的 44dp 建议下限（浮岛本身在缩放后还要更小，
+ * 见 [MinContentScale]：矮屏常常也是窄屏）。
+ */
+private val IslandEntryMinWidthShort = 48.dp
+
+/** 入口宽度：矮屏用窄版（只留图标），否则用带文字的宽版。 */
+@Composable
+private fun islandEntryMinWidth(): Dp =
+    if (rememberIsShortWindow()) IslandEntryMinWidthShort else IslandEntryMinWidth
 
 /**
  * 浮岛两端最左、右侧边距（水平内边距）。
@@ -269,7 +351,9 @@ fun FloatingIslandNav(
     }
 
     val density = LocalDensity.current
-    val stepDistance = IslandEntryMinWidth + IslandEntryGap
+    // 矮屏（横屏 / 分屏窄条）时入口变窄：只留图标，宽度也省下来。
+    val entryWidth = islandEntryMinWidth()
+    val stepDistance = entryWidth + IslandEntryGap
     val targetOffsetPx = with(density) {
         if (selectedIndex >= 0) (stepDistance * selectedIndex).toPx() else 0f
     }
@@ -287,8 +371,12 @@ fun FloatingIslandNav(
     Box(
         modifier = modifier
             .testTag("floating_island_nav")
-            .navigationBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 14.dp)
+            .windowInsetsPadding(
+                    WindowInsets.navigationBars
+                        .union(WindowInsets.displayCutout)
+                        .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
+                )
+            .padding(horizontal = 20.dp, vertical = IslandOuterPadV)
             .glassSurface(
                 shape = GlassIslandShape,
                 blurRadius = IslandBlurRadius,
@@ -302,8 +390,8 @@ fun FloatingIslandNav(
                 indication = null,
                 interactionSource = remember { MutableInteractionSource() }
             ) {}
-            .height(IslandHeight)
-            .padding(horizontal = IslandHorizontalPadding, vertical = 4.dp),
+            .height(islandHeight())
+            .padding(horizontal = IslandHorizontalPadding, vertical = IslandInnerPadV),
         contentAlignment = Alignment.CenterStart
     ) {
         // 1. 底层高亮平移滑块：严格在 RenderNode Draw 阶段平移，不触发组件 Relayout，轻盈丝滑无拖影
@@ -313,7 +401,7 @@ fun FloatingIslandNav(
                     .graphicsLayer {
                         translationX = indicatorOffsetPx
                     }
-                    .width(IslandEntryMinWidth)
+                    .width(entryWidth)
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(20.dp))
                     .background(LimeGreenPrimary)
@@ -328,7 +416,7 @@ fun FloatingIslandNav(
         ) {
             IslandEntry(
                 modifier = Modifier
-                    .width(IslandEntryMinWidth)
+                    .width(entryWidth)
                     .fillMaxHeight(),
                 label = "总览",
                 icon = Icons.Outlined.Dashboard,
@@ -339,7 +427,7 @@ fun FloatingIslandNav(
             )
             IslandEntry(
                 modifier = Modifier
-                    .width(IslandEntryMinWidth)
+                    .width(entryWidth)
                     .fillMaxHeight(),
                 label = "课表",
                 icon = Icons.Outlined.CalendarMonth,
@@ -350,7 +438,7 @@ fun FloatingIslandNav(
             )
             IslandEntry(
                 modifier = Modifier
-                    .width(IslandEntryMinWidth)
+                    .width(entryWidth)
                     .fillMaxHeight(),
                 label = "清单",
                 icon = Icons.Outlined.Checklist,
@@ -383,12 +471,16 @@ private fun IslandEntry(
         label = "island_entry_content"
     )
 
+    // 矮屏只留图标：标签是冗余信息（图标已经够表意），
+    // 而矮屏上高度是最贵的资源 —— 省下的都给了正文。
+    val showLabel = !rememberIsShortWindow()
+
     Column(
         modifier = modifier
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
             .clip(RoundedCornerShape(20.dp))
             .clickable { onClick() }
-            .padding(vertical = 6.dp),
+            .padding(vertical = IslandEntryPadV),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -396,14 +488,16 @@ private fun IslandEntry(
             imageVector = if (selected) selectedIcon else icon,
             contentDescription = label,
             tint = contentColor,
-            modifier = Modifier.size(IslandIconSize)
+            modifier = Modifier.size(IslandIconSize.scaledWithText())
         )
-        Spacer(modifier = Modifier.height(3.dp))
-        Text(
-            text = label,
-            fontSize = 11.5.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            color = contentColor
-        )
+        if (showLabel) {
+            Spacer(modifier = Modifier.height(IslandIconLabelGap))
+            Text(
+                text = label,
+                fontSize = IslandLabelFontSize,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                color = contentColor
+            )
+        }
     }
 }

@@ -174,22 +174,25 @@ ksp {
 //
 // 端口从环境变量取，与 ~/.gradle/init.d/proxy.gradle 同源；不写死是因为
 // 本地代理端口会在会话之间漂移。没配代理的机器上直接跳过，不影响离线测试。
+//
+// **为什么不是 doFirst**：doFirst 的闭包捕获了这段脚本里的引用（proxyUrl 等），
+// 而 `org.gradle.configuration-cache=true` 不允许序列化脚本对象引用 ——
+// 于是 `gradlew test` 会直接失败在「配置缓存」这一步，而不是跑测试。
+// systemProperty 本来就是任务的普通属性，配置期设好即可，语义完全一样。
 tasks.withType<Test>().configureEach {
-  doFirst {
-    systemProperty("miulist.liveNet", liveNetFlag)
-    val proxyUrl = System.getenv("https_proxy")
-      ?: System.getenv("HTTPS_PROXY")
-      ?: System.getenv("http_proxy")
-      ?: System.getenv("HTTP_PROXY")
-    val uri = proxyUrl?.let { runCatching { URI(it) }.getOrNull() }
-    if (uri != null && uri.host != null && uri.port > 0) {
-      systemProperty("http.proxyHost", uri.host)
-      systemProperty("http.proxyPort", uri.port.toString())
-      systemProperty("https.proxyHost", uri.host)
-      systemProperty("https.proxyPort", uri.port.toString())
-      // 本机回环别走代理，Robolectric / localhost mock 会挂在这上面。
-      systemProperty("http.nonProxyHosts", "localhost|127.0.0.1|10.0.2.2")
-      logger.lifecycle("[test-proxy] ${name} -> ${uri.host}:${uri.port}")
-    }
+  systemProperty("miulist.liveNet", liveNetFlag)
+  val proxyUrl = System.getenv("https_proxy")
+    ?: System.getenv("HTTPS_PROXY")
+    ?: System.getenv("http_proxy")
+    ?: System.getenv("HTTP_PROXY")
+  val uri = proxyUrl?.let { runCatching { URI(it) }.getOrNull() }
+  if (uri != null && uri.host != null && uri.port > 0) {
+    systemProperty("http.proxyHost", uri.host)
+    systemProperty("http.proxyPort", uri.port.toString())
+    systemProperty("https.proxyHost", uri.host)
+    systemProperty("https.proxyPort", uri.port.toString())
+    // 本机回环别走代理，Robolectric / localhost mock 会挂在这上面。
+    systemProperty("http.nonProxyHosts", "localhost|127.0.0.1|10.0.2.2")
+    logger.lifecycle("[test-proxy] ${name} -> ${uri.host}:${uri.port}")
   }
 }

@@ -3,7 +3,11 @@ package com.example.ui.theme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 
 // MiuList Theme：默认壁纸底 + 抹茶绿强调 + 粉彩染色卡片
 //
@@ -57,9 +61,25 @@ fun MyApplicationTheme(
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    MaterialTheme(
-        colorScheme = LightColorScheme,
-        typography = Typography,
-        content = content
-    )
+    // 整体缩放：屏宽窄于 411dp（设计基准）时，**字号与版式用同一个系数**收缩，
+    // 见 Responsive.kt。
+    //
+    // 两个数必须一起提供：密度给排版用（dp 与 sp 都带着缩放），
+    // 系数给 [LocalLayoutScale]（内容里靠它把物理宽换算成排版宽）。
+    // 只提供密度的话，内容里就没有办法知道「排版里到底有多宽」——
+    // 而按宽度做决策的地方全都需要这个数。
+    val base = LocalDensity.current
+    val configuration = LocalConfiguration.current
+    val contentScale = rememberContentScale(base, configuration.screenWidthDp)
+
+    CompositionLocalProvider(
+        LocalDensity provides contentScale.density,
+        LocalLayoutScale provides contentScale.layoutScale,
+    ) {
+        MaterialTheme(
+            colorScheme = LightColorScheme,
+            typography = Typography,
+            content = content
+        )
+    }
 }

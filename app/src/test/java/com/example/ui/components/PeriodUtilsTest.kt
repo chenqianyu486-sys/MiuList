@@ -86,6 +86,27 @@ class PeriodUtilsTest {
         assertEquals("还有 1 小时 下课", status)
     }
 
+    /**
+     * 大字号下的短句：同样的时刻、更少的字。
+     *
+     * 这不是换文案，是**同一件事的紧凑写法**。长句 15 个字在系统字号 2.0 时
+     * 会断成「…开 / 始」两行，最后一个字单独占一行；短句 11 个字能收回一行。
+     * 默认文案不变，只有 `compact = true` 才走这条。
+     */
+    @Test
+    fun `todayStatusLabel compact 文案更短且信息不丢`() {
+        val cal = makeCalendar()
+        val slots = listOf(
+            CourseSlotEntity(id = 1, courseId = 100, dayOfWeek = 4, startPeriod = 1, endPeriod = 2)
+        )
+        val now = timeAt(cal, 7, 30)
+        val status = todayStatusLabel(cal, slots, now, periodTable, compact = true)
+        assertEquals("距下节课 30 分", status)
+        // 正在上课 / 已上完两档不受影响。
+        val during = todayStatusLabel(cal, slots, timeAt(cal, 8, 35), periodTable, compact = true)
+        assertEquals("还有 1 小时 下课", during)
+    }
+
     @Test
     fun `todayStatusLabel returns 下节课还有 when between courses`() {
         val cal = makeCalendar()

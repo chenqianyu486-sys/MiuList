@@ -19,11 +19,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import com.example.ui.theme.topSafeArea
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -68,6 +75,7 @@ import com.example.ui.theme.PageHInset
 import com.example.ui.theme.TextTertiary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.glassSurface
+import com.example.ui.theme.rememberContentMaxWidth
 import com.example.ui.viewmodel.MainUiState
 
 /**
@@ -161,15 +169,24 @@ fun MoreDrawer(
                 ) {}
                 .testTag("more_drawer")
         ) {
+            // 抽屉的**内容**收进一个居中的内容列（宽度随窗口变化；宽屏上标题在左、
+            // 关闭键在右，中间空出半屏就没法看了）。面板本身仍铺满整屏 —— 它是盖在页面上的
+            // 一层毛玻璃，铺一半反而露出底下的页面。
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.TopCenter
+            ) {
+            val contentMaxWidth = rememberContentMaxWidth()
             LazyColumn(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .widthIn(max = contentMaxWidth)
+                    .fillMaxWidth()
                     .padding(horizontal = PageHInset),
                 contentPadding = PaddingValues(bottom = 24.dp)
             ) {
                 item {
                     Column {
-                        Spacer(modifier = Modifier.statusBarsPadding().height(4.dp))
+                        Spacer(modifier = Modifier.windowInsetsPadding(topSafeArea).height(4.dp))
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -344,8 +361,18 @@ fun MoreDrawer(
                         onClick = onOpenSettings
                     )
 
-                    Spacer(modifier = Modifier.navigationBarsPadding().height(8.dp))
+                    // 底部避让：导航栏 + 刘海/挖孔（异形屏横过来时挖孔在两侧）。
+                    Spacer(
+                        modifier = Modifier
+                            .windowInsetsPadding(
+                                WindowInsets.navigationBars
+                                    .union(WindowInsets.displayCutout)
+                                    .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
+                            )
+                            .height(8.dp)
+                    )
                 }
+            }
             }
         }
     }

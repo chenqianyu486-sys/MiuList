@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -35,10 +36,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.CategoryRule
+import com.example.ui.theme.measureTextSize
 
 @Composable
 fun WeekPickerDialog(
@@ -78,68 +81,93 @@ fun WeekPickerDialog(
             }
         },
         text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text(
-                    text = "课表与待办会同步更新：",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            // 周次格子每行几列，由**实际可用宽度**决定，不写死 4 列。
+            //
+            // 写死 4 列时，系统字号 2.0 下每格只有 ~78dp，而「第10周」要 ~96dp，
+            // 于是「第10周」被折成两行（实测截图），整块网格高低不齐。
+            // 现在按最宽的那个标签（第 N 周）量出每格最小宽度，再算这一行放得下几列；
+            // 基准字号下仍然是 4 列，观感不变。
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val weekLabelStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                val widestWeekLabel = measureTextSize(
+                    "第${totalWeeks.coerceAtLeast(1)}周",
+                    weekLabelStyle
+                ).width
+                val gridGap = 6.dp
+                // 左右各留 6dp 呼吸，避免文字贴着格子的圆角边。
+                val minCellWidth = widestWeekLabel + 12.dp
+                val columns = (
+                    (maxWidth + gridGap) / (minCellWidth + gridGap)
+                ).toInt().coerceIn(2, 4)
 
-                (1..totalWeeks.coerceAtLeast(1)).chunked(4).forEach { rowWeeks ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        rowWeeks.forEach { w ->
-                            val isSelected = selectedWeek == w
-                            val isCurrent = w == currentWeek
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "课表与待办会同步更新：",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
-                            // 本周附淡绿色（primaryContainer 为主题极淡抹茶绿）
-                            val backgroundColor = when {
-                                isCurrent -> MaterialTheme.colorScheme.primaryContainer
-                                isSelected -> MaterialTheme.colorScheme.surfaceVariant
-                                else -> MaterialTheme.colorScheme.surface
-                            }
-                            val borderColor = when {
-                                isSelected -> MaterialTheme.colorScheme.onPrimaryContainer
-                                isCurrent -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                                else -> MaterialTheme.colorScheme.outline
-                            }
-                            val textColor = when {
-                                isCurrent -> MaterialTheme.colorScheme.onPrimaryContainer
-                                isSelected -> MaterialTheme.colorScheme.onSurface
-                                else -> MaterialTheme.colorScheme.onSurface
-                            }
-                            val textWeight = if (isSelected || isCurrent) FontWeight.Bold else FontWeight.Medium
+                    (1..totalWeeks.coerceAtLeast(1)).chunked(columns).forEach { rowWeeks ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(gridGap)
+                        ) {
+                            rowWeeks.forEach { w ->
+                                val isSelected = selectedWeek == w
+                                val isCurrent = w == currentWeek
 
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(backgroundColor)
-                                    .border(
-                                        if (isSelected) 1.5.dp else 1.dp,
-                                        borderColor,
-                                        RoundedCornerShape(8.dp)
+                                // 本周附淡绿色（primaryContainer 为主题极淡抹茶绿）
+                                val backgroundColor = when {
+                                    isCurrent -> MaterialTheme.colorScheme.primaryContainer
+                                    isSelected -> MaterialTheme.colorScheme.surfaceVariant
+                                    else -> MaterialTheme.colorScheme.surface
+                                }
+                                val borderColor = when {
+                                    isSelected -> MaterialTheme.colorScheme.onPrimaryContainer
+                                    isCurrent -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                                    else -> MaterialTheme.colorScheme.outline
+                                }
+                                val textColor = when {
+                                    isCurrent -> MaterialTheme.colorScheme.onPrimaryContainer
+                                    isSelected -> MaterialTheme.colorScheme.onSurface
+                                    else -> MaterialTheme.colorScheme.onSurface
+                                }
+                                val textWeight = if (isSelected || isCurrent) FontWeight.Bold else FontWeight.Medium
+
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(backgroundColor)
+                                        .border(
+                                            if (isSelected) 1.5.dp else 1.dp,
+                                            borderColor,
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                        .clickable {
+                                            onSelectWeek(w)
+                                            onDismiss()
+                                        }
+                                        .padding(horizontal = 4.dp, vertical = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "第${w}周",
+                                        fontSize = 12.sp,
+                                        fontWeight = textWeight,
+                                        color = textColor
                                     )
-                                    .clickable {
-                                        onSelectWeek(w)
-                                        onDismiss()
-                                    }
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "第${w}周",
-                                    fontSize = 12.sp,
-                                    fontWeight = textWeight,
-                                    color = textColor
-                                )
+                                }
+                            }
+                            // 最后一行不足 columns 个时补等宽空位，
+                            // 否则剩下的格子会被拉宽，和上面几行对不齐。
+                            repeat(columns - rowWeeks.size) {
+                                Spacer(modifier = Modifier.weight(1f))
                             }
                         }
                     }

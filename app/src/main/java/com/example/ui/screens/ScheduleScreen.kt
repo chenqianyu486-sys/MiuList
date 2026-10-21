@@ -54,12 +54,17 @@ import androidx.compose.ui.graphics.Color
 import com.example.ui.theme.cardRevealAt
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import com.example.ui.theme.measureTextHeight
+import com.example.ui.theme.measureTextSize
 import dev.chrisbanes.haze.HazeDefaults
 import dev.chrisbanes.haze.hazeEffect
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.CourseEntity
@@ -67,7 +72,7 @@ import com.example.data.local.CourseSlotEntity
 import com.example.data.local.CourseWithSlots
 import com.example.data.local.TaskEntity
 import com.example.ui.components.CourseTimetableCell
-import com.example.ui.components.IslandBottomInset
+import com.example.ui.components.islandBottomInset
 import com.example.ui.components.epochDayOf
 import com.example.ui.components.formatPeriodRange
 import com.example.ui.components.todayCalendar
@@ -92,6 +97,7 @@ import com.example.ui.theme.asGridLine
 import com.example.ui.theme.LimeGreenOnPrimary
 import com.example.ui.theme.LimeGreenPrimary
 import com.example.ui.theme.LocalGlassHazeState
+import com.example.ui.theme.LocalEffectiveFontScale
 import com.example.ui.theme.TeaColor
 import com.example.ui.theme.TeaColorBorder
 import com.example.ui.theme.TextSecondary
@@ -102,6 +108,8 @@ import com.example.ui.theme.LocalCardRevealProgress
 import com.example.ui.theme.deepEnoughForWhite
 import com.example.ui.theme.pageChangeSpec
 import com.example.ui.theme.rememberCardRevealProgress
+import com.example.ui.theme.rememberCappedFontDensity
+import com.example.ui.theme.TimetableMaxFontScale
 import com.example.ui.viewmodel.MainUiState
 import com.example.ui.viewmodel.ScheduleViewMode
 import java.time.ZoneId
@@ -128,6 +136,9 @@ fun ScheduleScreen(
         // 视图切换（周课表 / 列表）。「生成本周待办」原来和它并排放在这一行，
         // 现在已经上顶栏成了常驻图标（AutoAwesome）：它是跨页面的全局操作，
         // 不属于课表页这一屏，挂在页内等于只有翻到课表页才找得到。
+        // 分段控件的段宽随字号长：76dp 是按 11.5sp 定的，系统字号 2.0 时
+        // 「周课表」四个字 + 图标要 88dp，写死 76dp 会把「表」字整个裁掉。
+        val segmentWidth = scheduleTabSegmentWidth()
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -137,13 +148,15 @@ fun ScheduleScreen(
         ) {
             // Flat Segmented Control (扁平化：外层平涂浅底，选中块滑进去，不描边)
             FlatSegmentedRow(
-                selectedIndex = if (state.scheduleViewMode == ScheduleViewMode.WEEK_GRID) 0 else 1
+                selectedIndex = if (state.scheduleViewMode == ScheduleViewMode.WEEK_GRID) 0 else 1,
+                segmentWidth = segmentWidth
             ) {
                 FlatSegment(
                     label = "周课表",
                     icon = Icons.Outlined.ViewWeek,
                     selected = state.scheduleViewMode == ScheduleViewMode.WEEK_GRID,
                     onClick = { onSelectViewMode(ScheduleViewMode.WEEK_GRID) },
+                    segmentWidth = segmentWidth,
                     testTag = "schedule_tab_week_grid"
                 )
                 FlatSegment(
@@ -151,6 +164,7 @@ fun ScheduleScreen(
                     icon = Icons.Outlined.ViewDay,
                     selected = state.scheduleViewMode == ScheduleViewMode.DAY_TIMELINE,
                     onClick = { onSelectViewMode(ScheduleViewMode.DAY_TIMELINE) },
+                    segmentWidth = segmentWidth,
                     testTag = "schedule_tab_day_timeline"
                 )
             }
@@ -230,7 +244,9 @@ fun ScheduleScreen(
 }
 
 /**
- * 分段控件里每一档的宽度。**两档必须等宽**，这不是排版偏好，是动画的前提：
+ * 分段控件里每一档的**最小**宽度。实际宽度见 [scheduleTabSegmentWidth]。
+ *
+ * **两档必须等宽**，这不是排版偏好，是动画的前提：
  * 选中块靠一块会滑动的背景指示器表示位置，位移 = 段宽 × 序号。
  * 早先两档按内容自适应（「周课表」比「列表」宽）、各自画自己的背景，
  * 那样「一格消失、另一格出现」读起来像刷新；改成滑动指示器后位移必须有个固定步长，
@@ -238,11 +254,51 @@ fun ScheduleScreen(
  *
  * 76.dp 的来历：11.5.sp 的「周课表」约 34.dp + 图标 15.dp + 4.dp 间距 = 53.dp，
  * 剩下的 23.dp 作为居中文字两侧的呼吸；换成有文字标签的版本时也不会挤。
+ * 这是**基准字号**下的下限；系统字号放大后由 [scheduleTabSegmentWidth] 往上放宽。
  */
 private val ScheduleTabSegmentWidth = 76.dp
 
 /** 外框高度。含 3.dp 内边距，选中块（指示器）实际高 24.dp。 */
 private val ScheduleTabHeight = 30.dp
+
+/**
+ * 分段控件每一档的实际宽度：基准 76dp，字号放大后按文字宽长。
+ *
+ * 只加高度不加宽度是这个控件上一版漏掉的半边：1.5 倍字号时高度按文字量出来了，
+ * 但「周课表」四个字 + 图标已经要 ~71dp，加上两侧呼吸超过 76dp —— 实测 2.0 时
+ * 只剩「周课」两个字，绿块右边那一半文字被裁掉。
+ *
+ * 宽度 = 最宽那个标签 + 图标 15dp + 间距 4dp + 两侧各 11dp 呼吸。
+ * 两档仍然取**同一个**宽度（取最大值），滑动指示器的步长才继续成立。
+ */
+@Composable
+private fun scheduleTabSegmentWidth(): Dp {
+    val style = TextStyle(fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+    val labelWidth = maxOf(
+        measureTextSize("周课表", style).width,
+        measureTextSize("列表", style).width
+    )
+    return maxOf(ScheduleTabSegmentWidth, labelWidth + 15.dp + 4.dp + 22.dp)
+}
+
+/**
+ * 分段控件外框实际高度：**装得下就是 30dp，装不下就按文字长高**。
+ *
+ * 段里那行 11.5.sp 的中文，行高约 1.5em（比拉丁字体大得多）。系统字号 1.5 时
+ * 这一行就有 26dp 高，而选中块的内高只有 30 − 3×2 = 24dp —— 文字下半截被切掉
+ * （实测截图：「周课表」的下沿平齐着绿块的底边）。
+ *
+ * 这里实测文字高度再定外框高（见 [measureTextSize]），不拿字号乘系数估。
+ * 字号 1.0（基准屏）时 30dp 够用，**基准屏的观感一分不变**。
+ */
+@Composable
+private fun scheduleTabHeight(): Dp {
+    val labelHeight = measureTextHeight(
+        text = "周课表",
+        style = TextStyle(fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+    )
+    return maxOf(ScheduleTabHeight, labelHeight + ScheduleTabInset * 2)
+}
 
 /** 外框内边距，同时也是两档之间的视觉缝宽：选中块要正好贴满整块高度，不留白边。 */
 private val ScheduleTabInset = 3.dp
@@ -273,6 +329,7 @@ private const val ScheduleTabAnimMs = 220
 @Composable
 private fun FlatSegmentedRow(
     selectedIndex: Int,
+    segmentWidth: Dp,
     modifier: Modifier = Modifier,
     content: @Composable RowScope.() -> Unit
 ) {
@@ -280,15 +337,15 @@ private fun FlatSegmentedRow(
     // 也不需要在切换时读布局去反推每档的实际位置。
     val indicatorOffset by animateDpAsState(
         targetValue = if (selectedIndex == 0) 0.dp
-        else ScheduleTabSegmentWidth + ScheduleTabInset,
+        else segmentWidth + ScheduleTabInset,
         animationSpec = tween(ScheduleTabAnimMs, easing = FastOutSlowInEasing),
         label = "schedule_tab_indicator"
     )
     Box(
         modifier = modifier
             // 3 = 左右内边距（2）+ 两档之间的缝（1）
-            .width(ScheduleTabSegmentWidth * 2 + ScheduleTabInset * 3)
-            .height(ScheduleTabHeight)
+            .width(segmentWidth * 2 + ScheduleTabInset * 3)
+            .height(scheduleTabHeight())
             .controlSurface(
                 shape = RoundedCornerShape(10.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant
@@ -301,7 +358,7 @@ private fun FlatSegmentedRow(
         Box(
             modifier = Modifier
                 .offset(x = indicatorOffset)
-                .width(ScheduleTabSegmentWidth)
+                .width(segmentWidth)
                 .fillMaxHeight()
                 .controlSurface(
                     shape = RoundedCornerShape(8.dp),
@@ -331,6 +388,7 @@ private fun FlatSegment(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
+    segmentWidth: Dp,
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     testTag: String? = null
@@ -346,7 +404,8 @@ private fun FlatSegment(
     Box(
         modifier = modifier
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
-            .width(ScheduleTabSegmentWidth)
+            // 段宽由外层统一量出来（两档等宽），这里不再写死。
+            .width(segmentWidth)
             .clip(RoundedCornerShape(8.dp))
             .clickable { onClick() },
         contentAlignment = Alignment.Center
@@ -476,6 +535,20 @@ private val ConflictColumnGap = 2.dp
 private val PeriodRowHeight = 48.dp
 
 /**
+ * 网格内字号**封顶**在 [TimetableMaxFontScale]（1.3），行高要跟**封顶后**的字号长。
+ *
+ * ## 为什么不能跟未封顶的字号长
+ *
+ * 系统字号 2.0 时，格子里的字只长到 1.3（封顶），而行高若按 2.0 长，
+ * 就会白白多出一截空行 —— 表比一屏还高，格子却还是那么挤。
+ * 封顶的语义是「这块控件在大字号下不再跟着放大」，**版式也要跟着它一起封顶**。
+ *
+ * @param effectiveFontScale 页面当前的**有效**字号缩放（未封顶）。
+ */
+internal fun gridFontScaleOf(effectiveFontScale: Float): Float =
+    minOf(effectiveFontScale, TimetableMaxFontScale)
+
+/**
  * 周课表表头每一列（周一~周日）的高度。
  *
  * 单行文字 + 一个小图标，32.dp 就够。早先试过两行（「周五 10/16」+ 文字徽标），
@@ -503,6 +576,29 @@ private val HolidayWatermarkSize = 28.dp
  * 否则七个星期块会整体右移，压不到对应的日列上。
  */
 private val PeriodRulerWidth = 20.dp
+
+/**
+ * 节次刻度列实际宽度：**装得下就是 20dp，装不下就按数字宽度长宽**。
+ *
+ * 两位数（10~13）在 8.5.sp 下约 9.5dp，加上右侧 7dp 留白正好是 20dp。
+ * 系统字号放大后数字跟着变宽：1.5 倍时两位数要 14.4dp，加留白 21.4dp > 20dp，
+ * 于是「10」「11」「12」被切成「1」（实测截图）。
+ *
+ * 两处细节：
+ * - 量的是 **1~13 里最宽的那一个**，不是拿「13」代表 —— 各数字的字宽并不完全相同，
+ *   只量一个会漏掉更宽的那个；
+ * - 额外留 1dp 余量。量出来的宽度正好卡在边界上时，渲染会差一两个像素，
+ *   末位数字就被整个丢掉（只剩「1」），而这一列的右边还空着 7dp 留白，
+ *   多要这 1dp 没有任何视觉代价。
+ *
+ * 字号 1.0（基准屏）时 20dp 够用，**基准屏的观感一分不变**。
+ */
+@Composable
+private fun periodRulerWidth(): Dp {
+    val style = TextStyle(fontSize = 8.5.sp, fontWeight = FontWeight.SemiBold)
+    val widest = (1..13).map { measureTextSize("$it", style).width }.max()
+    return maxOf(PeriodRulerWidth, widest + 7.dp + 1.dp)
+}
 
 /**
  * 周次条：第几周 + 日期区间 + 这一周的放假 / 补课概况。
@@ -642,7 +738,7 @@ private fun WeekDayHeaderCell(
     Row(
         modifier = modifier
             .padding(horizontal = 2.dp)
-            .height(WeekHeaderHeight)
+            .height(WeekHeaderHeight * LocalEffectiveFontScale)
             // 主题绿只做填充，上面必须是深色前景（Color.kt 的全局约定）：
             // 这次只把「填充」换成半透明玻璃面，前景色一个字都没动。
             .controlSurface(
@@ -746,7 +842,9 @@ fun WeekTimetableGrid13(
     // 进程级实例）。取 Local 是因为弹层在独立窗口里拿不到它——这里正好相反，
     // 课表就在页面内，走 Local 才和源层指着同一个实例。
     val hazeState = LocalGlassHazeState.current
-    val periodHeight = PeriodRowHeight
+    // 行高跟**封顶后**的字号走（见 [gridFontScaleOf]）。
+    // 基准屏上系数是 1.0 —— 48dp 一分不变。
+    val periodHeight = PeriodRowHeight * gridFontScaleOf(LocalEffectiveFontScale)
     // 行数只认作息表。空表（periodsPerDay = 0）时给 1，免得整列高度算成 0 什么都不出。
     val periodsPerDay = periodTable.periodsPerDay.coerceAtLeast(1)
     val totalHeight = periodHeight * periodsPerDay
@@ -756,6 +854,18 @@ fun WeekTimetableGrid13(
     val today = remember { EpochDays.today() }
 
     val scrollState = rememberScrollState()
+
+    // 网格内字号**封顶**（见 TimetableMaxFontScale）。
+    //
+    // 这一层只包住周课表网格：七列并排，每列只有 ~55dp，系统字号 2.0 时
+    // 10.5.sp 的课名会变成 21.sp，一行放不下一个字。网格把有效字号钳在 1.3，
+    // 页面其余部分（顶栏、周次条、分段控件、列表视图）照常跟随系统字号。
+    // 只改 fontScale、不改 density：行高与图标这些 dp 不该跟着缩。
+    val gridDensity = rememberCappedFontDensity(TimetableMaxFontScale)
+    CompositionLocalProvider(LocalDensity provides gridDensity) {
+    // 刻度列宽度：表头占位与网格主体必须用**同一个**值，
+    // 否则七个星期块与七个日列会错开。
+    val rulerWidth = periodRulerWidth()
 
     Column(
         modifier = modifier
@@ -795,8 +905,8 @@ fun WeekTimetableGrid13(
                 .padding(vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 刻度列在表头的占位：与网格主体刻度列完全同宽（PeriodRulerWidth），保证表头 7 列与网格 7 列精确对齐
-            Box(modifier = Modifier.width(PeriodRulerWidth))
+            // 刻度列在表头的占位：与网格主体刻度列完全同宽（rulerWidth），保证表头 7 列与网格 7 列精确对齐
+            Box(modifier = Modifier.width(rulerWidth))
             plan.forEach { dayPlan ->
                 WeekDayHeaderCell(
                     dayLabel = dayLabels.getOrElse(dayPlan.dayOfWeek - 1) { "" },
@@ -825,7 +935,7 @@ fun WeekTimetableGrid13(
 
         // 可纵向滚动的 1-13 节主体
         //
-        // 这里**不垫 IslandBottomInset**：课表是固定高度的网格，不是可以一直往下滚的
+        // 这里**不垫 islandBottomInset**：课表是固定高度的网格，不是可以一直往下滚的
         // 列表，底部留一条空白只会让表格提前收住、下面空一块，反而把浮岛衬成
         // 「贴在空白上」而不是「浮在课表上」。网格直接铺到面板底，浮岛（毛玻璃）
         // 正常地压在下方的行线和节次数字上面透出内容——这才是悬浮层该有的样子。
@@ -847,7 +957,7 @@ fun WeekTimetableGrid13(
             // 眼睛读的是「标尺 + 右侧网格」两块，而不是一块被线切碎的面。
             Box(
                 modifier = Modifier
-                    .width(PeriodRulerWidth)
+                    .width(rulerWidth)
                     .height(totalHeight)
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
@@ -1006,7 +1116,7 @@ fun WeekTimetableGrid13(
                                 imageVector = Icons.Outlined.EventAvailable,
                                 contentDescription = "放假",
                                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f),
-                                modifier = Modifier.size(HolidayWatermarkSize)
+                                modifier = Modifier.size(HolidayWatermarkSize * LocalEffectiveFontScale)
                             )
                         }
                     }
@@ -1057,6 +1167,7 @@ fun WeekTimetableGrid13(
                 }
             }
         }
+    }
     }
 }
 
@@ -1152,7 +1263,8 @@ private fun daySeparatorLabel(
     group: ScheduleDayGroup,
     now: Long,
     periodTable: PeriodTable,
-    resolver: ScheduleResolver
+    resolver: ScheduleResolver,
+    compact: Boolean = false
 ): String {
     val base = when (group.dayOffset) {
         0 -> TODAY_LABEL
@@ -1161,7 +1273,7 @@ private fun daySeparatorLabel(
         else -> "${group.date.get(Calendar.MONTH) + 1} 月 ${group.date.get(Calendar.DAY_OF_MONTH)} 日"
     }
     val withStatus = if (group.dayOffset != 0) base
-    else "$base · ${todayStatusLabel(group.date, group.slots, now, periodTable)}"
+    else "$base · ${todayStatusLabel(group.date, group.slots, now, periodTable, compact)}"
     // 补课必须挂一句话出来。不说的话用户看到周六有课只会以为本来就有 ——
     // 而"周六本来不上课"恰恰是需要提醒他的那件事。
     val makeup = makeupSuffixLabel(group, resolver)
@@ -1230,22 +1342,32 @@ fun DayTimelineView13(
     }
 
     val cardRevealProgress = LocalCardRevealProgress.current
+    val compactStatus = LocalEffectiveFontScale > 1.3f
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 2.dp, bottom = IslandBottomInset)
+        contentPadding = PaddingValues(top = 2.dp, bottom = islandBottomInset())
     ) {
         groups.forEachIndexed { groupIndex, group ->
             item(key = "day_${group.dayOffset}") {
                 Column {
                     Text(
-                        text = daySeparatorLabel(group, now, periodTable, resolver),
+                        text = daySeparatorLabel(
+                            group,
+                            now,
+                            periodTable,
+                            resolver,
+                            compact = compactStatus
+                        ),
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp
                         ),
                         color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
+                        // 两行：16sp 的「今日 · 下节课还有 7 小时 34 分 开始」
+                        // 在系统字号 2.0 时一行放不下，单行会截成前半句。
+                        // 基准字号下它本来就只占一行。
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                     Spacer(modifier = Modifier.height(CardBlockGap))
@@ -1318,23 +1440,17 @@ private fun ScheduleCourseCard(
                 .padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
             // Header: 课程名 + 时段
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                // 课程名 + 时段 chip。
-                //
-                // weight 必须挂在**这个 Row** 上，不能挂里面的 Text：外层 Row 先量非弹性
-                // 子项，而「包着 Text 的那个 Row」自己是非弹性的，所以里面的 Text 根本
-                // 等不到弹性那一轮——结果是课程名照旧先占满、chip 被挤到截断。
-                //
-                // 让课程名去吸收宽度不足，而不是反过来：chip 拿到完整宽度，剩下的才分给名字。
-                // 被截的应该是名字而不是时间——「18:50-21:1…」会被读成 21:10，
-                // 一个残缺的时间比一个残缺的名字有害得多。
+            //
+            // 基准字号下同一行左右排；系统字号大时**竖排**（名字一行、时段一行）。
+            //
+            // 横排的宽度分配是「时段 chip 先拿满，剩下的给课程名」——这个优先级
+            // 在小字号下成立（名字 5~9 个字放得下），但字号 2.0 时 chip 自己就要
+            // 300dp，课程名只剩三四个字宽，被截成「大学物…」（实测截图）。
+            // 竖排后两者都拿整行，名字不再为时间让宽度，卡片高度由内容决定。
+            val nameAndBar: @Composable (Modifier) -> Unit = { rowModifier ->
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f, fill = false)
+                    modifier = rowModifier
                 ) {
                     // 课程名左侧的课程色竖条。这根条**一度删掉又按用户要求恢复**，
                     // 恢复的理由成立：卡面染色只有 20% 的粉彩（CourseTintAlpha），
@@ -1358,8 +1474,10 @@ private fun ScheduleCourseCard(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+            }
 
-                                // 时段 chip 的底色分两种，文字色统一用「课程色压深」而不是 readableOn：
+            val timeChip: @Composable () -> Unit = {
+                // 时段 chip 的底色分两种，文字色统一用「课程色压深」而不是 readableOn：
                 // readableOn 是往墨炭 #1E2320 lerp 0.55，出来是灰蓝/灰绿——色相名义上还在，
                 // 彩度只剩三四成，摆在「和主题色呼应」的位置上就是寡淡的。
                 // deepEnoughForWhite 走 HSL 压明度 + 1.45 倍补饱和，出来的深色仍认得出
@@ -1383,6 +1501,32 @@ private fun ScheduleCourseCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+            }
+
+            if (LocalEffectiveFontScale > 1.3f) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    nameAndBar(Modifier.fillMaxWidth())
+                    Spacer(modifier = Modifier.height(6.dp))
+                    timeChip()
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    // 课程名 + 时段 chip。
+                    //
+                    // weight 必须挂在**这个 Row** 上，不能挂里面的 Text：外层 Row 先量非弹性
+                    // 子项，而「包着 Text 的那个 Row」自己是非弹性的，所以里面的 Text 根本
+                    // 等不到弹性那一轮——结果是课程名照旧先占满、chip 被挤到截断。
+                    //
+                    // 让课程名去吸收宽度不足，而不是反过来：chip 拿到完整宽度，剩下的才分给名字。
+                    // 被截的应该是名字而不是时间——「18:50-21:1…」会被读成 21:10，
+                    // 一个残缺的时间比一个残缺的名字有害得多。
+                    nameAndBar(Modifier.weight(1f, fill = false))
+                    timeChip()
                 }
             }
 

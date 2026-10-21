@@ -41,6 +41,9 @@ google-services.json
 # 全部锚到仓库根目录，避免误伤 app/src 下的同名文件。
 .shots/
 /_shots/
+# 断点矩阵的抓图输出（tools/capture-matrix.sh 与 capture-dialogs.sh 的产物）。
+# 一次矩阵就是几百 MB 的 png + uiautomator dump，是本地验收的中间产物。
+/.tmp/
 /*.mp4
 /window_dump*.xml
 /ui.xml

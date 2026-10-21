@@ -119,7 +119,7 @@ fun QuickGenerateDialog(
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(260.dp),
+                            .height(panelScrollMaxHeight(260.dp)),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(candidateTasks) { task ->

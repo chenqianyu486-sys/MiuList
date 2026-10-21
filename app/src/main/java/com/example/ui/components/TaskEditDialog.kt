@@ -68,6 +68,7 @@ import com.example.data.model.CustomTaskType
 import com.example.data.model.TaskStar
 import com.example.data.model.TaskType
 import com.example.data.model.TaskTypes
+import com.example.ui.theme.AdaptiveDialogContent
 import com.example.ui.theme.ChipSurfaceNeutral
 import com.example.ui.theme.readableOn
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -458,7 +459,11 @@ fun TaskEditDialog(
             // 独立窗口拿不到 haze，做不了玻璃面，但遮罩得跟全 App 的弹层对齐：
             // 平台默认给的 0.32 比 GlassOverlayHost 重一倍以上。
             AlignDialogWindowScrim()
-            DatePicker(state = datePickerState)
+            // 独立窗口有自己的 Composition，主题里的缩放与安全区**传不进来**，
+            // 所以这里自己套一遍（见 AdaptiveDialogContent 的注释）。
+            AdaptiveDialogContent {
+                DatePicker(state = datePickerState)
+            }
         }
     }
 
@@ -487,52 +492,59 @@ fun TaskEditDialog(
         ) {
             // 同上：玻璃面做不到，压暗程度至少跟 GlassOverlayHost 对齐。
             AlignDialogWindowScrim()
-            Surface(
-                shape = GlassDialogShape,
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp,
-                modifier = Modifier
-                    .padding(horizontal = 24.dp)
-                    .widthIn(max = 400.dp)
-            ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text(
-                        text = "选择时间",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 12.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        TimePicker(state = timePickerState)
-                    }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 12.dp),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        TextButton(onClick = { showTimePicker = false }) {
-                            Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // 独立窗口有自己的 Composition，主题里的缩放与安全区**传不进来**，
+            // 所以这里自己套一遍（见 AdaptiveDialogContent 的注释）。
+            AdaptiveDialogContent {
+                Surface(
+                    shape = GlassDialogShape,
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 6.dp,
+                    modifier = Modifier
+                        // 上下留白用 12.dp：原来 24.dp 在 332dp 屏上把表盘挤到放不下。
+                        // 左右不能写死 24.dp —— 那样在 332dp 屏上留给表盘的宽度不够，
+                        // M3 的 TimePicker 是固定尺寸，宽度不够就会溢出屏幕两边。
+                        .padding(horizontal = 12.dp)
+                        .widthIn(max = 400.dp)
+                ) {
+                    Column(modifier = Modifier.padding(20.dp)) {
+                        Text(
+                            text = "选择时间",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 12.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            TimePicker(state = timePickerState)
                         }
-                        Spacer(modifier = Modifier.width(4.dp))
-                        TextButton(
-                            onClick = {
-                                dueMillis = AppZone.calendar(dueMillis).apply {
-                                    set(Calendar.HOUR_OF_DAY, timePickerState.hour)
-                                    set(Calendar.MINUTE, timePickerState.minute)
-                                    set(Calendar.SECOND, 0)
-                                    set(Calendar.MILLISECOND, 0)
-                                }.timeInMillis
-                                showTimePicker = false
-                            },
-                            modifier = Modifier.testTag("confirm_time_button")
-                        ) { Text("确定") }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 12.dp),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(onClick = { showTimePicker = false }) {
+                                Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            TextButton(
+                                onClick = {
+                                    dueMillis = AppZone.calendar(dueMillis).apply {
+                                        set(Calendar.HOUR_OF_DAY, timePickerState.hour)
+                                        set(Calendar.MINUTE, timePickerState.minute)
+                                        set(Calendar.SECOND, 0)
+                                        set(Calendar.MILLISECOND, 0)
+                                    }.timeInMillis
+                                    showTimePicker = false
+                                },
+                                modifier = Modifier.testTag("confirm_time_button")
+                            ) { Text("确定") }
+                        }
                     }
                 }
             }

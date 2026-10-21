@@ -54,6 +54,7 @@ import com.example.data.source.zju.ZjuFailureKind
 import com.example.data.sync.SyncFailure
 import com.example.ui.theme.AlertRedText
 import com.example.ui.theme.ChipSurfaceNeutral
+import com.example.ui.theme.LocalEffectiveFontScale
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.ZjuTermOption
@@ -257,26 +258,54 @@ fun CloudAccountDialog(
                         )
                     }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { isEditing = true },
-                            enabled = !isSyncing,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp)
+                    // 两个次要动作：大字号时竖排。
+                    //
+                    // 横排时两者各拿一半宽（weight 1f），系统字号 2.0 下
+                    // 「修改账号/学期」在半个面板里放不下，会在按钮内部折成两行；
+                    // 竖排让每个按钮独占整行，文字保持一行。
+                    val stackSecondaryActions = LocalEffectiveFontScale > 1.3f
+                    val editAccountLabel: @Composable () -> Unit = {
+                        Text("修改账号/学期", fontSize = 12.sp)
+                    }
+                    val clearAccountLabel: @Composable () -> Unit = {
+                        Text("清除已存凭据", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                    }
+                    if (stackSecondaryActions) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("修改账号/学期", fontSize = 12.sp)
+                            OutlinedButton(
+                                onClick = { isEditing = true },
+                                enabled = !isSyncing,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp)
+                            ) { editAccountLabel() }
+                            OutlinedButton(
+                                onClick = onClearAccount,
+                                enabled = !isSyncing,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp)
+                            ) { clearAccountLabel() }
                         }
-
-                        OutlinedButton(
-                            onClick = onClearAccount,
-                            enabled = !isSyncing,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp)
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("清除已存凭据", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                            OutlinedButton(
+                                onClick = { isEditing = true },
+                                enabled = !isSyncing,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp)
+                            ) { editAccountLabel() }
+
+                            OutlinedButton(
+                                onClick = onClearAccount,
+                                enabled = !isSyncing,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp)
+                            ) { clearAccountLabel() }
                         }
                     }
                 } else {
