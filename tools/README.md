@@ -18,6 +18,10 @@
 | `check_bounds.py` | 解析 dump，找出被挤出屏幕 / 被挤成 0 尺寸的节点 |
 | `check_proportions.py` | 量各断点**渲染出来**的尺寸，核对「整页比例」与设计稿是否一致 |
 | `compare_baseline.py` | 与基线目录逐张做像素比对，报告差异率并写出差异图 |
+| `capture-dialogs.sh` | **弹层**矩阵：逐个打开各弹层并截图（页面矩阵只抓四个页面，弹层要另跑） |
+| `contact_sheet.py` / `make_sheets.py` | 把一批截图拼成联络表（一断点一张） |
+| `compare_sheet.py` | 把「改动前 / 改动后」并排拼成对照表 |
+| `release.sh` | **发版**：提版本号 → 构建 → 校验 → 提交打 tag → 推送 → 发 Release |
 
 ## 快速上手
 
@@ -73,3 +77,49 @@ tools/capture-matrix.sh --baseline
    uiautomator 拿到的是 Compose 的语义**原文**，截断只发生在渲染层，dump 里看不出来。
    要判断截断得看截图——那是 `compare_baseline.py` 的活。
    这里只报**结构上确凿**的问题（越界、挤没），误报一多，脚本就没人跑了。
+
+---
+
+## 发版：`tools/release.sh`
+
+```bash
+tools/release.sh v1.0.2                 # 发测试版（GitHub 上是 pre-release）
+tools/release.sh v1.0.2 --stable        # 发正式版
+tools/release.sh v1.0.2 --dry-run       # 只构建与校验，不提交不推送不发布
+tools/release.sh v1.0.2 --notes my.md   # 用自己写的发布说明
+tools/release.sh v1.0.2 --summary "一句话概述"
+```
+
+一条命令走完：**提版本号 → 构建 → 校验 → 提交 → 打 tag → 推送 → 发 Release + 上传 APK**。
+
+顺序是「先验证、后发布」，因为发版不可逆 —— APK 一旦传上去，别人就能下到。
+本地会先查完这些：
+
+| 查什么 | 不对会怎样 |
+|--------|-----------|
+| 版本号与 versionCode | 直接退出 |
+| 签名是否有效 | 直接退出 |
+| **证书与上一版是不是同一把** | 大声警告：不是同一把，用户得先卸载旧版，数据会丢 |
+| 上一版 tag 是否已存在 | 直接退出（避免覆盖） |
+
+### 前提
+
+- 工作区**必须干净**（发版前先把改动提交）。
+- `keystore.properties` 在仓库根（已被 gitignore）：`KEYSTORE_PATH` / `STORE_PASSWORD` /
+  `KEY_PASSWORD`。构建脚本读的是**环境变量**，`release.sh` 负责从 properties 导进去。
+- GitHub 凭据走系统凭据管理器（`git credential fill` 能取到），不需要额外配置。
+
+### 三个踩过的坑（脚本里都注释了）
+
+1. `keystore.properties` 是 **CRLF 行尾**，不剥掉 `\r` 的话密码末尾多一个字符，
+   签名校验报 `validateSigningRelease FAILED`（报错里一个字都不提密码）。
+2. `git credential fill` **不能自己写 username** —— 库里存的是 `chenqianyu486-sys`，
+   写错会让凭据管理器转去走交互式认证，整个命令挂住。
+3. JSON 载荷用 `release_helper.py`（Python）拼，**不要用 PowerShell 的
+   `ConvertTo-Json`** —— 它会把字符串序列化成 `{"value": "..."}` 对象，GitHub 判非法。
+
+### 想知道更多
+
+- `--dry-run` 会在构建与校验之后**把版本号还原**（任何退出路径都还原，包括构建失败）。
+- 想验 release 包能不能启动：手写一份临时 AVD（`avdmanager` 在这台机器上不可用），
+  用完 `avdmanager delete avd -n <名字>` 删掉。
