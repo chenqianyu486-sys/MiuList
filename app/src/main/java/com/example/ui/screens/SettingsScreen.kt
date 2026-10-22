@@ -26,8 +26,6 @@ import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.ImportExport
 import androidx.compose.material.icons.outlined.Wallpaper
-import com.example.data.model.WallpaperPresets
-import com.example.data.model.WallpaperType
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -56,7 +54,6 @@ import com.example.ui.theme.CardBlockGap
 import com.example.ui.theme.PageHInset
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.glassSurface
-import com.example.ui.viewmodel.MainUiState
 
 /**
  * 设置页。
@@ -74,10 +71,15 @@ import com.example.ui.viewmodel.MainUiState
  *
  * 同一个入口在两个地方都能点，用户会犹豫该点哪个——所以搬走的同时，
  * 这一页里对应的入口**全部删除**，不做「这里也留一个」的重复。
+ *
+ * **每一项只留标题**（图标 + 标题 + 右侧按钮）：原来每张卡下面还挂着一句副标题
+ * （导入导出说「课表、待办、分类与规则一起带走」、分类说「4 个自带分类 · N 个自定义
+ * 分类」、壁纸说当前用的是哪一张、引导说「四步走一遍：…」）。那些句子讲的**都是
+ * 这一项本身是什么**，而点进去的弹层里本来就写着；门口再说一遍是同一件事说两遍。
+ * 标题 + 按钮已经足够点，副标题一律不要。
  */
 @Composable
 fun SettingsScreen(
-    state: MainUiState,
     onOpenTransferDialog: () -> Unit,
     onOpenCategoryManageDialog: () -> Unit,
     onOpenWallpaperDialog: () -> Unit = {},
@@ -100,11 +102,6 @@ fun SettingsScreen(
             SettingsActionCard(
                 icon = Icons.Outlined.ImportExport,
                 title = "数据导入 / 导出",
-                // 原来写「整机快照 · 课程与待办一起走」：前半句是内部格式名，
-                // 后半句又把它解释了一遍，两句话说的是同一件事；
-                // 而且设置页里这一项只是众多功能之一，用「整机」这种范围词
-                // 修饰它，等于替整页说了话。改成直接列出文件里装的是什么。
-                subtitle = "课表、待办、分类与规则一起带走",
                 actionLabel = "管理",
                 actionTestTag = "open_transfer_button",
                 onAction = onOpenTransferDialog
@@ -112,16 +109,9 @@ fun SettingsScreen(
         }
 
         item {
-            val customCount = state.customTaskTypes.size
-            val subtitle = if (customCount > 0) {
-                "4 个自带分类 · $customCount 个自定义分类"
-            } else {
-                "4 个自带分类 · 暂无自定义分类"
-            }
             SettingsActionCard(
                 icon = Icons.Outlined.Category,
                 title = "待办分类管理",
-                subtitle = subtitle,
                 actionLabel = "管理",
                 actionTestTag = "open_task_category_dialog_button",
                 onAction = onOpenCategoryManageDialog
@@ -129,18 +119,9 @@ fun SettingsScreen(
         }
 
         item {
-            val wallpaperSubtitle = when (state.wallpaperConfig.type) {
-                WallpaperType.DEFAULT -> "默认壁纸 · ${WallpaperPresets.DEFAULT.name}"
-                WallpaperType.PRESET -> {
-                    val preset = WallpaperPresets.find(state.wallpaperConfig.presetId)
-                    "预设壁纸 · ${preset?.name ?: "精选"}"
-                }
-                WallpaperType.CUSTOM -> "自定义图片 · 已应用"
-            }
             SettingsActionCard(
                 icon = Icons.Outlined.Wallpaper,
                 title = "自定义壁纸",
-                subtitle = wallpaperSubtitle,
                 actionLabel = "更换",
                 actionTestTag = "open_wallpaper_button",
                 onAction = onOpenWallpaperDialog
@@ -155,7 +136,6 @@ fun SettingsScreen(
             SettingsActionCard(
                 icon = Icons.Outlined.Explore,
                 title = "使用引导",
-                subtitle = "四步走一遍：浙大同步、课程类别、联动规则与壁纸",
                 actionLabel = "打开",
                 actionTestTag = "open_onboarding_guide_button",
                 onAction = onOpenOnboardingGuide
@@ -430,17 +410,19 @@ internal val AcknowledgementsList = listOf(
 )
 
 /**
- * 设置页里「图标 + 标题 + 副标题 + 一个按钮」的一行。
+ * 设置页里「图标 + 标题 + 一个按钮」的一行。
  *
  * 抽出来是因为这类入口出现过好几个（导入导出 / 校历 / 以后的更多），
  * 原先每处都摊开写一遍 50 行卡片结构，加一个入口就得复制一次——
  * 复制出来的那份迟早和别人长得不一样。
+ *
+ * **没有副标题**：这一页的每一项都只留标题 + 按钮。要说清楚的事在点进去的那一层说，
+ * 门口这一行只负责「点进去」这件事。
  */
 @Composable
 private fun SettingsActionCard(
     icon: ImageVector,
     title: String,
-    subtitle: String,
     actionLabel: String,
     actionTestTag: String,
     onAction: () -> Unit
@@ -486,15 +468,6 @@ private fun SettingsActionCard(
                         text = title,
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.labelSmall,
-                        // 用 TextSecondary 而不是全局的 onSurfaceVariant：后者是
-                        // TextMuted #78827B，压在这张卡面上实测只有 3.74:1，
-                        // 11sp 小字过不了 AA。TextSecondary #4A524D 实测约 7.6:1。
-                        // 只改这一处，不动全局 token（那会牵动所有页面）。
-                        color = TextSecondary
                     )
                 }
             }

@@ -8,6 +8,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,9 +48,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
@@ -254,7 +258,18 @@ fun WallpaperSettingDialog(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 3. 精选预设
+                // 3. 精选预设：**横向一条**，不再两列铺开
+                //
+                // 原来八张按两列排成四行，每行「缩略图 + 名称 + 副标题」，
+                // 整节吃掉 **五百多 dp**——弹层一半的高度都是壁纸缩略图，
+                // 「相册导入」「柔焦」「遮罩」全被顶到屏外。
+                // 而且两列一格只有 160dp 宽，副标题「极简云烟近乎纯白（默认）」
+                // 在那一格里根本放不下，**每一张都被截断**。
+                //
+                // 改成一条横向可滑的窄条：高度只剩 ~90dp，八张还一张不少地摆完。
+                // 副标题不再每张都挂一行（八行 9sp 小字挤在一起也读不出来），
+                // 改成**只给选中那张**在下面写一行「名称 · 副标题」——
+                // 想知道某张是什么，点它；没点之前不必知道。
                 Text(
                     text = "精选预设",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
@@ -262,33 +277,38 @@ fun WallpaperSettingDialog(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                // 当前选中的预设（自定义图片时没有预设被选中）
+                val selectedPreset = when (currentConfig.type) {
+                    WallpaperType.DEFAULT -> WallpaperPresets.DEFAULT
+                    WallpaperType.PRESET -> WallpaperPresets.find(currentConfig.presetId)
+                    WallpaperType.CUSTOM -> null
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .testTag("wallpaper_preset_strip"),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    WallpaperPresets.ALL.chunked(2).forEach { rowPresets ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            rowPresets.forEach { preset ->
-                                val isSelected = when (currentConfig.type) {
-                                    WallpaperType.DEFAULT -> preset.id == WallpaperPresets.DEFAULT.id
-                                    WallpaperType.PRESET -> preset.id == currentConfig.presetId
-                                    WallpaperType.CUSTOM -> false
-                                }
-                                PresetWallpaperCard(
-                                    preset = preset,
-                                    isSelected = isSelected,
-                                    onSelect = { onSelectPreset(preset.id) },
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                            if (rowPresets.size == 1) {
-                                Spacer(modifier = Modifier.weight(1f))
-                            }
-                        }
+                    WallpaperPresets.ALL.forEach { preset ->
+                        PresetWallpaperChip(
+                            preset = preset,
+                            isSelected = preset.id == selectedPreset?.id,
+                            onSelect = { onSelectPreset(preset.id) }
+                        )
                     }
+                }
+
+                if (selectedPreset != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "${selectedPreset.name} · ${selectedPreset.subtitle}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
@@ -529,14 +549,19 @@ private fun WallpaperLivePreviewCard(
 }
 
 /**
- * 预设壁纸选择项
+ * 预设壁纸的一格：横向那条里的一颗。
+ *
+ * **只有缩略图 + 名称**：副标题挪到条下面那一行去了（只写选中那张），
+ * 每格再挂一行 9sp 小字既占高度，在这一格宽度下也读不出完整一句。
+ *
+ * 宽度写死：这一条是**等宽的一排**，每格一样宽才好对齐；
+ * 名字的位置高度也写死（两行居中），长短不一的英文名才不会把整排节奏顶歪。
  */
 @Composable
-private fun PresetWallpaperCard(
+private fun PresetWallpaperChip(
     preset: PresetWallpaper,
     isSelected: Boolean,
-    onSelect: () -> Unit,
-    modifier: Modifier = Modifier
+    onSelect: () -> Unit
 ) {
     val borderColor = if (isSelected) {
         MaterialTheme.colorScheme.primary
@@ -546,18 +571,20 @@ private fun PresetWallpaperCard(
     val borderWidth = if (isSelected) 2.dp else 1.dp
 
     Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .border(borderWidth, borderColor, RoundedCornerShape(12.dp))
+        modifier = Modifier
+            .width(PresetChipWidth)
+            .clip(RoundedCornerShape(10.dp))
+            .border(borderWidth, borderColor, RoundedCornerShape(10.dp))
             .clickable(onClick = onSelect)
             .testTag("wallpaper_preset_${preset.id}")
-            .padding(6.dp)
+            .padding(4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(60.dp)
-                .clip(RoundedCornerShape(8.dp))
+                .height(64.dp)
+                .clip(RoundedCornerShape(7.dp))
         ) {
             Image(
                 painter = painterResource(preset.resId),
@@ -570,9 +597,9 @@ private fun PresetWallpaperCard(
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(4.dp)
-                        .size(18.dp)
-                        .clip(RoundedCornerShape(9.dp))
+                        .padding(3.dp)
+                        .size(16.dp)
+                        .clip(RoundedCornerShape(8.dp))
                         .background(MaterialTheme.colorScheme.primary),
                     contentAlignment = Alignment.Center
                 ) {
@@ -580,24 +607,46 @@ private fun PresetWallpaperCard(
                         imageVector = Icons.Outlined.CheckCircle,
                         contentDescription = "已选中",
                         tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(12.dp)
                     )
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = preset.name,
-            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1
-        )
-        Text(
-            text = preset.subtitle,
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-            color = TextSecondary,
-            maxLines = 1
-        )
+        Spacer(modifier = Modifier.height(4.dp))
+        // **名字允许折两行**：这一格只有 ~86dp 宽，而名字是英文长词
+        // （Cloudy Knoxville 十四个字），单行必然被省略号砍掉半截。
+        //
+        // 名字区的高度**随系统字号缩放**：两行 10sp 的行高在字号 1.0 时约 24dp，
+        // 真机字号 1.16 就要约 28dp —— 高度写死 26dp 时第二行被挤掉，
+        // 名字又退回单行省略号（那正是要修的东西）。
+        // 高度写死（而不是让文字自己长）是为了**每一格一样高**：
+        // 边框包着整格，高度不齐这一排的底边就会参差。
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height((30 * LocalDensity.current.fontScale).dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = preset.name,
+                // **lineHeight 必须显式给**：只改 fontSize 的话，这一行还留着
+                // bodySmall 的 lineHeight = 16.sp —— 两行文字比名字区还高，
+                // 高度约束下 Text 只敢排一行，于是名字又被砍成「Cloudy Knoxvi…」。
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = 10.sp,
+                    lineHeight = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
     }
 }
+
+/** 一格预设的宽度：手机上一屏能摆下三格多一点，第四格露一半就是「还能滑」的提示。 */
+private val PresetChipWidth = 96.dp

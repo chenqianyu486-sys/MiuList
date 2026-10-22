@@ -96,22 +96,35 @@ fun QuickGenerateDialog(
         },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
+                // 生成范围：**一行说完，不带尾巴**。
+                //
                 // 两类待办的视野不同（作业/实验报告看本周，预习看到下周结束），
-                // 这里必须分开说，否则用户看到列表里有下一周的课会以为生成错了。
+                // 跨周时必须分开说，否则用户看到列表里有下一周的课会以为生成错了。
+                //
+                // 原来这行尾巴上还挂着「可勾选：」——列表里一排复选框就在那儿，
+                // 按钮上还写着「添加 N」，再说一遍是第三遍。
                 val rangeText = if (preStudyLastWeek > week) {
-                    "作业与实验报告取第 $week 周；预习取今天起至第 $preStudyLastWeek 周末。"
+                    "作业与实验报告取第 $week 周，预习从今天到第 $preStudyLastWeek 周末。"
                 } else {
                     "按第 $week 周课表与规则生成。"
                 }
                 Text(
-                    text = if (candidateTasks.isNotEmpty()) {
-                        "$rangeText 可勾选："
-                    } else {
-                        "${rangeText}已全部生成。"
-                    },
+                    text = rangeText,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+
+                // 一个都没生成时，**另起一行**说清楚。
+                // 原来它是接在范围那句后面的（「…生成。已全部生成。」），
+                // 两句话挤成一句，后半句像前半句的补充，读起来像半句话没说完。
+                if (candidateTasks.isEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "没有新的待办可生成。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -209,17 +222,25 @@ fun QuickGenerateDialog(
             }
         },
         confirmButton = {
+            // 勾选数要在**组合期**算：复选框每动一次，这个 Button 会重组合，
+            // 按钮上的数字跟着走（原来数字也是这么活的，只是外层多绕了一层）。
+            val selectedCount = candidateTasks.count { checkedMap[it] == true }
             Button(
                 onClick = {
-                    val selected = candidateTasks.filter { checkedMap[it] == true }
-                    onConfirm(selected)
+                    onConfirm(candidateTasks.filter { checkedMap[it] == true })
                 },
-                enabled = candidateTasks.isNotEmpty(),
+                // 全取消时**禁用**：按钮上写着「添加 0 条」，点了什么也不会发生，
+                // 那还不如不让点。
+                enabled = selectedCount > 0,
                 shape = RoundedCornerShape(10.dp),
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                 modifier = Modifier.testTag("confirm_auto_generate_button")
             ) {
-                Text("添加 (${candidateTasks.count { checkedMap[it] == true }})", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
+                Text(
+                    text = "添加 $selectedCount 条",
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimary
+                )
             }
         },
         dismissButton = {

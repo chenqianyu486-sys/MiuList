@@ -760,7 +760,7 @@ private val ruleFlow = combine(
     private suspend fun resolveRealGenerationWeek(): Int? {
         val week = calendarRepo.calendarState.first().calendar.weekOf(EpochDays.today())
         if (week > 0) return week
-        _uiState.update { it.copy(userMessage = "今天不在本学期范围内，没有可生成的周") }
+        _uiState.update { it.copy(userMessage = "今天不在本学期，没有可生成的周") }
         return null
     }
 
@@ -782,7 +782,7 @@ private val ruleFlow = combine(
      */
     private fun requireSemester(): Boolean {
         if (uiState.value.semester != null) return true
-        _uiState.update { it.copy(userMessage = "先设置本学期校历，才能按周生成待办") }
+        _uiState.update { it.copy(userMessage = "先设置本学期校历，才能生成待办") }
         return false
     }
 
@@ -833,16 +833,23 @@ private val ruleFlow = combine(
     /**
      * 生成结果的提示语。
      *
-     * 跨周时必须把「作业是本周、预习到下周」说出来：提示只报「第 N 周」，
-     * 用户回头看到清单里多出下一周的预习会以为生成错了。
+     * **报数就报数，范围只在反常的时候补一句。**
+     *
+     * 原来是把范围整个塞进消息里：「已生成 3 项：第 6 周作业与实验报告，
+     * 今天起至第 7 周末的预习」——一句话装了三件事，读完还得拆。
+     * 跨周时真正需要解释的其实只有一件：**为什么清单里冒出了第 7 周的预习**。
+     * 其余的（第 6 周）用户自己就在那一周里，说了反而更绕。
+     *
+     * 一条也没生成时报「第 N 周的待办都已生成」：这个周次要留着 ——
+     * 它回答的是「我刚才那一下到底管的是哪一周」。
      */
     private fun generatedMessage(count: Int, week: Int, preStudyLastWeek: Int): String {
-        val range = if (preStudyLastWeek > week) {
-            "第 $week 周作业与实验报告，今天起至第 $preStudyLastWeek 周末的预习"
+        if (count <= 0) return "第 $week 周的待办都已生成"
+        return if (preStudyLastWeek > week) {
+            "已生成 $count 条待办，含第 $preStudyLastWeek 周的预习"
         } else {
-            "第 $week 周待办"
+            "已生成 $count 条待办"
         }
-        return if (count > 0) "已生成 $count 项：$range" else "$range 已全部生成"
     }
 
     // ------------------------------------------------------------ 导入 / 导出

@@ -43,14 +43,20 @@ import com.example.ui.viewmodel.GuideTarget
  * 引导的一步。
  *
  * [target] 是**行为契约**（见 [GuideTarget]），其余都是给人看的：
- * 图标、标题、说明、按钮上那句话。
+ * 图标、标题、按钮上那句话。
+ *
+ * **没有说明文字**：原来每一步下面还有一段解释（「用学号和密码登录浙大教务…」）。
+ * 标题已经把这一步要做什么说完了，那段解释讲的是**同一个事实**的另一种说法，
+ * 标题 + 一段解释 = 同一件事说两遍。而且它是**会过期的副本**：
+ * 里面写着「八张预设」「五个类别」这类别的页面上也写着的东西，
+ * 那边一改，这边就成了一句错的说明。
+ * 真要说清楚什么，位置在**那个功能自己那一页**，不在引导里。
  */
 @Immutable
 data class GuideStep(
     val target: GuideTarget,
     val icon: ImageVector,
     val title: String,
-    val description: String,
     val actionLabel: String
 )
 
@@ -80,47 +86,35 @@ val GuideSteps: List<GuideStep> = listOf(
         target = GuideTarget.ZJU_SYNC,
         icon = Icons.Outlined.CloudSync,
         title = "把浙大课表搬进来",
-        // 只说同步**真的**做的事：整表换成服务器上那一份、落进本地缓存。
-        //
-        // 以前这里还写着「学在浙大的作业也会并进待办清单」—— 两处不实：
-        // 一是学在浙大的待办走的是另一条链路（App 打开时按已存凭据单独刷新），
-        //   登录课表那一步根本不拉它；二是它只以只读清单出现在总览页，
-        //   从来不写进待办清单。引导说了一件 App 做不到的事，用户照着找只会扑空。
-        description = "用学号和密码登录浙大教务，课表会换成服务器上那一份，" +
-            "存进本地缓存，断网也能看。",
+        // 删掉的说明里写过「学在浙大的作业也会并进待办清单」——**那本来就是不实的**：
+        // 学在浙大的待办只以**只读清单**出现在总览页，从来不写进待办清单；
+        // 而且登录课表那一步根本不拉它（它走的是 App 打开时按已存凭据刷新那条路）。
+        // 这条事实留在这儿，免得以后又有人往引导里写它。
         actionLabel = "去登录浙大"
     ),
     GuideStep(
         target = GuideTarget.COURSE_CATEGORY,
         icon = Icons.Outlined.Assignment,
         title = "给每门课分门别类",
-        // 「类别决定默认生成哪几类待办」只对**新建**的课成立：改一门已有课的类别
-        // 不会重算它那三个开关（那三个开关在课程编辑里是用户自己的值）。
-        // 真实的关系是「类别 → 它归联动规则里的哪一组」，改完类别还要在第三步
-        // 应用一次。这两件事写在一起，用户才知道改完类别为什么没反应。
+        // 删掉的说明列了五个类别名（公共基础、专业必修…）。那是**课程分类弹层里
+        // 就有的内容**：引导复述一遍，只是多一处会过期的副本（那边改了这边就错），
+        // 对用户也没有任何新信息。
         //
-        // 「所有课程在同一个窗口里逐门定」说的是落点：课程分类弹层把全部课程
-        // 列在一处，一门一门展开选 —— 分类是个逐门推进的活，看得见全貌才知道
-        // 还剩几门没分。
-        description = "每门课归到一个类别：公共基础、专业必修、实验实践、通识公共、专业选修。" +
-            "类别决定它在「课程联动规则」里算哪一组；所有课程在同一个窗口里逐门定。",
+        // 留个事实备注：类别**不决定**一门已有课生成哪几类待办
+        // （改类别不会重算那三个开关，那三个开关是用户自己的值）；
+        // 真实的关系是「类别 → 它归联动规则里的哪一组」，改完类别要在第三步应用一次。
         actionLabel = "去选类别"
     ),
     GuideStep(
         target = GuideTarget.LINKAGE_RULES,
         icon = Icons.Outlined.Tune,
         title = "按类别配联动规则",
-        description = "每个类别三个开关：课前预习、课后作业、实验报告。" +
-            "改开关会覆盖该类别下所有课程，弹层里写着每个类别有几门课。" +
-            "课程刚改过类别的，在这里应用一次就跟上了。",
         actionLabel = "去配置规则"
     ),
     GuideStep(
         target = GuideTarget.WALLPAPER,
         icon = Icons.Outlined.Wallpaper,
         title = "换一张壁纸",
-        description = "八张预设渐变，或者从相册选一张自己的照片。" +
-            "照片默认带柔焦，卡片上的字始终压得住。",
         actionLabel = "去换壁纸"
     )
 )
@@ -206,12 +200,6 @@ fun OnboardingGuide(
                         }
                         GuideProgressDots(total = GuideSteps.size, current = index)
                     }
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Text(
-                        text = s.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                     Spacer(modifier = Modifier.height(16.dp))
                     // 刚从目标那边回来的提示。放在动作按钮**上面**：
                     // 它解释的是「为什么还是这一步」，紧挨着那个让人困惑的地方。

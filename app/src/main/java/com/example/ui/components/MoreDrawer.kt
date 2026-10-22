@@ -105,7 +105,9 @@ import com.example.ui.viewmodel.MainUiState
  * 而它在这一页里只是「一次性检查一遍」的内容，不是要反复对照着用的东西。
  * 状态放在 `AnimatedVisibility` **之外**：抽屉面板本身是常驻组合的，只有可见时才组合内容，
  * 折叠状态写在内容里会在每次关闭抽屉时一起被丢掉，用户收起一次、点开又得重收一遍。
- * 默认展开：折叠是用户自己按出来的，不该让「第一次打开」先变成一屏标题。
+ * 默认收起：展开时这一区会把下面的「其他 / 设置」顶出屏外，而抽屉上半段
+ * （账号 / 学期 / 生成规则）才是多数时候进来要找的东西。用户手动展开过的状态
+ * 仍然保留——默认值只决定「还没动过」时是什么样。
  */
 @Composable
 fun MoreDrawer(
@@ -129,7 +131,15 @@ fun MoreDrawer(
         ?: if (termConfigured) "本学期" else "未设置学期"
 
     // 见文件头：写在 AnimatedVisibility 外面，跨「关抽屉→再开」保留。
-    var coursesExpanded by rememberSaveable { mutableStateOf(true) }
+    //
+    // **默认收起**：这一区是整页最长的一块（一个学期十几门课），展开时
+    // 「本学期课程」后面的「其他 / 设置」被顶到屏外，而抽屉上半段
+    // （账号 / 学期 / 生成规则）才是大多数时候进来要找的东西。
+    // 收起之后首屏只剩那几行入口，课程列表要按才出来。
+    //
+    // 但**用户手动按开的展开状态仍然保留**（rememberSaveable）：
+    // 默认值只决定「还没动过」时是什么样，不该把用户自己的动作每次都抹掉。
+    var coursesExpanded by rememberSaveable { mutableStateOf(false) }
     // 没有课程时不给折叠开关：这时候折起来什么也看不见，只会让「课程不见了」和
     // 「我收起来了」两种状态长得一模一样，而空态提示（唯一有用的信息）不该跟着折没。
     val coursesCollapsible = state.coursesWithSlots.isNotEmpty()
@@ -258,11 +268,16 @@ fun MoreDrawer(
 
                         // 分类排在规则前面：规则是**按类别**配的，
                         // 类别还没定下来，规则那一层就没有可配的对象。
+                        //
+                        // **这一节三行只留标题**：原来每行下面还挂着一句解释
+                        // （「给每门课定类别」「决定它归联动规则里的哪一组」…），
+                        // 三行摞起来就是一屏副标题，而每句解释说的都是这一行
+                        // **标题本身**的意思——标题已经叫「课程分类」了，
+                        // 再补「给每门课定类别」是同一件事说了两遍。
+                        // 解释真正有用的地方是弹层里那一页，不在这一行。
                         DrawerRow(
                             icon = Icons.Outlined.Assignment,
                             title = "课程分类",
-                            detail = "给每门课定类别",
-                            footnote = "决定它归联动规则里的哪一组",
                             testTag = "drawer_course_category_row",
                             onClick = onOpenCourseCategory
                         )
@@ -276,11 +291,6 @@ fun MoreDrawer(
                         DrawerRow(
                             icon = Icons.Outlined.Tune,
                             title = "课程联动规则",
-                            // 文案跟着语义走：这一行不再是「设个默认值、课程级可以覆盖」，
-                            // 而是**批量覆盖**该类别下所有课程的开关。写「默认值」会让人
-                            // 以为不动它就不生效，进弹层看到全量覆盖就变成了意外。
-                            detail = "按类别批量设置开关",
-                            footnote = "会覆盖该类别下所有课程",
                             testTag = "drawer_category_rules_row",
                             onClick = onOpenCategoryRules
                         )
@@ -290,7 +300,6 @@ fun MoreDrawer(
                         DrawerRow(
                             icon = Icons.Outlined.Rule,
                             title = "待办生成规则",
-                            detail = "按课程设定节奏与截止",
                             testTag = "drawer_task_rules_row",
                             onClick = onOpenTaskRules
                         )
@@ -351,12 +360,11 @@ fun MoreDrawer(
                     DrawerRow(
                         icon = Icons.Outlined.School,
                         title = "设置",
-                        // 原来写「整机快照 · 演示数据」：只点了设置页六项里的两项，
-                        // 其中一项还是内部格式名。抽屉这一行是设置的预告，
-                        // 预告该把设置页有哪几类事说清楚。
-                        // 2026-10-20「示例数据」整项取消，这一行也随之少一项；
-                        // 2026-10-20 晚又加回「使用引导」，所以现在是四项。
-                        detail = "导入导出 · 分类 · 壁纸 · 使用引导",
+                        // 原来写「导入导出 · 分类 · 壁纸 · 使用引导」，是抽屉这一行
+                        // 对设置页内容的**预告**：把设置页有哪几类事先摆出来。
+                        // 现在也只留标题——那一行是「点进去看看」的入口，
+                        // 而设置页自己就写着这四项，预告一遍是同一件事说两遍；
+                        // 真正要预告时，应该是设置页那一侧自己改，而不是在门口复述。
                         testTag = "drawer_settings_row",
                         onClick = onOpenSettings
                     )
@@ -504,17 +512,23 @@ private fun CourseRowReveal(
  * 图标带一块 40dp 的近白圆角底：全屏页面上没有别的框把它和背景分开，
  * 一颗有底的图标就顺手承担了「这是一行入口」的分组作用（和设置页的
  * `SettingsActionCard` 同一套语言）。
+ *
+ * **[detail] 可以不给**（`null`），这时标题独占一行，按**主文本**呈现
+ * （14.sp 粗体，和「值」同级）：12.sp 那套是「标题 + 值」两行结构里的上层
+ * 标签，抽掉值之后一行 12.sp 灰字看着像注释，不像一个可点的入口。
  */
 @Composable
 private fun DrawerRow(
     icon: ImageVector,
     title: String,
-    detail: String,
+    detail: String? = null,
     testTag: String,
     onClick: () -> Unit,
     detailMuted: Boolean = false,
     footnote: String? = null
 ) {
+    // 局部 val：下面按「有没有值」分成两种渲染分支
+    val detailText = detail
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -540,23 +554,35 @@ private fun DrawerRow(
         }
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = TextTertiary
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = detail,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                // 未绑定的学号 / 未设置的学期要用次级墨色：它们是「还没有的值」，
-                // 和已填好的值用同一个字重会让人以为真填过。
-                color = if (detailMuted) TextSecondary else MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
+            if (detailText == null) {
+                // 只有标题：它就是这一行的全部内容，按主文本呈现。
+                Text(
+                    text = title,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            } else {
+                Text(
+                    text = title,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextTertiary
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = detailText,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    // 未绑定的学号 / 未设置的学期要用次级墨色：它们是「还没有的值」，
+                    // 和已填好的值用同一个字重会让人以为真填过。
+                    color = if (detailMuted) TextSecondary else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             if (footnote != null) {
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(

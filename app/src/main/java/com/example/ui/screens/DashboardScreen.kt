@@ -260,22 +260,30 @@ internal data class HeroLayout(
  * 整页比例就和设计时的那一版对不上了。缩字则不会：字变小，围着它的
  * 框、卡片、胶囊跟着变小，整页还是那个设计。
  *
- * ## 天气块的宽度跟着**宽屏字阶**走
+ * ## 天气块的宽度跟着**有效字号缩放**走
  *
  * 竖排版固定 108.dp 是因为最坏那句「杭州 · 空气轻度污染 138」在字号 1.0 时
- * 要 105.9.dp。宽屏字阶放大之后它要 105.9 × 1.1 ≈ 116.5.dp —— **108 装不下了，
+ * 要 105.9.dp。字号放大之后它要 105.9 × 有效缩放 —— **108 装不下了，
  * 指数会被 Ellipsis 截掉**（指数恰恰是最需要看全的那个数）。
  *
- * 所以这里按字阶**等比**放大块宽：108 × 字阶。比例放大保留了原来那 2dp 余量。
- * 只跟字阶走、不跟用户的系统字号走：用户的字号放大时块本来就该跟着重排，
- * 而这一块宽是要跟日期抢位置的，不能无底线地长。
+ * 所以这里按有效缩放**等比**放大块宽：108 × 有效缩放。比例放大保留了原来那 2dp 余量。
+ *
+ * ## 有效缩放 = 系统字号 × 宽屏字阶，两者都要跟
+ *
+ * 早先这里只跟**宽屏字阶**走，理由是「用户的字号放大时块本来就该跟着重排」。
+ * 那是在「用户字号一放大，版式整体让位」的前提下说的 ——
+ * 版式不缩、整页都放大，块宽不跟就必然截断指数。
+ *
+ * 现在版式缩放与字号缩放**各管一件事**（见 [effectiveLayoutScaleFor]），
+ * 块宽就必须把**两个**乘数都算上：系统字号（用户自己设的）与宽屏字阶。
+ * 只跟其中一个走，另一档就会在那个组合下把指数截掉。
  *
  * @param physicalWidthDp 窗口的**物理**宽度（dp）。决定设备档位：宽屏字阶、
  *   日期字号上限档都按它判。
  * @param layoutWidthDp 窗口的**排版**宽度（dp）。决定版面里实际有多宽：
  *   缩放之后它比物理宽大（320dp 的屏 → 排版 390dp），
  *   拿物理宽去比排版空间会算错一段。
- * @param effectiveFontScale 有效字号缩放（系统 × 内容缩放 × 宽屏字阶）。
+ * @param effectiveFontScale 有效字号缩放（系统 × 宽屏字阶）。
  */
 internal fun heroLayoutFor(
     physicalWidthDp: Int,
@@ -286,7 +294,14 @@ internal fun heroLayoutFor(
     val widthClass = widthClassFor(physicalWidthDp)
     val typeScale = typeScaleFor(physicalWidthDp)
     val wide = widthClass != WindowWidthClass.COMPACT && inner >= HeroWideMinInner
-    val weatherWidth = if (wide) HeroWideWeatherWidth else BlockWidth * typeScale
+    // 竖排版：块宽按有效缩放等比放大（108 × 有效缩放），保证最坏那句放得下。
+    // 宽屏版：那一栏本来就比竖排版宽得多，它的基准宽里已经含了宽屏字阶的余量，
+    // 所以这里只按**系统字号**再放大一次 —— 否则系统字号一放大就又截断。
+    val weatherWidth = if (wide) {
+        HeroWideWeatherWidth * effectiveFontScale / typeScale
+    } else {
+        BlockWidth * effectiveFontScale
+    }
     // 并排时日期列的宽度
     val sideBySideColumn = inner - HeroWeatherGap - weatherWidth
     // 缩字缩到底（最小档）还放不下 → 只能改版式
@@ -1787,6 +1802,23 @@ private fun FeaturedCourseCard(
         0f
     }
     val percent = (progress * 100).roundToInt()
+    // 卡高锚点：这张卡的**最小**高度（内容装不下时才被撑大）。
+    val cardMinHeight = cardHeightAnchor(
+        designHeight = 124.dp,
+        designMainSp = CourseCardTitleFontSize,
+        mainSp = CourseCardTitleFontSize,
+        effectiveFontScale = LocalEffectiveFontScale
+    )
+    // 内容区的高度 = 卡高 - 上下内边距。
+    //
+    // 这一行里有两根「贯通内容区」的竖条（左轨、中间那根发丝线），它们都靠
+    // `fillMaxHeight()` 拉满。而**拉不满**：这一行的高度来自卡的 `heightIn(min=…)`，
+    // 对行里的孩子来说高度是**无界**的 —— `fillMaxHeight()` 在无界高度上等于没写，
+    // 那根空的 Box 就塌成 0 高，竖条直接消失（像素级查过：整条左缘都是卡面色，
+    // 一根竖条都没有；中间那根发丝线同样不见）。
+    //
+    // 所以给一个**下限**：高度有界时 `fillMaxHeight()` 拉满，无界时靠这个下限撑着。
+    val contentAreaHeight = cardMinHeight - 28.dp * LocalEffectiveFontScale
     // 教室写全名（带校区前缀）。
     //
     // 早先这里会砍掉「紫金港」前缀，为的是给同一行里的教师名腾宽度——那时教室是
@@ -1812,14 +1844,7 @@ private fun FeaturedCourseCard(
             // 基准屏上 17sp 的课名占卡高 13.7%，2.0 倍字号下不放大下限就变成 17% ——
             // 同一张卡在不同字号下长得不一样。
             // 课名没有档位，主角放大倍数就是字号缩放本身。
-            .heightIn(
-                min = cardHeightAnchor(
-                    designHeight = 124.dp,
-                    designMainSp = CourseCardTitleFontSize,
-                    mainSp = CourseCardTitleFontSize,
-                    effectiveFontScale = LocalEffectiveFontScale
-                )
-            )
+            .heightIn(min = cardMinHeight)
     ) {
         Row(
             modifier = Modifier
@@ -1844,10 +1869,14 @@ private fun FeaturedCourseCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 左轨贯通整个内容区。原来只有 56dp，在 112dp 的卡里像半截没画完。
+            //
+            // `heightIn(min = contentAreaHeight)` 不是凑数：**没有它这根竖条是 0 高**
+            // （高度无界时 `fillMaxHeight()` 拉不满，空 Box 直接塌掉）。
             Box(
                 modifier = Modifier
                     .width(5.dp)
                     .fillMaxHeight()
+                    .heightIn(min = contentAreaHeight)
                     .clip(RoundedCornerShape(2.5.dp))
                     .background(
                         Brush.verticalGradient(
@@ -1962,10 +1991,12 @@ private fun FeaturedCourseCard(
 
             Spacer(modifier = Modifier.width(10.dp))
             // 发丝线贯通内容区，把右边读数单独划成一列。
+            // 同样要 `heightIn(min = contentAreaHeight)`：理由见上面 contentAreaHeight 那段。
             Box(
                 modifier = Modifier
                     .width(1.dp)
                     .fillMaxHeight()
+                    .heightIn(min = contentAreaHeight)
                     .background(Color.White.copy(alpha = 0.34f))
             )
             Spacer(modifier = Modifier.width(10.dp))

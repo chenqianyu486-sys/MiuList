@@ -25,7 +25,8 @@ import org.junit.Test
  * 1. **缩字优先，版式兜底**：日期按左列宽逐档降；只有缩到最小档还放不下，
  *    才允许把天气块挪到第二段（改版式）。
  * 2. **同步**：版式缩放系数与字号缩放里的内容缩放是**同一个数**。
- * 3. **让位是全有或全无**：用户放大系统字号时，dp 与 sp 一起让位。
+ * 3. **两条线各管一件事**：版式缩放只跟屏宽走（装不装得下），
+ *    字号缩放只跟系统字号走（用户想不想字大一点）——**谁也不否决谁**。
  */
 class ResponsiveTest {
 
@@ -42,7 +43,7 @@ class ResponsiveTest {
 
     /** 某个「物理宽 × 系统字号」下的版式缩放系数。 */
     private fun layoutScaleOf(physicalWidthDp: Int, systemFontScale: Float = 1.0f): Float =
-        effectiveLayoutScaleFor(physicalWidthDp, systemFontScale)
+        effectiveLayoutScaleFor(physicalWidthDp)
 
     /** 某个「物理宽 × 系统字号」下的排版宽（dp）。 */
     private fun layoutWidthOf(physicalWidthDp: Int, systemFontScale: Float = 1.0f): Int =
@@ -99,14 +100,37 @@ class ResponsiveTest {
     }
 
     @Test
-    fun `用户放大字号时版式与字号一起让位`() {
-        // 332dp 的屏上内容缩放是 0.82。
-        // 系统字号 1.5 时，版式缩放必须回到 1 —— 只让位给字号、版式照缩，
-        // 就成了「框缩了字没缩」，和「字缩了框没缩」是同一个错的两个方向。
-        assertEquals(1f, layoutScaleOf(332, 1.5f), 0.0001f)
-        assertEquals(1f, layoutScaleOf(320, 2f), 0.0001f)
+    fun `用户放大字号时版式照缩不缩让位`() {
+        // 332dp 的屏上内容缩放是 0.82 —— 那是「411dp 的设计装不装得进这个屏」的答案，
+        // 与用户想不想大字**无关**。
+        //
+        // 早先这里写的是「字号放大就让位，版式回到 1.0」，理由是「框缩了字没缩」。
+        // 那个理由不成立：density 是 dp→px 与 sp→px **共同的**换算系数，
+        // 缩 density 会让字与框**等比**缩小，字相对于框仍然是用户要的那么大。
+        // 让位只是让整套设计相对屏幕大 24% —— 恰好错在真机那一档（窄屏 + 大字号）。
+        assertEquals(0.82f, layoutScaleOf(332, 1.5f), 0.0001f)
+        assertEquals(0.82f, layoutScaleOf(332, 2.0f), 0.0001f)
+        assertEquals(0.82f, layoutScaleOf(320, 1.5f), 0.0001f)
         // 用户没放大时，版式照缩。
         assertEquals(0.82f, layoutScaleOf(332, 1.0f), 0.0001f)
+    }
+
+    @Test
+    fun `字号放大不影响版式缩放只影响字号缩放`() {
+        // 两条线各管一件事，谁也不否决谁：
+        // - 版式缩放（density）：只跟屏宽走
+        // - 字号缩放（fontScale）：跟着系统字号走
+        for (width in intArrayOf(320, 332, 360, 411)) {
+            val baseline = layoutScaleOf(width, 1.0f)
+            for (system in floatArrayOf(1.15f, 1.3f, 1.5f, 2.0f)) {
+                assertEquals(
+                    "${width}dp / 系统字号 $system：版式缩放不该被字号改写",
+                    baseline,
+                    layoutScaleOf(width, system),
+                    0.0001f
+                )
+            }
+        }
     }
 
     @Test
@@ -204,16 +228,45 @@ class ResponsiveTest {
 
     @Test
     fun `缩字救不了时才改版式`() {
-        // 411dp + 系统字号 2.0：版式照缩吗？不 —— 用户放大了字号，
-        // 内容缩放整体让位，版式是 411dp 的原样，日期列 243dp。
+        // 411dp + 系统字号 2.0：版式是 411dp 的原样（基准宽不缩），日期列 243dp。
         // 而字号是用户的 2.0 倍，日期缩到最小档也要 296dp —— 缩字救不了，改版式。
         assertTrue("411dp + 2.0 字号应改版式", layoutOf(411, 2.0f).stacked)
         // 窄屏 + 大字号同理。
         assertTrue("320dp + 1.5 字号应改版式", layoutOf(320, 1.5f).stacked)
-        assertTrue("332dp + 1.2 字号应改版式", layoutOf(332, 1.2f).stacked)
         // 反过来：字号正常时永远不改版式。
         assertFalse("411dp + 1.0 不应改版式", layoutOf(411, 1.0f).stacked)
-        assertFalse("411dp + 1.5 不应改版式", layoutOf(411, 1.5f).stacked)
+        // 411dp + 1.5 现在**会**改版式（早先是不会的）。
+        //
+        // 起因是天气块改为跟着有效字号缩放：字号 1.5 时块宽 108 → 162dp，
+        // 并排的日期列只剩 201dp，装不下最小档（222dp），于是改为上下两段。
+        //
+        // 这是**更好的**取舍：改版式后日期拿整行 363dp，22.sp 正好放得下；
+        // 而若强行并排，日期会被压到 14.sp（最小档），同时那块天气里的
+        // 空气指数还会被 Ellipsis 截掉。两头都坏，不如换排法。
+        assertTrue("411dp + 1.5 字号应改版式（日期拿整行，不被压到 14.sp）", layoutOf(411, 1.5f).stacked)
+        // 改版式之后日期仍是 22.sp —— 主角没有被缩小。
+        assertEquals(22f, dateSizeOf(411, 1.5f), 0.01f)
+    }
+
+    @Test
+    fun `窄屏加一点字号仍不改版式`() {
+        // 用户真机（332dp、系统字号 1.16）这一档**不该**改版式：
+        // 天气块仍然与日期并排，而不是被挤到下一行。
+        //
+        // 早先写的是「332dp + 1.2 字号应改版式」—— 那条断言钉的是「让位规则」：
+        // 版式整体不缩时，332dp 的排版只有 332dp 宽，日期列被压到放不下 22.sp，
+        // 于是天气被挤到第二段。
+        //
+        // 现在版式缩放只跟屏宽走：332dp 的排版宽是 405dp（= 332 ÷ 0.82），
+        // 与 411dp 基准屏几乎一样宽，于是这一档能保持并排。
+        assertFalse(
+            "332dp + 1.2 字号不应改版式（天气不该被挤到下一行）",
+            layoutOf(332, 1.2f).stacked
+        )
+        assertFalse(
+            "332dp + 1.16 字号（用户真机）不应改版式",
+            layoutOf(332, 1.16f).stacked
+        )
     }
 
     @Test
@@ -243,15 +296,35 @@ class ResponsiveTest {
 
     @Test
     fun `系统字号放大时降档而不是截断`() {
-        // 411dp、系统字号 1.5：22sp 会渲染成 349dp，远超 243dp 的日期列。
-        val layout = layoutOf(411, 1.5f)
-        val fontScale = effectiveFontScaleFor(411, 1.5f)
+        // 411dp、系统字号 2.0：22.sp 会渲染成 465dp，远超日期列 —— 必须降档。
+        // （1.5 这一档现在会改版式：天气块按字号放大到 162dp，日期列被挤到放不下
+        //   22.sp，于是改成上下两段、日期拿整行 363dp，22.sp 正好放得下。）
+        val layout = layoutOf(411, 2.0f)
+        val fontScale = effectiveFontScaleFor(411, 2.0f)
         val size = heroDateFontSize(layout.dateColumnWidth, fontScale)
         assertTrue("字号放大后应降档，实际 ${size.value}", size.value < 22f)
         assertTrue(
             "降档后必须放得下",
             renderedWidth(size.value, fontScale) <= layout.dateColumnWidth.value
         )
+    }
+
+    @Test
+    fun `天气块跟字号缩放走所以指数不被截断`() {
+        // 最坏那句「杭州 · 空气轻度污染 138」在字号 1.0 时要 105.9dp。
+        // 字号一放大，它要 105.9 × 有效缩放 —— 天气块若不跟着放大，
+        // 指数就会被 Ellipsis 截掉（而指数恰是这一行最该看全的那个数）。
+        //
+        // 所以块宽必须与**有效字号缩放**同步，而不是只跟宽屏字阶走。
+        for (system in floatArrayOf(1.0f, 1.16f, 1.3f, 1.5f, 2.0f)) {
+            val layout = layoutOf(411, system)
+            val needed = 105.9f * effectiveFontScaleFor(411, system)
+            assertTrue(
+                "411dp / 字号 $system：天气块 ${layout.weatherWidth.value}dp 装不下 " +
+                    "最坏那句（要 ${"%.1f".format(needed)}dp），指数会被截断",
+                layout.weatherWidth.value + 0.01f >= needed
+            )
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -290,6 +363,7 @@ class ResponsiveTest {
         // 走的是「并排 + 放大字阶」这一档，块宽按字阶等比放大。
         assertEquals(108f * 1.10f, layoutOf(600).weatherWidth.value, 0.01f)
         // 800dp 起走两栏，天气独占一栏，给的是那一栏的固定宽度。
+        // （那一栏的基准宽里已经含了宽屏字阶的余量，所以系统字号 1.0 时就是 160。）
         assertEquals(160f, layoutOf(800).weatherWidth.value, 0.01f)
         assertEquals(160f, layoutOf(840).weatherWidth.value, 0.01f)
     }

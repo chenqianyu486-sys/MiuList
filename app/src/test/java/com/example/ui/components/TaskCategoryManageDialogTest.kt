@@ -162,21 +162,18 @@ class TaskCategoryManageDialogTest {
     @Test
     fun settings_screen_renders_category_management_card() {
         var openedCategoryManage = false
-        val state = com.example.ui.viewmodel.MainUiState(
-            customTaskTypes = listOf(customType1)
-        )
 
         composeTestRule.setContent {
             com.example.ui.screens.SettingsScreen(
-                state = state,
                 onOpenTransferDialog = {},
                 onOpenCategoryManageDialog = { openedCategoryManage = true }
             )
         }
 
-        // 验证设置页有待办分类管理卡片，且副标题包含自定义分类数量
+        // 验证设置页有待办分类管理卡片；这一项**只留标题**，
+        // 原来下面那行「4 个自带分类 · N 个自定义分类」已经没有了。
         composeTestRule.onNodeWithText("待办分类管理").assertExists()
-        composeTestRule.onNodeWithText("4 个自带分类 · 1 个自定义分类").assertExists()
+        composeTestRule.onNodeWithText("4 个自带分类 · 1 个自定义分类").assertDoesNotExist()
 
         // 点击「管理」按钮
         composeTestRule.onNodeWithTag("open_task_category_dialog_button").performClick()

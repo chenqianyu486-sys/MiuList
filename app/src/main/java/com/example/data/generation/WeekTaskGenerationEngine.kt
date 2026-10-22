@@ -179,7 +179,6 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
         rule: TaskGenerationRule,
         zone: ZoneId
     ): TaskEntity {
-        val classroom = anchor.classroom.ifBlank { course.classroom }
         val startTimeText = periodTable.slotOf(anchor.startPeriod)?.startTime ?: "08:00"
         val startTimestamp = startTimestampOf(anchor, date, zone)
 
@@ -210,7 +209,7 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
             courseCategory = course.category,
             courseColorHex = course.colorHex,
             title = "${course.name} 第${week}周${typeWord}",
-            description = describe(type, classroom, course.teacher, week),
+            description = describe(type, week),
             taskType = type.name,
             startTimeTimestamp = startTimestamp,
             startTimeString = "${getDayName(anchor.dayOfWeek)} $startTimeText " +
@@ -228,20 +227,34 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
         )
     }
 
+    /**
+     * 自动生成待办的**备注**：这一条待办要做什么。
+     *
+     * **只说「做什么」，不重复课程自己的信息。**
+     *
+     * 原来的写法有三处毛病：
+     * 1. 句子太长（作业那条 30 个字），而备注是弹层里唯一的正文，16.sp 摆着，
+     *    一屏就一句话；
+     * 2. 尾上挂着「（教师 / 教室）」——那是**这门课自己的事实**，课程那一行
+     *    已经写着课程名，用户也知道自己是谁的课；把它塞进「做什么」那句话里，
+     *    读起来像一句没头没尾的事实清单；
+     * 3. 实验报告那条写成「根据〈教室〉实验操作记录」——教室不是实验记录的来源，
+     *    这句话本身就不通。
+     *
+     * 现在三条同形：**动词 + 这件事的内容 +（哪一周）**。
+     */
     private fun describe(
         type: TaskType,
-        classroom: String,
-        teacher: String,
         week: Int
     ): String = when (type) {
         TaskType.PRE_STUDY ->
-            "第${week}周上课前完成教材对应小节与预习思考题（$teacher / $classroom）"
+            "完成第${week}周教材对应小节与预习思考题"
 
         TaskType.LAB_REPORT ->
-            "根据${classroom}实验操作记录，整理测试用例与分析报告并提交"
+            "根据实验记录整理测试用例与分析报告"
 
         else ->
-            "梳理第${week}周课堂重点，独立完成课后作业并在截止前按时提交"
+            "整理第${week}周课堂重点并完成课后作业"
     }
 
     private companion object {

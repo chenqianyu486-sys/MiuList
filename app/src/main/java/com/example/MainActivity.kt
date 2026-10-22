@@ -713,7 +713,6 @@ fun MainApp(viewModel: MainViewModel) {
 
                             NavigationTab.SETTINGS -> {
                                 SettingsScreen(
-                                    state = state,
                                     onOpenTransferDialog = { viewModel.openTransferDialog() },
                                     onOpenCategoryManageDialog = { viewModel.openTaskCategoryManageDialog() },
                                     onOpenWallpaperDialog = { viewModel.openWallpaperDialog() },

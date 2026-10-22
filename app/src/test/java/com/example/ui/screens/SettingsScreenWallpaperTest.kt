@@ -5,10 +5,6 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import com.example.data.model.WallpaperConfig
-import com.example.data.model.WallpaperPresets
-import com.example.data.model.WallpaperType
-import com.example.ui.viewmodel.MainUiState
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -26,22 +22,19 @@ class SettingsScreenWallpaperTest {
     @Test
     fun settings_screen_displays_wallpaper_card_and_opens_dialog() {
         var openedWallpaper = false
-        val state = MainUiState(
-            wallpaperConfig = WallpaperConfig(type = WallpaperType.DEFAULT)
-        )
 
         composeTestRule.setContent {
             SettingsScreen(
-                state = state,
                 onOpenTransferDialog = {},
                 onOpenCategoryManageDialog = {},
                 onOpenWallpaperDialog = { openedWallpaper = true }
             )
         }
 
-        // 验证设置页内存在自定义壁纸卡片与默认副标题
+        // 这一项**只留标题**：原来卡下面还挂着「默认壁纸 · Cloudy Knoxville」
+        // 这样的副标题，现在整个设置页的副标题一律不要了。
         composeTestRule.onNodeWithText("自定义壁纸").assertIsDisplayed()
-        composeTestRule.onNodeWithText("默认壁纸 · Cloudy Knoxville").assertIsDisplayed()
+        composeTestRule.onNodeWithText("默认壁纸 · Cloudy Knoxville").assertDoesNotExist()
 
         // 点击「更换」按钮
         composeTestRule.onNodeWithTag("open_wallpaper_button").performClick()
@@ -49,24 +42,24 @@ class SettingsScreenWallpaperTest {
     }
 
     @Test
-    fun settings_screen_displays_preset_and_custom_subtitles() {
-        val presetState = MainUiState(
-            wallpaperConfig = WallpaperConfig(
-                type = WallpaperType.PRESET,
-                presetId = WallpaperPresets.SOFT_GRASS.id
-            )
-        )
-
+    fun settings_screen_items_keep_titles_only() {
         composeTestRule.setContent {
             SettingsScreen(
-                state = presetState,
                 onOpenTransferDialog = {},
                 onOpenCategoryManageDialog = {},
                 onOpenWallpaperDialog = {}
             )
         }
 
-        composeTestRule.onNodeWithText("预设壁纸 · Soft Grass").assertIsDisplayed()
+        composeTestRule.onNodeWithText("数据导入 / 导出").assertIsDisplayed()
+        composeTestRule.onNodeWithText("待办分类管理").assertIsDisplayed()
+        composeTestRule.onNodeWithText("自定义壁纸").assertIsDisplayed()
+
+        // 四条副标题都不该再出现
+        composeTestRule.onNodeWithText("课表、待办、分类与规则一起带走").assertDoesNotExist()
+        composeTestRule.onNodeWithText("4 个自带分类 · 暂无自定义分类").assertDoesNotExist()
+        composeTestRule.onNodeWithText("预设壁纸 · Soft Grass").assertDoesNotExist()
+        composeTestRule.onNodeWithText("四步走一遍：浙大同步、课程类别、联动规则与壁纸").assertDoesNotExist()
     }
 
     @Test

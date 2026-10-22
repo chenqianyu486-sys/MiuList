@@ -112,6 +112,33 @@ import kotlin.math.roundToInt
 // 320/332/360/390dp 在系统字号 1.0 时**保持并排**（日期降到 20/20/22/22.sp），
 // 只有窄屏 + 用户把系统字号放大、或任何宽度上的极端字号，才把天气挪到第二段。
 //
+// ## 第三条：版式缩放与字号缩放**各管一件事，谁也不否决谁**
+//
+// 这是最容易搞错的一处，所以单独立一条：
+//
+// - **版式缩放**（[effectiveLayoutScaleFor]，乘在 density 上）回答的是
+//   「411dp 的设计装不装得进这个屏」。装不下就得缩 —— 这件事与用户想不想大字毫无关系。
+// - **字号缩放**（[effectiveFontScaleFor]）回答的是「用户想不想字大一点」。
+//
+// 两者的乘积才是最终渲染结果，而**它们永远不会互相抵消**。
+//
+// 早先这里有过一条「让位规则」：用户放大系统字号时，版式缩放整体让位（回到 1.0），
+// 理由是「只让位给字号、版式照缩，就成了框缩了字没缩」。
+//
+// **那条规则是错的，而且恰好错在最需要适配的组合上**（窄屏 + 大字号）。原因有二：
+//
+// 1. **它否决了一件与字号无关的事。** 332dp 的屏装不下 411dp 的设计 —— 这是几何事实。
+//    让位规则让它装不下，于是整套设计原样塞进窄屏：所有东西相对屏幕大了 24%。
+//    用户看到的「字体和 UI 元素太大」正是这么来的。
+// 2. **它担心的「框缩了字没缩」并不成立。** density 是 dp→px 与 sp→px **共同的**
+//    换算系数（sp→px = sp × fontScale × density），所以缩 density 会让字与框
+//    **等比**缩小；字号缩放再乘上去，字相对于框仍然是用户要的那么大。
+//    换句话说：用户的「字大一点」被完整保留，而整页相对屏幕缩到了设计稿的样子。
+//
+// 实测（用户真机 332dp 宽、系统字号 1.16）：让位时 22.sp 的日期渲染成 858px
+// （占屏宽 79%），整页每样东西都比设计稿大 24%；去掉让位后同一句约 590px（55%），
+// 与 411dp 基准屏上那句的比例一致。
+//
 // ## 第三条：宽度不够时看宽，**高度不够时看高**
 //
 // 上面两条都只管**宽度**。但横屏（914×411）与分屏小窗（640×360）反过来了：
@@ -271,7 +298,7 @@ fun contentScaleFor(screenWidthDp: Int): Float =
 /**
  * **版式（dp）方向**的缩放系数。
  *
- * ## 它和 [effectiveFontScaleFor] 里那半是**同一个判定**
+ * ## 它只跟屏宽有关，与系统字号无关
  *
  * 自适应的基础是「字号与版式同步缩放」：屏窄了，字缩小多少，围着它的
  * 框、卡片、胶囊也要缩小多少 —— 这样整页的比例和留白关系才和设计稿一致。
@@ -281,18 +308,24 @@ fun contentScaleFor(screenWidthDp: Int): Float =
  * （实测：320dp 的屏上，固定 chrome 占主卡的 48%，而设计稿上是 36%；
  * 22.sp 的日期被迫降到 16.sp，主角变小。）
  *
- * ## 让位规则：用户放大字号时，dp 与 sp **一起**让位
+ * ## 这里**没有**「让位规则」
  *
- * 用户把系统字号调到 150% 之后，如果只让位给字号（dp 照缩），就等于
- * 「框缩了、字没缩」——和上面犯的是同一个错，只是方向相反。
- * 所以内容缩放是**全有或全无**：用户明确要大字，App 就不自作主张地缩版式，
- * 改由重排机制（降档、`heightIn`、实测高度）去接。
+ * 早先的写法是：用户放大系统字号时，版式缩放整体让位（回到 1.0），
+ * 理由是「只让位给字号、版式照缩，就成了框缩了字没缩」。
+ *
+ * **那个理由不成立**，因为 density 是 dp→px 与 sp→px **共同的**换算系数
+ * （sp→px = sp × fontScale × density）：缩 density 会让字与框**等比**缩小，
+ * 字相对于框仍然是用户要的那么大。让位只是让**整套设计**相对屏幕大 24%。
+ *
+ * 而「411dp 的设计装不装得进 332dp 的屏」是几何事实，与用户想不想大字无关。
+ * 让位规则恰好在这件事上否决了适配 —— 也就是恰好错在真机那一档上。
+ *
+ * 用户要的是「字大一点」，那是 [effectiveFontScaleFor] 的事；
+ * 「这一屏装得下吗」是这里的事。**两者各管一件，谁也不否决谁。**
  *
  * @param windowWidthDp 窗口宽度（dp）。
- * @param systemFontScale 用户设的系统字号（1.0 = 没放大）。
  */
-fun effectiveLayoutScaleFor(windowWidthDp: Int, systemFontScale: Float): Float =
-    if (systemFontScale > 1f) 1f else contentScaleFor(windowWidthDp)
+fun effectiveLayoutScaleFor(windowWidthDp: Int): Float = contentScaleFor(windowWidthDp)
 
 /**
  * 本次施加的**版式缩放系数**（dp 方向）。
@@ -370,7 +403,7 @@ data class ContentScale(
 @Composable
 fun rememberContentScale(base: Density, windowWidthDp: Int): ContentScale {
     return remember(base, windowWidthDp) {
-        val layoutScale = effectiveLayoutScaleFor(windowWidthDp, base.fontScale)
+        val layoutScale = effectiveLayoutScaleFor(windowWidthDp)
         ContentScale(
             layoutScale = layoutScale,
             density = Density(
@@ -558,14 +591,15 @@ val panelSafeArea: WindowInsets
  * - **density × 内容缩放** → 版式与字号**一起**等比缩（窄屏的主机制）；
  * - **fontScale = 系统字号 × 宽屏字阶** → 字号相对版式的**额外**放大。
  *
- * ## 让位规则
+ * ## 这里**没有**让位规则
  *
- * 用户主动放大系统字号时，**内容缩放整体让位**（[effectiveLayoutScaleFor]）：
- * dp 与 sp 一起不缩，让用户要的「大字」按大字的样子排，由重排机制接住。
+ * 早先的写法是：用户放大系统字号时，内容缩放整体让位（见 [effectiveLayoutScaleFor]）。
+ * 那个规则已撤销 —— 窄屏收缩与用户字号是**两件独立的事**：
+ * 前者管「411dp 的设计装不装得进这个屏」，后者管「用户想不想字大一点」。
  *
  * ## 为什么抽成纯函数
  *
- * 这条公式同时被两处用：主题算 `LocalDensity`（[rememberContentScaledDensity]）
+ * 这条公式同时被两处用：主题算 `LocalDensity`（[rememberContentScale]）
  * 和单测验「某个宽度 + 某个系统字号下，字到底多大」。
  *
  * 如果单测自己抄一份公式，两边迟早会对不上——而对不上的那一天，
@@ -576,79 +610,6 @@ val panelSafeArea: WindowInsets
  */
 fun effectiveFontScaleFor(windowWidthDp: Int, systemFontScale: Float): Float =
     systemFontScale * typeScaleFor(windowWidthDp)
-
-/**
- * 把字号整体缩放后的密度。
- *
- * 只改 `fontScale`、不动 `density`：**dp 的物理尺寸由屏幕密度决定**，那是系统
- * 已经算对的一层；再乘一次就等于把 dp 缩成「dp 的 dp」。
- * 改 fontScale 之后，所有 `sp`（不论是 `MaterialTheme.typography` 还是各处
- * 写死的 `fontSize = 13.sp`）都跟着缩，而所有 `dp`（按钮、留白、卡片）原样保留。
- *
- * ## 三个乘数，各管一件事
- *
- * ```
- * 有效字号 = 系统字号 × 窄屏收缩 × 宽屏字阶
- * ```
- *
- * - **系统字号**：用户自己设的，一个字不动。
- * - **窄屏收缩**（[contentScaleFor]）：屏窄于 411dp 时按比例收。
- *   **但用户已经放大过字号时这一项让位**（见下）。
- * - **宽屏字阶**（[typeScaleFor]）：窗口 ≥ 600dp 时轻微放大。
- *   窄屏恒为 1.0。
- *
- * ## 用户放大字号时，窄屏收缩必须让位
- *
- * 这是这一版新加的一条规矩。原来是**无条件**相乘：332dp 的屏上把系统字号
- * 设成 150%，App 实际只给 123%——**App 在替用户做决定**，把人家明确要的
- * 「大一点」又压回去一部分。
- *
- * 窄屏收缩存在的原因是「411dp 的设计塞不进 320dp 的屏」，是替版面兜底；
- * 而用户放大字号是一个**明确的意图**，它要的不是「字大一点」，是
- * 「这一屏按大字的规矩重新排」。用缩放去回应意图，等于回错了话。
- *
- * 让位之后靠什么兜住？靠这一层早就建好的重排机制：顶栏 `heightIn(min = …)`、
- * 浮岛高度按实测文字算、主卡高度按实测文字算、日期按可用宽逐档降、
- * 弹层大字号时收边距。这些全都与「窄屏收缩」无关，用户字号一放大它们就顶上来了。
- *
- * @see LocalEffectiveFontScale 这个合成结果怎么被布局决策用到。
- */
-/**
- * 把字号与版式一起缩放后的密度。
- *
- * ## 这一版改了什么
- *
- * 原来只缩 `fontScale`（字号），`density`（dp 换算）原样透传 ——
- * 也就是「字缩小了、框还是原尺寸」。那样做的后果是：
- * 固定 dp（页距、卡内边距、天气块 108dp）不缩 → 文字相对变大 →
- * 放不下 → 文字被迫**再缩一次** → 整页比例与设计稿对不上。
- *
- * 现在 **dp 与 sp 用同一个系数缩**，411dp 的设计被等比缩进小屏：
- * 框、卡片、胶囊跟着字一起变小，比例和留白关系保持不变。
- *
- * ## 宽屏为什么不同步
- *
- * 宽屏（≥ 600dp）走的是另一条路：内容列按窗口宽**拉伸**（82%），
- * 而不是把设计整体放大；[typeScaleFor] 那一档字阶放大也只作用于字号。
- * 所以宽屏上「字变大、框没大」的不对称依然存在 —— 这是**有意的**：
- * 宽屏版式还没定型，等横屏/平板版式一起设计时再统一处理。
- * 窄屏这边才是「等比缩进」的主战场。
- *
- * @see LocalEffectiveFontScale 这个合成结果怎么被布局决策用到。
- * @see effectiveLayoutScaleFor 让位规则（用户放大字号时 dp 与 sp 一起让位）。
- */
-@Composable
-fun rememberContentScaledDensity(): Density {
-    val base = LocalDensity.current
-    val configuration = LocalConfiguration.current
-    val width = configuration.screenWidthDp
-    return remember(base, width) {
-        Density(
-            density = base.density * effectiveLayoutScaleFor(width, base.fontScale),
-            fontScale = effectiveFontScaleFor(width, base.fontScale)
-        )
-    }
-}
 
 /**
  * 周课表这种**七列并排的密表**允许的最大字号缩放。
@@ -691,7 +652,7 @@ fun rememberCappedFontDensity(maxFontScale: Float): Density {
 /**
  * 当前**有效字号缩放**：系统字号 × 宽屏字阶。
  *
- * `LocalDensity.current.fontScale` 已经是这个值（见 [rememberContentScaledDensity]：
+ * `LocalDensity.current.fontScale` 已经是这个值（见 [rememberContentScale]：
  * 它把这几个乘数乘完再交出去），所以这里只是把它换成一个
  * **能进布局决策**的名字。
  *
@@ -719,7 +680,7 @@ val LocalEffectiveFontScale: Float
  *
  * ## 它回答的是同一个问题：**这张卡的主角比设计稿大了多少倍**
  *
- * 版式（所有 dp 尺寸）已经跟着屏幕宽缩放过一次了 —— 那是 [rememberContentScaledDensity]
+ * 版式（所有 dp 尺寸）已经跟着屏幕宽缩放过一次了 —— 那是 [rememberContentScale]
  * 里 `density` 乘上的那个系数，字与框**一起**缩，所以窄屏上比例天然不变。
  *
  * 真正会让「字相对框变大」的只剩两件事：
