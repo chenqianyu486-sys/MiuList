@@ -9,7 +9,7 @@ GitHub 收到后判正文非法（先报 Invalid request，换 curl 又报 body 
 
 用法：
     python tools/release_helper.py notes  --version v1.0.2 --prev-tag v1.0.1 --commits-file x.txt
-    python tools/release_helper.py payload --version v1.0.2 --notes-file notes.md --out payload.json
+    python tools/release_helper.py payload --name "..." --tag v1.0.2 --notes-file notes.md --out payload.json
 """
 
 from __future__ import annotations
@@ -88,6 +88,10 @@ def cmd_payload(args: argparse.Namespace) -> int:
         "prerelease": bool(args.prerelease),
         "draft": False,
     }
+    # tag_name 是 GitHub 建 release 的**必填**项：少了它，API 直接 422
+    # 「"tag_name" wasn't supplied.」（v1.0.2 那次真踩过）
+    if args.tag:
+        payload["tag_name"] = args.tag
     # ensure_ascii=False：中文与 emoji 原样写出，文件再按 UTF-8 存盘。
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     Path(args.out).write_text(text, encoding="utf-8")
@@ -110,6 +114,7 @@ def main(argv: list[str]) -> int:
 
     p = sub.add_parser("payload", help="拼 GitHub API 的 JSON 载荷")
     p.add_argument("--name", required=True)
+    p.add_argument("--tag", default="", help="tag_name（建 release 必填）")
     p.add_argument("--notes-file", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--prerelease", action="store_true")

@@ -238,8 +238,10 @@ else
 fi
 
 # API 的 JSON 载荷也在这里生成（拼 JSON 的事交给 Python，见 release_helper.py 的说明）
+# --tag 不能省：tag_name 是 GitHub 建 release 的必填项，缺了 API 直接 422。
 "$PY" tools/release_helper.py payload \
   --name "$RELEASE_NAME" \
+  --tag "$VERSION" \
   --notes-file "$NOTES" \
   --out "$NOTES.payload.json" \
   $([ "$STABLE" -eq 0 ] && echo "--prerelease")
@@ -277,13 +279,21 @@ git log --oneline -1
 # ---------------------------------------------------------------- 推送
 echo ""
 echo "== 推送 =="
-git fetch origin >/dev/null 2>&1 || true
+# fetch 的错误**不能吞**：v1.0.2 那次 fetch 静默失败，origin/main 还是旧的，
+# 于是 BEHIND 算成 0、跳过 rebase，推送被拒（fetch first），
+# 而报错只说「远端有东西」，完全看不出远端领先了多少个提交。
+git fetch origin || { echo "!! fetch 失败，先不推送。" >&2; exit 1; }
 BEHIND="$(git rev-list --count HEAD..origin/main 2>/dev/null || echo 0)"
 if [ "$BEHIND" -gt 0 ]; then
   echo "远端领先 $BEHIND 个提交，先 rebase"
-  git pull --rebase origin main >/dev/null
+  git pull --rebase origin main
 fi
-git push origin main
+# 被拒就再 rebase 一次重试（远端可能在这几秒里又进了新提交）
+git push origin main || {
+  echo "推送被拒，rebase 后重试"
+  git pull --rebase origin main
+  git push origin main
+}
 git push origin "$VERSION"
 
 # ---------------------------------------------------------------- GitHub Release
