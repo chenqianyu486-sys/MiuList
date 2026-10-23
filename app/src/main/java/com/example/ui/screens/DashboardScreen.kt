@@ -181,6 +181,45 @@ private val HeroDateMetaGap = 4.dp
 /** 周次 chip 的上下内边距（设计值，dp）。 */
 private val HeroWeekChipPadV = 3.5.dp
 
+// =========================================================================
+// 主卡背面（「学在浙大」待交作业）那一面的尺寸
+//
+// 这些数字原本散落在背面的各个 Composable 里（写成 26.dp / 30.dp / 64.dp …），
+// 而**卡高是按正面算的** —— 背面要多少高度没人算，于是窄屏 / 大字号下
+// 背面那排小卡会被卡的下沿裁掉（实测：332dp + 1.16 倍字号，小卡下面那行
+// 「12月3日截止 · 数字电路」只剩半个字）。
+//
+// 所以这里把它们提成常量：背面画的时候用它们，**算卡高的时候也用它们**，
+// 两边必须是同一份数。
+// =========================================================================
+
+/** 背面标题行的徽标直径（跟着字放大）。 */
+private val HeroTodoLogoSize = 26.dp
+
+/** 背面标题行徽标的字（「未绑定 / 38 篇待交 / 已交清」）。 */
+private val HeroTodoBadgeFontSize = 11.sp
+
+/** 背面标题行徽章的上下内边距（跟着字放大）。 */
+private val HeroTodoBadgePadV = 2.dp
+
+/** 背面标题行右侧那个一键刷新按钮的直径（**固定**尺寸，不跟字缩放）。 */
+private val HeroTodoRefreshSize = 30.dp
+
+/** 背面那排待办小卡的高度下限（跟着字放大）。 */
+private val HeroTodoMiniCardMinHeight = 64.dp
+
+/** 背面小卡主行（作业名）的字号。 */
+private val HeroTodoMiniCardTitleSp = 12.5.sp
+
+/** 背面小卡备注行（截止时间 · 课程名）的字号。 */
+private val HeroTodoMiniCardRemarkSp = 10.sp
+
+/** 背面小卡的上下内边距（跟着字放大）。 */
+private val HeroTodoMiniCardPadV = 8.dp
+
+/** 背面小卡里「主行 → 备注行」的间距（跟着字放大）。 */
+private val HeroTodoMiniCardGap = 3.dp
+
 /**
  * 窄屏上下两段之间的实际间距：随字号放大。
  */
@@ -508,9 +547,13 @@ fun DashboardScreen(
     // 日期、学期名、副标题三行都跟着长，140dp 装不下——实测副标题「12 门课 ·
     // 31.3 小时」被裁掉下半截。这不是「再加两 dp」能修的，得让卡高跟着内容走。
     //
-    // 正反两面必须同高（翻转时下方列表不能跳），所以这里算的是**正面**所需高度，
-    // 反面那几行在更大字号下也会长，但它没有比正面更高的固有原因：
-    // 反面 64dp 的横向卡片已改成 heightIn(min = 64dp)，整体仍装得进这个高度。
+    // 主卡高度：**正反两面取更高的那个**。
+    //
+    // 正面（日期 + 天气）按它自己那几行字量出来，背面（学在浙大待交作业）
+    // 那一排小卡同样要装得下 —— 以前只算正面，于是窄屏 / 大字号下
+    // 背面的小卡会被卡的下沿裁掉（用户真机 332dp + 1.16 倍字号：
+    // 背面要 141.5dp、正面只要 124.8dp，差的 17dp 全从小卡身上裁）。
+    // 翻转时两面同高，下面的列表才不跳 —— 所以只能取高的那个。
     val heroHeight = heroCardHeightFor(
         weekText = "第 ${state.currentWeek} 周",
         termText = state.semester?.name?.ifBlank { null } ?: "本学期",
@@ -521,7 +564,8 @@ fun DashboardScreen(
         dateStyle = dateStyle,
         stacked = heroStacked,
         compact = shortWindow,
-        mainSp = dateFontSize.value
+        mainSp = dateFontSize.value,
+        backNeeded = heroBackFaceHeightFor()
     )
 
     val cardRevealProgress = LocalCardRevealProgress.current
@@ -751,7 +795,7 @@ fun DashboardScreen(
                                         modifier = Modifier
                                             // 徽标是固定盒子：它跟「学在浙大」那行字并排，
                                             // 字放大时徽标要跟着大，否则它缩成一个小点。
-                                            .size(26.dp.scaledWithText())
+                                            .size(HeroTodoLogoSize.scaledWithText())
                                             .clip(CircleShape)
                                             .background(TeaColor)
                                             .border(0.5.dp, TeaColorBorder, CircleShape),
@@ -794,14 +838,14 @@ fun DashboardScreen(
                                             .background(badgeBg)
                                             .padding(
                                                 horizontal = 7.dp,
-                                                vertical = 2.dp.scaledWithText()
+                                                vertical = HeroTodoBadgePadV.scaledWithText()
                                             )
                                     ) {
                                         Text(
                                             text = badgeText,
                                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                                             color = badgeColor,
-                                            fontSize = 11.sp
+                                            fontSize = HeroTodoBadgeFontSize
                                         )
                                     }
                                 }
@@ -834,7 +878,7 @@ fun DashboardScreen(
 
                                     Box(
                                         modifier = Modifier
-                                            .size(30.dp)
+                                            .size(HeroTodoRefreshSize)
                                             .clip(CircleShape)
                                             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
                                             .clickable(
@@ -866,7 +910,7 @@ fun DashboardScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .heightIn(min = 64.dp.scaledWithText())
+                                        .heightIn(min = HeroTodoMiniCardMinHeight.scaledWithText())
                                         .clip(RoundedCornerShape(14.dp))
                                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
                                         .padding(horizontal = 14.dp),
@@ -898,7 +942,7 @@ fun DashboardScreen(
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .heightIn(min = 64.dp.scaledWithText())
+                                            .heightIn(min = HeroTodoMiniCardMinHeight.scaledWithText())
                                             .clip(RoundedCornerShape(14.dp))
                                             .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f))
                                             .padding(horizontal = 14.dp),
@@ -925,7 +969,7 @@ fun DashboardScreen(
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .heightIn(min = 64.dp.scaledWithText())
+                                            .heightIn(min = HeroTodoMiniCardMinHeight.scaledWithText())
                                             .clip(RoundedCornerShape(14.dp))
                                             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
                                         contentAlignment = Alignment.Center
@@ -1415,7 +1459,9 @@ private fun heroCardHeightFor(
     dateStyle: TextStyle,
     stacked: Boolean,
     compact: Boolean,
-    mainSp: Float
+    mainSp: Float,
+    /** 背面（学在浙大）那一面要的高度，见 [heroBackFaceHeightFor]。 */
+    backNeeded: Dp
 ): Dp {
     // 周次 chip：labelSmall + 11.5sp，上下各 3.5dp 内边距。
     val weekChipHeight = measureTextHeight(
@@ -1460,7 +1506,129 @@ private fun heroCardHeightFor(
         mainSp = mainSp,
         effectiveFontScale = LocalEffectiveFontScale
     )
-    return if (compact) needed else maxOf(designAnchor, needed)
+    return heroCardHeight(
+        frontNeeded = needed,
+        backNeeded = backNeeded,
+        designAnchor = designAnchor,
+        compact = compact
+    )
+}
+
+/**
+ * 主卡的最终高度：**正反两面取更高的那个**。
+ *
+ * ## 为什么是「取高」而不是「各算各的」
+ *
+ * 正面（日期 + 天气）与背面（学在浙大待交作业）共用**同一张卡** ——
+ * 翻转时高度不变，下面的列表才不跳。所以只能有一个高度，
+ * 而这一个高度必须**同时**装得下两面。
+ *
+ * ## 为什么以前会裁
+ *
+ * 以前卡高只按**正面**算，背面要多少高度没人管：窄屏 / 大字号下
+ * 背面那排待办小卡会被卡的下沿裁掉（实测：用户真机 332dp + 1.16 倍字号，
+ * 背面要 141.5dp、正面只要 124.8dp，差的 17dp 全从小卡身上裁）。
+ *
+ * ## 三个高度各是什么
+ *
+ * - [frontNeeded]：正面那几行字实测出来的高度；
+ * - [backNeeded]：背面那两行（标题行 + 小卡行）实测出来的高度；
+ * - [designAnchor]：设计锚点（140dp 按主角放大），竖排时保设计留白用的下限。
+ *
+ * 矮屏（横屏 / 分屏窄条）不套锚点 —— 那 140dp 是竖排时定的，
+ * 矮屏里它会吃掉半屏 —— 但**两面取高**在矮屏上照样成立：
+ * 否则矮屏翻到背面一样是裁的。
+ *
+ * 这是纯函数：值都从外面进来，所以「背面有没有参与这个取高」
+ * 可以被单测直接钉住（见 `HeroCardHeightTest`）。
+ */
+internal fun heroCardHeight(
+    frontNeeded: Dp,
+    backNeeded: Dp,
+    designAnchor: Dp,
+    compact: Boolean
+): Dp = if (compact) {
+    maxOf(frontNeeded, backNeeded)
+} else {
+    maxOf(designAnchor, frontNeeded, backNeeded)
+}
+
+/**
+ * 主卡**背面**（学在浙大待交作业）那一面需要多高。
+ *
+ * ## 为什么必须单独算
+ *
+ * 正面（日期 + 天气）与背面共用**同一张卡** —— 翻转时高度不变，下面的列表才不跳。
+ * 以前卡高只按**正面**算，背面要多少高度没人管，于是窄屏 / 大字号下
+ * 背面那排待办小卡会被卡的下沿裁掉：
+ *
+ * - 实测（用户真机 332dp + 1.16 倍系统字号）：背面要 141.5dp，正面只要 124.8dp，
+ *   差的 17dp 全从小卡身上裁 —— 用户截图里「HW04 动态电路的时…」下面那行
+ *   只剩半个字。
+ *
+ * 所以现在卡高取**两面里更高的那个**（见 `heroHeight` 的计算处）。
+ *
+ * ## 背面由三段组成
+ *
+ * 1. **标题行**：徽标（跟着字放大）、徽章、刷新按钮（固定 30dp），取最高的那个；
+ * 2. **内容行**：横向待办小卡，高度下限 64dp（跟着字放大）；
+ * 3. **卡片的上下内边距**（跟着字放大）。
+ *
+ * 每一项都用的是背面**真正画出来**的那份尺寸（[HeroTodoLogoSize] 等常量），
+ * 所以这里算出来的高度就是背面实际要占的高度。
+ */
+@Composable
+private fun heroBackFaceHeightFor(): Dp {
+    val gap = LocalEffectiveFontScale
+    val cardPaddingV = HeroCardPaddingV * gap
+
+    // 标题行：徽标、徽章、刷新按钮并排，取最高的那个。
+    val badgeHeight = measureTextHeight(
+        text = "未绑定",
+        style = MaterialTheme.typography.labelSmall.copy(
+            fontWeight = FontWeight.SemiBold,
+            fontSize = HeroTodoBadgeFontSize
+        )
+    ) + HeroTodoBadgePadV * gap * 2
+    val titleRowHeight = maxOf(
+        HeroTodoLogoSize * gap,
+        HeroTodoRefreshSize,
+        badgeHeight
+    )
+
+    // 内容行：横向待办小卡。下限 64dp，但内容本身可能更高（取两者的最大值）。
+    val miniCardHeight = maxOf(
+        HeroTodoMiniCardMinHeight * gap,
+        heroTodoMiniCardContentHeight()
+    )
+
+    return cardPaddingV + titleRowHeight + miniCardHeight + cardPaddingV
+}
+
+/**
+ * 背面那张小卡**内容**要占的高度（不含高度下限 64dp）。
+ *
+ * 小卡里是「作业名 + 截止时间 · 课程名」两行，所以高度 = 上下内边距 +
+ * 主行 + 间距 + 备注行。每一项都用**小卡里真正用的那个样式**去量。
+ */
+@Composable
+private fun heroTodoMiniCardContentHeight(): Dp {
+    val gap = LocalEffectiveFontScale
+    val titleHeight = measureTextHeight(
+        text = "HW04 动态电路的时域分析",
+        style = MaterialTheme.typography.titleSmall.copy(
+            fontWeight = FontWeight.Bold,
+            fontSize = HeroTodoMiniCardTitleSp
+        )
+    )
+    val remarkHeight = measureTextHeight(
+        text = "12月3日 · 数字电路",
+        style = MaterialTheme.typography.labelSmall.copy(fontSize = HeroTodoMiniCardRemarkSp)
+    )
+    return HeroTodoMiniCardPadV * gap * 2 +
+        titleHeight +
+        HeroTodoMiniCardGap * gap +
+        remarkHeight
 }
 
 @Composable
@@ -1496,14 +1664,14 @@ private fun CoursesMiniCard(
                 // 「至少有 64dp」的那块面。不能再用 fillMaxSize —— 外层是
                 // LazyRow，把高度下限写成 min 之后，fillMaxSize 会按 LazyRow
                 // 的可用高度把每张小卡拉满（而不是 64dp）。
-                .heightIn(min = 64.dp.scaledWithText())
+                .heightIn(min = HeroTodoMiniCardMinHeight.scaledWithText())
                 .glassSurface(
                     shape = RoundedCornerShape(14.dp),
                     tint = cardTint(courseColor, 0.08f),
                     tintAlpha = 0.08f,
                     baseCoatAlpha = contentBase
                 )
-                .padding(horizontal = 10.dp, vertical = 8.dp.scaledWithText()),
+                .padding(horizontal = 10.dp, vertical = HeroTodoMiniCardPadV.scaledWithText()),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 左侧课程色细条
@@ -1524,13 +1692,13 @@ private fun CoursesMiniCard(
                     text = item.title,
                     style = MaterialTheme.typography.titleSmall.copy(
                         fontWeight = FontWeight.Bold,
-                        fontSize = 12.5.sp
+                        fontSize = HeroTodoMiniCardTitleSp
                     ),
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(3.dp * LocalEffectiveFontScale))
+                Spacer(modifier = Modifier.height(HeroTodoMiniCardGap * LocalEffectiveFontScale))
 
                 // 备注行：DDL（紧急状态突出显示）· 课程名
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1538,7 +1706,7 @@ private fun CoursesMiniCard(
                         text = item.dueFormatted,
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = if (item.isUrgent) FontWeight.Bold else FontWeight.Normal,
-                            fontSize = 10.sp
+                            fontSize = HeroTodoMiniCardRemarkSp
                         ),
                         color = if (item.isUrgent) Color(0xFFC84238) else TextSecondary,
                         maxLines = 1
@@ -1547,13 +1715,13 @@ private fun CoursesMiniCard(
                         text = " · ",
                         style = MaterialTheme.typography.labelSmall,
                         color = TextSecondary,
-                        fontSize = 10.sp
+                        fontSize = HeroTodoMiniCardRemarkSp
                     )
                     Text(
                         text = item.courseName,
                         style = MaterialTheme.typography.labelSmall,
                         color = TextSecondary,
-                        fontSize = 10.sp,
+                        fontSize = HeroTodoMiniCardRemarkSp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
