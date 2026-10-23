@@ -335,7 +335,41 @@ git push origin main || {
   git pull --rebase origin main
   git push origin main
 }
-git push origin "$VERSION"
+
+# ---------------------------------------------------------------- 重新指向 tag
+#
+# tag 是在 rebase **之前**打的，而 rebase 会改写提交哈希 —— 于是 tag 会指着一个
+# 已经不在 main 上的旧提交（v1.0.3 就撞上了：远端有个 Actions 的定时天气提交，
+# rebase 之后 tag 指向的提交成了孤儿，GitHub 上那个 release 会挂在「本地有、
+# 远端没有」的历史上）。
+#
+# 所以推完之后要重新对一次：把 tag 移到 main 上那个「release: $VERSION」的提交，
+# 再强推 tag。移动之前先核对两边**内容**一致（差异只能落在 CI 自动生成的文件上，
+# 比如 Actions 每天同步的 weather.json），内容变了就不该随手挪 tag。
+REL_COMMIT="$(git log --format='%H' --grep="^release: $VERSION " -1 main)"
+if [ -z "$REL_COMMIT" ]; then
+  echo "!! 在 main 上找不到「release: $VERSION」的提交，tag 先不动。" >&2
+  exit 1
+fi
+if [ "$REL_COMMIT" != "$(git rev-list -n1 "$VERSION")" ]; then
+  echo "tag 指向的提交被 rebase 改写了，重新指向 $REL_COMMIT"
+  OLD_TREE="$(git rev-parse "$(git rev-list -n1 "$VERSION")^{tree}")"
+  NEW_TREE="$(git rev-parse "$REL_COMMIT^{tree}")"
+  if [ "$OLD_TREE" != "$NEW_TREE" ]; then
+    CHANGED="$(git diff --name-only "$(git rev-list -n1 "$VERSION")" "$REL_COMMIT")"
+    echo "   差异文件: ${CHANGED:-（无）}"
+    case "$CHANGED" in
+      *weather.json|"") ;;
+      *)
+        echo "!! 差异里有非 CI 生成的文件，tag 先不动，请人工确认。" >&2
+        exit 1
+        ;;
+    esac
+    echo "   差异只在 CI 自动生成的文件上，安全"
+  fi
+  git tag -f -a "$VERSION" "$REL_COMMIT" -m "MiuList ${VERSION}$([ "$STABLE" -eq 1 ] || echo '（测试版）')"
+fi
+git push --force origin "$VERSION"
 
 # ---------------------------------------------------------------- GitHub Release
 echo ""
