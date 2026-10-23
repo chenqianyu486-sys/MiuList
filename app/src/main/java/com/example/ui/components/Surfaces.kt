@@ -232,6 +232,47 @@ private val IslandIconLabelGap = 3.dp
 private val IslandLabelFontSize = 11.5.sp
 
 /**
+ * 浮岛入口里标签的**行高**。
+ *
+ * ## 为什么不能让它继承
+ *
+ * 标签原来写的是 `Text(text = label, fontSize = IslandLabelFontSize, ...)`。
+ * 那条重载会把 **LocalTextStyle** 合并进来 —— Material3 的 `MaterialTheme`
+ * 把它设成了 `typography.bodyLarge`，而本项目的 bodyLarge 是 **lineHeight = 24.sp**。
+ *
+ * 于是 11.5.sp 的标签撑着一个 **24.sp 的行盒**：行盒比字形高出一倍多，
+ * 标签被推到了浮岛下沿，**下半截还被裁掉**（实测：332dp 屏 + 1.16 倍系统字号下，
+ * 入口内容比浮岛内高多 5dp，居中排版 → 上下各裁 2.5dp，标签就悬在岛边上）。
+ * 基准屏上也是裁的（内容 61dp vs 内高 56dp），只是 1.0 倍字号下不明显。
+ *
+ * ## 这里给的是多少
+ *
+ * 16.5.sp ≈ 中文回退字体的自然行高（1.43em × 11.5.sp，实测值）。
+ * 给一个**贴着字形**的行高，行盒就不再虚高，标签在岛里的相对位置
+ * 和基准屏一致（图标在上、标签在下、下沿留白）。
+ *
+ * 万一某台设备的回退字体更高（自然行高 > 16.5.sp），行盒会取自然值，
+ * 而 [islandHeight] 用**同一个样式**去量，量到的也是自然值 —— 两边仍然对得上，
+ * 岛会跟着长高，不会裁字。
+ */
+private val IslandLabelLineHeight = 16.5.sp
+
+/**
+ * 浮岛标签的样式。
+ *
+ * 显式给全（不继承 LocalTextStyle），但**字距照旧**：
+ * bodyLarge 的 letterSpacing 是 0.5.sp，继承时两个汉字的宽度是 24dp；
+ * 不写这一项就会缩到 23dp —— 宽度一变，标签和图标就不再对齐。
+ */
+@Composable
+private fun islandLabelStyle(fontWeight: FontWeight): TextStyle = TextStyle(
+    fontSize = IslandLabelFontSize,
+    lineHeight = IslandLabelLineHeight,
+    fontWeight = fontWeight,
+    letterSpacing = 0.5.sp
+)
+
+/**
  * 浮岛实际高度：**装得下就是 64dp，装不下就按内容长高**。
  *
  * ## 矮屏（横屏 / 分屏窄条）时改用纯图标版
@@ -242,6 +283,14 @@ private val IslandLabelFontSize = 11.5.sp
  *
  * 所以矮屏时：标签不画、入口变窄（72dp → 48dp）、岛身高 64dp → 48dp，
  * 底部让位从 100dp 降到 84dp。**省下来的 16dp 全给内容。**
+ *
+ * ## 这个高度必须和**渲染出来的**入口内容对得上
+ *
+ * 算高用的每一项都对应 [IslandEntry] 里真实存在的一段：
+ * 内边距、入口内边距、图标、图标与标签的间距、标签行高。
+ * 两边用同一套数值（[islandInnerPadV] / [islandEntryPadV] / [islandIconLabelGap]），
+ * 岛就**永远装得下**，不会再出现「算的时候按 A、画的时候按 B、
+ * 标签悬在岛边上」这种事。
  */
 @Composable
 fun islandHeight(): Dp {
@@ -251,20 +300,51 @@ fun islandHeight(): Dp {
     // 岛高本身是**内容驱动**的（下面那个 needed），所以这些一放大，岛自然就长高。
     val gap = LocalEffectiveFontScale
     // 矮屏不画标签，也就没有标签行高与它上面的间距。
+    val labelHeight = if (short) {
+        0.dp
+    } else {
+        measureTextHeight(
+            text = "总览",
+            style = islandLabelStyle(FontWeight.Medium)
+        )
+    }
+    return islandHeightFor(labelHeight = labelHeight, fontScale = gap, short = short)
+}
+
+/**
+ * 浮岛的高度（纯函数版，供单测用）。
+ *
+ * 算高与渲染共用同一套间距函数，所以两边永远对得上。
+ *
+ * @param labelHeight 标签那一行实测出来的高度（dp）。矮屏没有标签，传 0。
+ * @param fontScale 有效字号缩放（系统字号 × 宽屏字阶）。
+ * @param short 是不是矮屏（横屏 / 分屏窄条）。
+ */
+internal fun islandHeightFor(
+    labelHeight: Dp,
+    fontScale: Float,
+    short: Boolean
+): Dp {
     val labelBlock = if (short) {
         0.dp
     } else {
-        IslandIconLabelGap * gap + measureTextHeight(
-            text = "总览",
-            style = TextStyle(fontSize = IslandLabelFontSize, fontWeight = FontWeight.Medium)
-        )
+        islandIconLabelGap(fontScale) + labelHeight
     }
-    val needed = IslandInnerPadV * gap * 2 +
-        IslandEntryPadV * gap * 2 +
-        IslandIconSize.scaledWithText() +
+    val needed = islandInnerPadV(fontScale) * 2 +
+        islandEntryPadV(fontScale) * 2 +
+        IslandIconSize * fontScale +
         labelBlock
     return maxOf(if (short) IslandHeightShort else IslandHeight, needed)
 }
+
+/** 浮岛本体的内边距（上下）。跟字号缩放：字大了，岛里的呼吸也要跟着大。 */
+internal fun islandInnerPadV(fontScale: Float): Dp = IslandInnerPadV * fontScale
+
+/** 浮岛入口的内边距（上下）。跟字号缩放。 */
+internal fun islandEntryPadV(fontScale: Float): Dp = IslandEntryPadV * fontScale
+
+/** 图标与标签之间的间距。跟字号缩放。 */
+internal fun islandIconLabelGap(fontScale: Float): Dp = IslandIconLabelGap * fontScale
 
 /** 矮屏时浮岛只留图标，这一档的最小高度。 */
 private val IslandHeightShort = 48.dp
@@ -376,7 +456,7 @@ fun FloatingIslandNav(
                         .union(WindowInsets.displayCutout)
                         .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
                 )
-            .padding(horizontal = 20.dp, vertical = IslandOuterPadV)
+            .padding(horizontal = 20.dp, vertical = IslandOuterPadV.scaledWithText())
             .glassSurface(
                 shape = GlassIslandShape,
                 blurRadius = IslandBlurRadius,
@@ -391,7 +471,12 @@ fun FloatingIslandNav(
                 interactionSource = remember { MutableInteractionSource() }
             ) {}
             .height(islandHeight())
-            .padding(horizontal = IslandHorizontalPadding, vertical = IslandInnerPadV),
+            .padding(
+                horizontal = IslandHorizontalPadding,
+                // 内边距跟着字放大：算岛高时算的也是这一份（见 [islandInnerPadV]），
+                // 两边必须同一个数，否则标签就会被挤到岛的下沿。
+                vertical = islandInnerPadV(LocalEffectiveFontScale)
+            ),
         contentAlignment = Alignment.CenterStart
     ) {
         // 1. 底层高亮平移滑块：严格在 RenderNode Draw 阶段平移，不触发组件 Relayout，轻盈丝滑无拖影
@@ -480,7 +565,8 @@ private fun IslandEntry(
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
             .clip(RoundedCornerShape(20.dp))
             .clickable { onClick() }
-            .padding(vertical = IslandEntryPadV),
+            // 内边距跟着字放大：算岛高时算的也是这一份（见 [islandEntryPadV]）。
+            .padding(vertical = islandEntryPadV(LocalEffectiveFontScale)),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -491,12 +577,18 @@ private fun IslandEntry(
             modifier = Modifier.size(IslandIconSize.scaledWithText())
         )
         if (showLabel) {
-            Spacer(modifier = Modifier.height(IslandIconLabelGap))
+            Spacer(modifier = Modifier.height(islandIconLabelGap(LocalEffectiveFontScale)))
             Text(
                 text = label,
-                fontSize = IslandLabelFontSize,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                color = contentColor
+                // 样式写全（不继承 LocalTextStyle）：bodyLarge 的 24.sp 行高会把
+                // 11.5.sp 的标签撑成一个虚高的行盒，标签被推到岛的下沿、还裁掉半截。
+                // 详见 [IslandLabelLineHeight]。
+                style = islandLabelStyle(
+                    if (selected) FontWeight.Bold else FontWeight.Medium
+                ),
+                color = contentColor,
+                maxLines = 1,
+                softWrap = false
             )
         }
     }
