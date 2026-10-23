@@ -109,6 +109,39 @@ fi
 [ -n "$PY" ] || { echo "!! 找不到 python。" >&2; exit 1; }
 echo "分支 $BRANCH · 目标版本 $VERSION · $([ "$STABLE" -eq 1 ] && echo '正式版' || echo '测试版')"
 
+# ---------------------------------------------------------------- 代理兜底
+#
+# 这台机器的 HTTP_PROXY / HTTPS_PROXY 指向一个本地代理（7897），而那个代理
+# 到 GitHub 的通路**不可靠**：
+#   - 有时 TLS 握手直接失败（`schannel: failed to receive handshake`）
+#   - 有时能连上，但出口 IP 被 GitHub 限流，返回 403
+#     （`API rate limit exceeded for <出口IP>`）
+# 而**绕过代理直连是好的**。
+#
+# 所以这里先探一下：当前环境能不能拿到 api.github.com 的 200。连不上就只给
+# GitHub 相关主机加 NO_PROXY，**不是**把整个代理关掉 —— 别的主机可能正需要它。
+#
+# 探针必须看 **HTTP 状态码**，不能只看 curl 的退出码：限流时 curl 退出码是 0，
+# 响应却是 403 —— 只看退出码会把「不通」当成「通」，兜底就永远不触发。
+#
+# 探针还必须放在 push 之前：脚本的顺序是「先推代码、再建 Release」，两处都要走
+# 这条路，只修后半段等于没修。
+api_reachable() {
+  local code
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$1" 2>/dev/null || echo 000)"
+  [ "$code" = "200" ]
+}
+if ! api_reachable "https://api.github.com/"; then
+  GH_HOSTS="github.com,api.github.com,uploads.github.com,objects.githubusercontent.com,release-assets.githubusercontent.com,codeload.github.com"
+  export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$GH_HOSTS"
+  export no_proxy="$NO_PROXY"
+  if api_reachable "https://api.github.com/"; then
+    echo "（本机代理到 GitHub 不可用，已对 GitHub 主机绕过代理）"
+  else
+    echo "!! 连不上 api.github.com（绕过代理后仍不通），发版大概率会失败。" >&2
+  fi
+fi
+
 # 上一版（用来比对证书、列提交）
 PREV_TAG="$(git tag --list 'v*' --sort=-v:refname | head -1)"
 [ -n "$PREV_TAG" ] || PREV_TAG=""
