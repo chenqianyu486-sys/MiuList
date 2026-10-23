@@ -111,15 +111,17 @@ echo "分支 $BRANCH · 目标版本 $VERSION · $([ "$STABLE" -eq 1 ] && echo '
 
 # ---------------------------------------------------------------- 代理兜底
 #
-# 这台机器的 HTTP_PROXY / HTTPS_PROXY 指向一个本地代理（7897），而那个代理
-# 到 GitHub 的通路**不可靠**：
-#   - 有时 TLS 握手直接失败（`schannel: failed to receive handshake`）
-#   - 有时能连上，但出口 IP 被 GitHub 限流，返回 403
-#     （`API rate limit exceeded for <出口IP>`）
-# 而**绕过代理直连是好的**。
+# 这台机器的 HTTP_PROXY / HTTPS_PROXY 指向一个本地代理（7897），而 GitHub 的
+# 两台主机在代理上**需要相反的处理**：
 #
-# 所以这里先探一下：当前环境能不能拿到 api.github.com 的 200。连不上就只给
-# GitHub 相关主机加 NO_PROXY，**不是**把整个代理关掉 —— 别的主机可能正需要它。
+#   github.com        —— 直连 443 超时，**必须走代理**
+#                       （git push、资产下载都在这台）
+#   api.github.com    —— 代理出口 IP 被 GitHub 限流，返回 403
+#     uploads.github.com —— **必须绕开代理**（建 Release、传资产）
+#
+# 所以兜底**只**把 API 那两台加进 NO_PROXY，github.com 留给代理走 ——
+# 早先版本把 github.com 也列进去，结果 push 卡在
+# `Failed to connect to github.com port 443`。
 #
 # 探针必须看 **HTTP 状态码**，不能只看 curl 的退出码：限流时 curl 退出码是 0，
 # 响应却是 403 —— 只看退出码会把「不通」当成「通」，兜底就永远不触发。
@@ -132,11 +134,11 @@ api_reachable() {
   [ "$code" = "200" ]
 }
 if ! api_reachable "https://api.github.com/"; then
-  GH_HOSTS="github.com,api.github.com,uploads.github.com,objects.githubusercontent.com,release-assets.githubusercontent.com,codeload.github.com"
-  export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$GH_HOSTS"
+  GH_API_HOSTS="api.github.com,uploads.github.com"
+  export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$GH_API_HOSTS"
   export no_proxy="$NO_PROXY"
   if api_reachable "https://api.github.com/"; then
-    echo "（本机代理到 GitHub 不可用，已对 GitHub 主机绕过代理）"
+    echo "（本机代理到 api.github.com 不可用，已对 API 主机绕过代理）"
   else
     echo "!! 连不上 api.github.com（绕过代理后仍不通），发版大概率会失败。" >&2
   fi
