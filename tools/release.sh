@@ -304,7 +304,13 @@ release: $VERSION $([ "$STABLE" -eq 1 ] && echo '' || echo '测试版')
 
 versionName $VERSION_NO_V / versionCode $NEW_CODE，release APK 用同一把上传密钥签名。
 EOF
-[ -n "$SUMMARY" ] && printf '%s\n' "$SUMMARY" >> "$MSG"
+# 这里必须用 if，不能写 `[ -n "$SUMMARY" ] && printf ...`：
+# 脚本开着 `set -e`，而 `&&` 链在条件为假时整条命令的退出码是 1 —— 脚本会在
+# 「已提交、已打 tag、还没 push」的**最尴尬的位置**直接退出，把仓库留在
+# 「本地有 tag、远端没有」的半截状态。
+if [ -n "$SUMMARY" ]; then
+  printf '%s\n' "$SUMMARY" >> "$MSG"
+fi
 git commit -F "$MSG" >/dev/null
 git tag -a "$VERSION" -m "MiuList ${VERSION}$([ "$STABLE" -eq 1 ] || echo '（测试版）')"
 git log --oneline -1
