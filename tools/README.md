@@ -19,6 +19,7 @@
 | `check_proportions.py` | 量各断点**渲染出来**的尺寸，核对「整页比例」与设计稿是否一致 |
 | `compare_baseline.py` | 与基线目录逐张做像素比对，报告差异率并写出差异图 |
 | `capture-dialogs.sh` | **弹层**矩阵：逐个打开各弹层并截图（页面矩阵只抓四个页面，弹层要另跑） |
+| `emulator.sh` | **模拟器启停**：按需起（两种渲染模式）、按需停（回收 ~2 GB 内存） |
 | `contact_sheet.py` / `make_sheets.py` | 把一批截图拼成联络表（一断点一张） |
 | `compare_sheet.py` | 把「改动前 / 改动后」并排拼成对照表 |
 | `release.sh` | **发版**：提版本号 → 构建 → 校验 → 提交打 tag → 推送 → 发 Release |
@@ -77,6 +78,43 @@ tools/capture-matrix.sh --baseline
    uiautomator 拿到的是 Compose 的语义**原文**，截断只发生在渲染层，dump 里看不出来。
    要判断截断得看截图——那是 `compare_baseline.py` 的活。
    这里只报**结构上确凿**的问题（越界、挤没），误报一多，脚本就没人跑了。
+
+---
+
+## 模拟器：`tools/emulator.sh`
+
+```bash
+tools/emulator.sh start            # 起（默认 swiftshader，可与基线逐像素比）
+tools/emulator.sh start --gpu host # 起（宿主 GPU，快，但像素与基线不可比）
+tools/emulator.sh stop             # 关（立刻回收约 2 GB）
+tools/emulator.sh status           # 看跑没跑、占多少、当前屏幕/密度/字号
+```
+
+`start` 会把设备设成**用户真机那一档**（1080×2414 @520dpi = 332×743 dp，
+系统字号 1.16）—— 自适应问题多半出在这一档。
+
+### 两种渲染模式不能混用
+
+| 模式 | 快慢 | 能不能和基线逐像素比 |
+|------|------|---------------------|
+| swiftshader（默认） | 慢（CPU 软画每一帧） | **能** |
+| host | 快（走真显卡） | **不能** |
+
+两者的抗锯齿不同，截图差几个灰阶。基线目录 `.tmp/adapt/baseline` 是
+**swiftshader** 抓的，所以：
+
+- **调试轮**（反复改、反复看）：`--gpu host`，省时间；
+- **验收轮**（要跑 `compare_baseline.py`）：必须回到 swiftshader，
+  否则比对报告里的「差异率」全是噪声。
+
+### 为什么值得「用完就关」
+
+无窗口模拟器常驻 **约 2 GB**。这台机器提交上限只有 34 GB，构建期一度占到 71%，
+Windows 开始压缩内存页，桌面就跟着发飘（用户说的「电脑越来越卡」）。
+`stop` 一下就是 2 GB。
+
+**别用 bash 后台任务起模拟器**：任务有 30 分钟上限，超时会把模拟器一起杀掉。
+脚本内部用 PowerShell 的 `Start-Process` 起，进程独立于脚本。
 
 ---
 
