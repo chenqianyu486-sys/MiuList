@@ -209,6 +209,29 @@ tap_label() {
   return 0
 }
 
+# 按**正则**找一段文字并点它。
+#
+# 为什么要单独一个：主卡正面那行日期是「2026年10月22日 星期四」，
+# 每天都不一样，写死文字就点了空气 —— 用「年/月/日」的模式去抓才行。
+tap_pattern() {
+  local pattern=$1
+  local tmp="$OUT_ROOT/.tmp_dump.xml"
+  dump "$tmp"
+  local bounds
+  bounds="$(grep -o "$pattern[^>]*bounds=\"[^\"]*\"" "$tmp" | head -1 |
+    sed 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/')"
+  rm -f "$tmp"
+  if [ -z "$bounds" ]; then
+    echo "  !! 找不到匹配「$pattern」的文字，跳过这一步"
+    return 1
+  fi
+  set -- $bounds
+  local x=$(( ($1 + $3) / 2 )) y=$(( ($2 + $4) / 2 ))
+  adb shell input tap "$x" "$y"
+  sleep 2
+  return 0
+}
+
 capture_one() {
   local label=$1 size=$2 density=$3 font=$4
   local out="$OUT_ROOT/$label"
@@ -225,6 +248,17 @@ capture_one() {
 
   adb exec-out screencap -p > "$out/dashboard.png"
   dump "$out/dashboard.xml"
+
+  # 主卡的**背面**（学在浙大待交作业）：点一下卡就翻过去。
+  # 这一面以前会被卡的下沿裁掉（用户真机 332dp + 1.16 倍字号：
+  # 背面要 141.5dp、正面只要 124.8dp，小卡下面那行只剩半个字），
+  # 所以矩阵里必须有一张它的截图 —— 只看正面看不出这个 bug。
+  tap_pattern 'text="[0-9]*年[0-9]*月[0-9]*日' && {
+    adb exec-out screencap -p > "$out/dashboard_flip.png"
+    dump "$out/dashboard_flip.xml"
+    # 翻回正面，接着抓别的页面
+    tap_pattern 'text="学在浙大"' && true
+  }
 
   tap_label 课表 && { adb exec-out screencap -p > "$out/schedule.png"; dump "$out/schedule.xml"; }
   tap_label 清单 && { adb exec-out screencap -p > "$out/checklist.png"; dump "$out/checklist.xml"; }
