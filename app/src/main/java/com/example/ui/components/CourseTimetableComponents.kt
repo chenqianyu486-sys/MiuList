@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -449,6 +451,18 @@ fun CourseLinkageSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                // **必须可滚**：底部弹层是底部对齐的，内容比屏幕高时多出来的那截
+                // 会直接掉到屏幕外 —— 面板本身不封顶（`GlassBottomSheetHost` 没有
+                // `heightIn(max=…)`），所以这里不给上限，内容就是被裁掉而不是能滚到。
+                //
+                // 后果很具体：系统字号 2.0 时，这张弹层最下面的「编辑课程 / 删除课程」
+                // 两个按钮会掉出屏幕，**永远点不到**（实测 uiautomator dump 里根本没有
+                // 这两个节点）。加了这个滚动就能滚到。
+                //
+                // 顺带说一句：这不是备注引入的 bug —— 加备注之前那 2 个按钮就已经在
+                // 屏幕外了（只差 ~18px），备注只是把差距拉大到 ~165px。
+                // 别的底部弹层（待办详情）一直用 [SheetContent]，它带滚动。
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(top = 4.dp, bottom = 12.dp)
         ) {
