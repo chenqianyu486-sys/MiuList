@@ -153,6 +153,14 @@ data class CourseDto(
     val category: String? = null,
     val classroom: String? = null,
     val colorHex: String? = null,
+    /**
+     * 课程备注。语义见 [com.example.data.codec.CourseBundle.note]：
+     * **null = 这份文档没带这一项**，空串 = 带了且明确为空。
+     *
+     * Moshi 默认不写 null 字段，所以「没带」在 JSON 里就是**键根本不存在**，
+     * 读回来仍是 null —— 两边对得上。
+     */
+    val note: String? = null,
     val automation: AutomationDto? = null,
     val slots: List<SlotDto>? = null,
     val extra: String? = null

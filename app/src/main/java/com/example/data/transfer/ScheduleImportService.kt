@@ -206,6 +206,10 @@ class ScheduleImportService(
         return db.withTransaction {
             // 必须在清课程**之前**记下待办挂在谁身上：清完就再也认不出谁是谁了。
             val taskLinks = if (strategy == ImportStrategy.REPLACE) captureTaskLinks() else emptyList()
+            // 同样必须在清课程之前把本机的**课程备注**记下来。理由与待办一致：
+            // 浙大同步的语义是「把课表换成服务器上的那份」，而服务器根本不知道
+            // 用户写过什么备注。不先记下来，一次同步就会把用户写好的备注全清空。
+            val localNotes = captureCourseNotes()
 
             if (strategy == ImportStrategy.REPLACE) {
                 courseRepo.clearAllCourses()
@@ -240,11 +244,23 @@ class ScheduleImportService(
                 val existing = if (mergeByKey) hits.firstOrNull() else null
                 val slots = course.slots.map { it.toSlotWithWeeks(v) }
 
+                // 备注归谁：**包里带了才算数，没带就留着本机的。**
+                //
+                // 三种来源都落到这一条判断上：
+                // - 浙大同步：教务网没有「备注」这个字段 → 包里没有 → 保住本机的
+                // - zju-ical 的课表文件：同样没有这一项 → 保住本机的
+                // - 本 App 自己导出的文件：一定带（空备注写成空串）→ 以文件为准
+                //
+                // 判据必须是「有没有这一项」而不是「内容是不是空」：
+                // 用「空不空」判的话，用户在 A 机器上删掉备注再导出，
+                // 导入 B 机器时就会把 B 上的备注留着 —— 删不掉。
+                val note = if (course.note != null) entity.note else localNotes[key].orEmpty()
+
                 if (existing != null) {
-                    courseRepo.saveCourseWithSlots(entity.copy(id = existing.id), slots)
+                    courseRepo.saveCourseWithSlots(entity.copy(id = existing.id, note = note), slots)
                     updatedCount++
                 } else {
-                    courseRepo.saveCourseWithSlots(entity.copy(id = 0L), slots)
+                    courseRepo.saveCourseWithSlots(entity.copy(id = 0L, note = note), slots)
                     inserted++
                 }
             }
@@ -553,6 +569,24 @@ class ScheduleImportService(
     }
 
     /**
+     * 记下本机每门课写过的备注，返回 `自然键 → 备注`。
+     *
+     * **只收非空的**：没写备注的课不必占一个键位。
+     *
+     * 键用 [naturalKey]，与导入循环里算出来的 `key` 是同一个串：本地存的是
+     * `dedupeKey`（由 `CourseKeys.compute` 算出），浙大那边也是
+     * `CourseKeys.compute`（见 `ZjuScheduleMapper`）—— 两边同算法，键才对得上。
+     *
+     * 为什么要在清课程之前记：浙大同步走 REPLACE，会把课程整表清空重建。
+     * 教务网的数据里没有「备注」这一项，所以那份文件**永远不会**把用户写的
+     * 备注带回来 —— 不先记下来，用户每同步一次就丢一次。
+     */
+    private suspend fun captureCourseNotes(): Map<String, String> =
+        courseRepo.getAllCoursesOnce()
+            .filter { it.note.isNotBlank() }
+            .associate { it.naturalKey() to it.note }
+
+    /**
      * 算出每条待办该挂到新表的哪门课，返回 `待办 id → 命中的课程`（null = 该门课没了）。
      *
      * **返回命中的课程而不是 id**，因为预览阶段这些课还没落库、没有 id 可言；
@@ -654,6 +688,9 @@ class ScheduleImportService(
             teacher = teacher.orEmpty(),
             classroom = classroom.orEmpty(),
             colorHex = colorHex.orEmpty(),
+            // 包里没带这一项时这里是空串，但空串**不等于**「用户把备注清空了」——
+            // 到底用本机的还是用包的，由调用方按「包里有没有这一项」决定（见 commit 里的 note）。
+            note = note.orEmpty(),
             dedupeKey = key.orEmpty(),
             autoPreStudy = a?.preStudy ?: true,
             autoPostHomework = a?.postHomework ?: true,

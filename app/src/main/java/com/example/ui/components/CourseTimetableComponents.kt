@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Assignment
+import androidx.compose.material.icons.automirrored.outlined.StickyNote2
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Delete
@@ -187,6 +188,13 @@ fun TaskDotsBadge(
  * 6. [conflicted] = 该时段和别的课撞了。撞课时格子被压窄，圆角跟着收一点，
  *    排版整体收紧，并在右上角挂一个极小的红点——
  *    挤在半列宽里时，光看颜色分不出哪门课。
+ *
+ * **格子里没有「有课程备注」的角标**，这是量过的：332dp 的真机上，
+ * 一格净宽约 42dp，底部那枚「N 待办」胶囊已经占到离右边缘 6.5dp 以内，
+ * 再放一枚图标必然压到胶囊上（实机截图里它读起来像「待办带了个便签」），
+ * 放在右上角则要跟课程名抢第一行的宽度。
+ * 备注角标改放在**行式**的课程列表上（抽屉的课程行、课表页的「列表」视图），
+ * 那里才有位置；点格子进课程详情弹层，备注就在最上面。
  */
 @Composable
 fun CourseTimetableCell(
@@ -670,6 +678,34 @@ fun CourseLinkageSheet(
                                     )
                                 }
                             }
+                        }
+                    }
+
+                    // 课程备注：只有用户写过的才显示。
+                    //
+                    // 没写就不占地方 —— 这个弹层是「这门课的全部信息」，
+                    // 塞一条「备注：无」进去只会让人以为漏填了。
+                    //
+                    // 放在时段列表**之后**：备注是补充，时段是主信息，
+                    // 顺序跟着「先要紧的后补充」走。
+                    if (course.note.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(verticalAlignment = Alignment.Top) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Outlined.StickyNote2,
+                                contentDescription = null,
+                                modifier = Modifier.size(15.dp),
+                                tint = accentOnCourse(courseColor)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = course.note,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f)
+                            )
                         }
                     }
                 }

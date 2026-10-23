@@ -146,6 +146,18 @@ data class CourseBundle(
     val category: String? = null,
     val classroom: String? = null,
     val colorHex: String? = null,
+    /**
+     * 课程备注（用户自己写的自由文本）。
+     *
+     * **null 与空串是两件事**：null = 这份文件根本没带备注这一项
+     * （zju-ical 的 config.json、浙大同步产出的文档都是这种形状），
+     * 空串 = 带了，而且明确是空的。
+     *
+     * 这个区别是导入侧「包里没有就别动」那条规则的根据：文件没带备注，
+     * 说明**这份文件不知道备注**，不能拿它去盖掉本机已经写好的备注；
+     * 而文件明确带了空串，那就是一份权威的「清空」。
+     */
+    val note: String? = null,
     val automation: AutomationBundle? = null,
     val slots: List<SlotBundle> = emptyList(),
     val extra: String? = null

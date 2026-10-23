@@ -210,6 +210,7 @@ class JsonScheduleCodec : ScheduleCodec {
         category = category,
         classroom = classroom,
         colorHex = colorHex,
+        note = note,
         automation = automation?.let {
             AutomationBundle(
                 preStudy = it.preStudy,
@@ -274,6 +275,7 @@ class JsonScheduleCodec : ScheduleCodec {
                         category = c.category,
                         classroom = c.classroom,
                         colorHex = c.colorHex,
+                        note = c.note,
                         automation = c.automation?.let {
                             AutomationDto(
                                 preStudy = it.preStudy,

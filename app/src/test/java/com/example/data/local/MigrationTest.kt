@@ -120,7 +120,7 @@ class MigrationTest {
         Room.databaseBuilder(context, AppDatabase::class.java, dbName)
             .addMigrations(
                 MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
-                MIGRATION_8_9, MIGRATION_9_10
+                MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11
             )
             .build()
 
@@ -873,6 +873,76 @@ class MigrationTest {
 
             // 再跑一次是空操作
             assertEquals(0, repo.ensureSyncUids())
+        } finally {
+            db.close()
+        }
+    }
+
+    /**
+     * 造一个**真的处在 v10** 的库，用来单独验 v10 → v11（课程备注那一列）。
+     *
+     * 一路迁到 9，再用声明版本 10 的 OpenHelper 跑 MIGRATION_9_10。
+     * 课程表里已经有一批老课（v3 时代插进去的），正好用来验「升级前没有备注」。
+     */
+    private fun createVersion10Database() {
+        createVersion9Database()
+
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(dbName)
+                .callback(object : SupportSQLiteOpenHelper.Callback(10) {
+                    override fun onCreate(db: SupportSQLiteDatabase) = Unit
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {
+                        MIGRATION_9_10.migrate(db)
+                    }
+                })
+                .build()
+        )
+        helper.close()
+    }
+
+    // ---------------------------------------------------------------- v10 → v11
+
+    @Test
+    fun `v10 to v11 gives every existing course an empty note and keeps the rest intact`() = runBlocking {
+        createVersion10Database()
+        val db = openWithMigrations()
+        try {
+            val courses = db.courseDao().getAllCoursesOnce()
+            assertTrue("老课程一条都不能少", courses.isNotEmpty())
+
+            // 升级前根本没有「备注」这个概念：全部落成空串。
+            // 凭空给老课程编一条备注出来，等于替用户编了他没写过的话。
+            assertTrue("老课程不该凭空多出备注", courses.all { it.note == "" })
+
+            // 课程本身一个字节都不能变
+            val math = courses.first { it.name == "高等数学" }
+            assertEquals("MATH101", math.code)
+            assertEquals("王教授", math.teacher)
+            assertEquals("教二-301", math.classroom)
+            assertEquals("#93C5FD", math.colorHex)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `the new note column survives a round-trip through the database`() = runBlocking {
+        createVersion10Database()
+        val db = openWithMigrations()
+        try {
+            val dao = db.courseDao()
+            val course = dao.getAllCoursesOnce().first { it.name == "高等数学" }
+
+            dao.updateCourse(course.copy(note = "期末开卷，教材第3版"))
+            assertEquals(
+                "期末开卷，教材第3版",
+                dao.getAllCoursesOnce().first { it.id == course.id }.note
+            )
+
+            // 清空也要真的清空：备注不能变成「删不掉」的东西
+            dao.updateCourse(course.copy(note = ""))
+            assertEquals("", dao.getAllCoursesOnce().first { it.id == course.id }.note)
         } finally {
             db.close()
         }

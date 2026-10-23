@@ -37,6 +37,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.StickyNote2
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -643,14 +644,31 @@ private fun CourseDrawerRow(
         )
         Spacer(modifier = Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = course.name,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = course.name,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    // weight(1f, fill=false)：课名是自由文本，可能很长，
+                    // 但要给它右侧那枚备注角标留出位置（角标是非加权子节点，
+                    // Row 先量它，课名拿剩下的）。
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                // 备注角标：写过的课在课名后面点一笔。
+                // 没写就不画 —— 抽屉里每门课都挂一枚图标等于没有图标。
+                if (course.note.isNotBlank()) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Outlined.StickyNote2,
+                        contentDescription = "有课程备注",
+                        modifier = Modifier.size(13.dp),
+                        tint = TextTertiary
+                    )
+                }
+            }
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = courseWithSlots.getScheduleSummary(),

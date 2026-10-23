@@ -115,6 +115,7 @@ fun CourseEditDialog(
     var teacher by remember { mutableStateOf(initialCourse?.teacher ?: "") }
     var classroom by remember { mutableStateOf(initialCourse?.classroom ?: "") }
     var colorHex by remember { mutableStateOf(initialCourse?.colorHex ?: "#93C5FD") }
+    var note by remember { mutableStateOf(initialCourse?.note ?: "") }
 
     // Multi-slot drafts
     val slotDrafts = remember {
@@ -223,6 +224,22 @@ fun CourseEditDialog(
                         singleLine = true
                     )
                 }
+
+                // 课程备注：只有用户知道的那部分信息（期末开卷、教材版本、作业提交方式…）。
+                //
+                // 放在教师/教室之后、主题色之前：上面这几块合起来是「这门课是什么」，
+                // 备注正是这句话里唯一只有本人知道的部分。留空即可，不强制填。
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("课程备注（选填）") },
+                    placeholder = { Text("如：期末开卷，教材第3版，作业交到学号邮箱") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("course_note_input"),
+                    minLines = 2,
+                    maxLines = 6
+                )
 
                 // Color Theme Picker (8 Pastel Colors)
                 Text(
@@ -590,6 +607,7 @@ fun CourseEditDialog(
                         teacher = teacher.trim().ifBlank { "任课教师" },
                         classroom = classroom.trim().ifBlank { "教学楼" },
                         colorHex = colorHex,
+                        note = note.trim(),
                         autoPreStudy = autoPreStudy,
                         autoPostHomework = autoPostHomework,
                         autoLabReport = autoLabReport,
@@ -600,6 +618,9 @@ fun CourseEditDialog(
                         teacher = teacher.trim().ifBlank { "任课教师" },
                         classroom = classroom.trim().ifBlank { "教学楼" },
                         colorHex = colorHex,
+                        // 备注照写，不做「空了就当没这条」的判断：
+                        // 用户把备注删干净，本来就该真的删掉。
+                        note = note.trim(),
                         autoPreStudy = autoPreStudy,
                         autoPostHomework = autoPostHomework,
                         autoLabReport = autoLabReport,

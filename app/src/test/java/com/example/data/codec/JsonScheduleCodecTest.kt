@@ -3,6 +3,7 @@ package com.example.data.codec
 import com.example.data.calendar.TweakKind
 import com.example.data.model.CategoryRule
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -262,6 +263,66 @@ class JsonScheduleCodecTest {
                  "slots": [ { "dayOfWeek": 1, "startPeriod": 1 } ] } ] } }"""
         )
         assertNull(b.timetable!!.courses.first().slots.first().weeks)
+    }
+
+    // ---------------------------------------------------------------- 课程备注
+
+    /**
+     * 备注要跟着课表一起走：换机备份靠的就是导出 → 导入这条闭环，
+     * 备注只留在本机等于白写。
+     */
+    @Test
+    fun `a course note survives the export and import round-trip`() {
+        val original = ScheduleBundle(
+            timetable = TimetableBlockBundle(
+                courses = listOf(
+                    CourseBundle(
+                        key = "math101|高等数学|王教授",
+                        name = "高等数学",
+                        teacher = "王教授",
+                        note = "期末开卷，教材第3版"
+                    )
+                )
+            )
+        )
+        val after = decode(codec.encode(original)).timetable!!.courses.first()
+        assertEquals("期末开卷，教材第3版", after.note)
+    }
+
+    /**
+     * **「文件里没这一项」与「文件里这一项是空的」是两件事。**
+     *
+     * 前者是「这份文件不知道备注」（浙大同步、zju-ical 的课表文件都是这种形状），
+     * 后者是一份权威的「清空」。用「空不空」去判，两种就分不开了 ——
+     * 于是用户在 A 机器删掉备注再导出，导入 B 机器时 B 上的备注删不掉。
+     */
+    @Test
+    fun `an absent note and an empty note are not the same thing`() {
+        val absent = decode("""{ "timetable": { "courses": [ { "name": "高等数学" } ] } }""")
+            .timetable!!.courses.first()
+        assertNull("文件里没这一项，就该是 null 而不是空串", absent.note)
+
+        val empty = decode("""{ "timetable": { "courses": [ { "name": "高等数学", "note": "" } ] } }""")
+            .timetable!!.courses.first()
+        assertEquals("文件里明确带了空串，就是一份权威的清空", "", empty.note)
+    }
+
+    /**
+     * 没写备注的课，导出的文件里**不该出现 `note` 这个键**。
+     *
+     * 写出来（哪怕写成 null）就等于宣称「这份文件带着备注」，而它其实不知道 ——
+     * 导入侧会把本机的备注当成该被清掉的东西。
+     */
+    @Test
+    fun `a course without a note is exported without the key at all`() {
+        val json = codec.encode(
+            ScheduleBundle(
+                timetable = TimetableBlockBundle(
+                    courses = listOf(CourseBundle(name = "高等数学", teacher = "王教授"))
+                )
+            )
+        )
+        assertFalse("没写备注就别在文件里提这一项", json.contains("\"note\""))
     }
 
     // ---------------------------------------------------------------- 往返

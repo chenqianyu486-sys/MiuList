@@ -27,6 +27,24 @@ data class CourseEntity(
     val classroom: String, // Default classroom
     val colorHex: String,
     /**
+     * 课程备注：用户在课程编辑里写的自由文本。
+     *
+     * 「这门课期末开卷」「教材用的是第 3 版」「作业交到学号邮箱」——这些是
+     * **只有用户知道、课表数据里没有**的信息。没有它们时，「课程」这个对象
+     * 就只是一行教务数据；有了它，这门课才带上用户自己的上下文。
+     *
+     * 空串 = 没写。**不设「无备注」这种第三态**：备注是自由文本，
+     * 「没写」与「写了又删掉」在用户眼里没有区别，不必在库里分开记。
+     *
+     * [defaultValue] 必须显式声明：`MIGRATION_10_11` 用
+     * `ALTER TABLE courses ADD COLUMN note TEXT NOT NULL DEFAULT ''` 加这一列，
+     * Room 会拿数据库里实际存在的默认值来校验实体——实体这边不声明，
+     * **每个老用户升级时都会撞上 schema 校验失败并崩溃**
+     * （与 [dedupeKey] 同一条理由，见上面那段说明）。
+     */
+    @ColumnInfo(defaultValue = "")
+    val note: String = "",
+    /**
      * 自然键。
      *
      * [defaultValue] 必须显式声明：`MIGRATION_3_4` 用

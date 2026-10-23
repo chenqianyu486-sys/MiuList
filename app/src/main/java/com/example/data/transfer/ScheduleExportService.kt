@@ -135,6 +135,11 @@ class ScheduleExportService(
                         category = c.category,
                         classroom = c.classroom,
                         colorHex = c.colorHex,
+                        // 备注是用户自己的数据，导出时必须带上：这份文件常常就是
+                        // 「换一台设备」的手段，备注只在本机留着等于白写。
+                        // 空备注写成空串（而不是 null）：**这份文件带了这一项，
+                        // 且明确是空的**，导入侧据此清空对方机器上的旧备注。
+                        note = c.note,
                         automation = AutomationBundle(
                             preStudy = c.autoPreStudy,
                             postHomework = c.autoPostHomework,

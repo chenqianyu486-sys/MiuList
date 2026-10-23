@@ -29,6 +29,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.StickyNote2
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.EventAvailable
@@ -1510,8 +1511,27 @@ private fun ScheduleCourseCard(
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        // weight(1f, fill=false)：**必须**给名字挂弹性，否则右边那枚
+                        // 备注角标会被挤成 0 宽（Row 先量非弹性子项，名字先把整行吃满）。
+                        // 没有备注时这一行与改动前逐像素一致：名字照旧按内容占位，
+                        // 放不下时照旧省略。
+                        modifier = Modifier.weight(1f, fill = false)
                     )
+                    // 课程备注角标：这门课写过备注时，课名后面点一笔。
+                    //
+                    // 没写就不画 —— 每一行都挂一枚图标等于没有图标。
+                    // 周课表的**格子**里没有这个角标（那里放不下，见 CourseTimetableComponents
+                    // 的说明）；这里是行式布局，位置放得下。
+                    if (course.note.isNotBlank()) {
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.StickyNote2,
+                            contentDescription = "有课程备注",
+                            modifier = Modifier.size(14.dp),
+                            tint = TextSecondary
+                        )
+                    }
                 }
             }
 

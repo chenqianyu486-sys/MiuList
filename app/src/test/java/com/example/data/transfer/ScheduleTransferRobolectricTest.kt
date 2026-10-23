@@ -82,11 +82,12 @@ class ScheduleTransferRobolectricTest {
         code: String = "",
         teacher: String = "王教授",
         weeks: Set<Int> = emptySet(),
-        colorHex: String = "#93C5FD"
+        colorHex: String = "#93C5FD",
+        note: String = ""
     ): Long = c.courseRepository.saveCourseWithSlots(
         CourseEntity(
             name = name, code = code, category = "公共基础", teacher = teacher,
-            classroom = "教二-301", colorHex = colorHex
+            classroom = "教二-301", colorHex = colorHex, note = note
         ),
         listOf(
             SlotWithWeeks(
@@ -147,13 +148,23 @@ private fun document(
 
     private val AUTUMN_TERM_REF = """"termRef": { "Year": "2026-2027", "Term": 0 }"""
 
-    private fun courseJson(name: String, code: String = "", weeks: String = "", colorHex: String = "#93C5FD") = """
+    private fun courseJson(
+        name: String,
+        code: String = "",
+        weeks: String = "",
+        colorHex: String = "#93C5FD",
+        /** null = 文件里**没有这一项**（不是写了空串）。见课程备注那节。 */
+        note: String? = null
+    ): String {
+        val notePart = if (note == null) "" else """, "note": "$note""""
+        return """
         {
           "name": "$name", "code": "$code", "teacher": "王教授",
-          "category": "公共基础", "classroom": "教二-301", "colorHex": "$colorHex",
+          "category": "公共基础", "classroom": "教二-301", "colorHex": "$colorHex"$notePart,
           "slots": [ { "dayOfWeek": 1, "startPeriod": 1, "endPeriod": 2 $weeks } ]
         }
     """.trimIndent()
+    }
 
     // ------------------------------------------- 导入不得清空用户配好的类别规则
 
@@ -263,6 +274,114 @@ private fun document(
         // (预习关, 作业开, 实验开)；要守住的是它一个格子都没被导入动过。
         val rule = rulesOf(c).getValue("通识公共")
         assertEquals(Triple(false, true, true), Triple(rule.autoPreStudy, rule.autoPostHomework, rule.autoLabReport))
+    }
+
+    // ---------------------------------------------------------------- 课程备注
+
+    /**
+     * **浙大同步不能把用户写好的备注冲掉。**
+     *
+     * 浙大教务网的数据里根本没有「备注」这一项，而同步走的是 REPLACE
+     * （整表清空重建）。不先把本机的备注按自然键记下来，用户每同步一次
+     * 就丢一次自己写的东西 —— 备注是用户自己的数据，与待办同例。
+     */
+    @Test
+    fun `an import that does not mention notes keeps the ones already written here`() = runBlocking {
+        val c = container()
+        reset(c)
+        seedCourse(c, "高等数学", code = "MATH101", note = "期末开卷，教材第3版")
+
+        // 这份文件就是浙大同步产出的形状：课程对得上，但**没有 note 这一项**。
+        val preview = c.importService.preview(
+            document(courseJson("高等数学", code = "MATH101")),
+            ImportStrategy.REPLACE
+        )
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "高等数学" }
+        assertEquals("期末开卷，教材第3版", course.note)
+    }
+
+    @Test
+    fun `a merge import also keeps the local note when the file has none`() = runBlocking {
+        val c = container()
+        reset(c)
+        seedCourse(c, "高等数学", code = "MATH101", note = "期末开卷，教材第3版")
+
+        val preview = c.importService.preview(
+            document(courseJson("高等数学", code = "MATH101")),
+            ImportStrategy.MERGE
+        )
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "高等数学" }
+        assertEquals("期末开卷，教材第3版", course.note)
+    }
+
+    /** 反向也要守住：包里真的带了备注，它依然是权威（换机备份靠的就是这条）。 */
+    @Test
+    fun `an import that carries a note overwrites the local one`() = runBlocking {
+        val c = container()
+        reset(c)
+        seedCourse(c, "高等数学", code = "MATH101", note = "旧的备注")
+
+        val preview = c.importService.preview(
+            document(courseJson("高等数学", code = "MATH101", note = "期末开卷")),
+            ImportStrategy.REPLACE
+        )
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "高等数学" }
+        assertEquals("期末开卷", course.note)
+    }
+
+    /**
+     * 文件里**明确**带了空串 = 一份权威的「清空」。
+     *
+     * 这条与上一条「没带就别动」是一对：判据必须是「有没有这一项」，
+     * 用「空不空」判的话，用户在 A 机器删掉备注再导出，
+     * 导入 B 机器时 B 上的备注就删不掉了。
+     */
+    @Test
+    fun `an import that explicitly carries an empty note clears the local one`() = runBlocking {
+        val c = container()
+        reset(c)
+        seedCourse(c, "高等数学", code = "MATH101", note = "旧的备注")
+
+        val preview = c.importService.preview(
+            document(courseJson("高等数学", code = "MATH101", note = "")),
+            ImportStrategy.REPLACE
+        )
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "高等数学" }
+        assertEquals("", course.note)
+    }
+
+    /** 导出的文件要带着备注：换机备份靠的就是这条闭环。 */
+    @Test
+    fun `the exported file carries the note and importing it back restores it`() = runBlocking {
+        val c = container()
+        reset(c)
+        seedCourse(c, "高等数学", code = "MATH101", note = "期末开卷，教材第3版")
+
+        val json = c.exportService.exportJson()
+        assertTrue("导出的文件里必须带着备注", json.contains("期末开卷，教材第3版"))
+
+        // 换一台机器：库里先有一门同名同师的课（备注为空），导入后应当拿到文件里的那份。
+        reset(c)
+        seedCourse(c, "高等数学", code = "MATH101")
+
+        val preview = c.importService.preview(json, ImportStrategy.REPLACE)
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "高等数学" }
+        assertEquals("期末开卷，教材第3版", course.note)
     }
 
     // ---------------------------------------------------------------- 预览不写库

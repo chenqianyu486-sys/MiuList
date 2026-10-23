@@ -403,3 +403,21 @@ val MIGRATION_9_10 = object : Migration(9, 10) {
         db.execSQL("ALTER TABLE tasks ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
     }
 }
+
+/**
+ * v10 → v11。
+ *
+ * 给 `courses` 补一列 `note`：课程备注（用户自己写的自由文本）。
+ *
+ * **纯新增，已有行统一补空串**：升级前根本没有「备注」这个概念，
+ * 不该凭空给老课程编一条出来。空串就是「没写」。
+ *
+ * SQLite 要求给已有行的表加 NOT NULL 列时必须带默认值，实体侧也要写
+ * `@ColumnInfo(defaultValue = "")`，否则 Room 校验老库时会判为 schema 不符
+ * （与 `MIGRATION_9_10` 的 `syncUid` 同一条理由）。
+ */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE courses ADD COLUMN note TEXT NOT NULL DEFAULT ''")
+    }
+}

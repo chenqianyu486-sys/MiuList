@@ -19,7 +19,7 @@ import androidx.room.RoomDatabase
         MakeupDayEntity::class,
         CustomTaskTypeEntity::class
     ],
-    version = 10,
+    version = 11,
     // 导出 schema 是 MigrationTestHelper 的前提：没有它就只能靠手点验证迁移
     exportSchema = true
 )
@@ -52,7 +52,7 @@ abstract class AppDatabase : RoomDatabase() {
                     // 升级立刻发现，清空则悄无声息。
                     .addMigrations(
                         MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
-        MIGRATION_8_9, MIGRATION_9_10
+        MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11
                     )
                     .build()
                 INSTANCE = instance
