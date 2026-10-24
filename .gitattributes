@@ -1,0 +1,10 @@
+# 行尾必须显式钉住，不能只靠 core.autocrlf。
+#
+# cmd.exe 在 `call` 一个 **LF 行尾**的 .bat 时会错位解析：批处理被拆成
+# 'ocal' / 'k' / 'review.bat' 之类的碎片命令（实测：转发壳调用仓库里的
+# start-preview.bat 就是这样炸的）。批处理必须是 CRLF，这条是硬要求。
+*.bat text eol=crlf
+
+# 预览启动器的 .ps1 只在 Windows PowerShell 上跑，一并钉成 CRLF，
+# 免得在 Linux 上 clone 之后拿到的脚本行尾不对。
+*.ps1 text eol=crlf

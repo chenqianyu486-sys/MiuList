@@ -141,6 +141,49 @@ Windows 开始压缩内存页，桌面就跟着发飘（用户说的「电脑越
 
 ---
 
+## 预览启动器：仓库根目录的 `start-preview.bat`
+
+开发时最常用的一条路：**双击 `..\start-preview.bat`** —— 构建 → 起模拟器 → 安装 → 启动 App，
+一条命令走完。它住在**仓库根目录**（不在 `tools/` 里），因为它要跟 `app/`、`gradlew.bat`
+并排使用，而且它写出来的日志也落在根目录（都被 `.gitignore` 忽略了）。
+
+| 文件 | 干什么 |
+|------|--------|
+| `start-preview.bat` | 双击入口。只负责开窗口、夹窗口、转发参数 |
+| `preview.ps1` | 真正的流程编排（构建 → 起 AVD → 装 → 启动） |
+| `activate-preview.ps1` | 把预览窗口从最小化/屏幕外捞回来并置顶 |
+| `clamp-window.ps1` | 把控制台与模拟器窗口夹在桌面可用区内 |
+| `diag-preview-window.ps1` | 诊断预览窗口位置用的 |
+| `drive-zju-sync.ps1` | 在已启动的模拟器上驱动 App 走一次真实的浙大同步 |
+
+常用开关：
+
+```bash
+start-preview.bat                 # 默认：用户真机那一档（1080×2414 @520dpi，字号 1.16）
+start-preview.bat -DryRun         # 只打印计划，不动手
+start-preview.bat -SkipBuild      # 跳过 Gradle
+start-preview.bat -Display base   # 换成设计基准 411dp
+start-preview.bat -ColdBoot       # 丢弃快照冷启动
+```
+
+### 三个要点
+
+1. **真机永远不动**：手机自己的屏幕比例和字号就是「正常」的，`-Display` 只作用于模拟器。
+2. **就绪判据是 `sys.boot_completed=1`**：模拟器对 `adb` 报 "device" 之后仍可能有十几秒
+   装不上包（"device is still booting"）。早期那版拿 `pm path android` 有应答当就绪，
+   而它比 boot 标志早 12 秒应答 —— 于是经常装到还没启动完的机器上。
+3. **签名冲突会自动兜底**：换签名时先把设备上的 `databases` / `shared_prefs` / `files`
+   备份到仓库根的 `preview-data-<包名>-<时间戳>/`（已被 gitignore —— 里面是个人数据），
+   再卸载旧的装新的，最后打印还原命令。
+
+### `preview.ps1` 怎么找项目目录
+
+向上找**带 `app/build.gradle.kts` 的那一层**，找不到就退回自己所在目录。
+所以脚本放在仓库根目录能用，挪到 `tools/` 下面也能用 —— 位置和目录结构是解耦的。
+（老写法是「脚本所在目录下的同名子目录 `MiuList`」，脚本进仓库之后那条假设就不成立了。）
+
+---
+
 ## 发版：`tools/release.sh`
 
 ```bash

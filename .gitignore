@@ -50,6 +50,10 @@ google-services.json
 /test_screen.png
 # 本地跑 Gradle 时重定向出来的日志（testDebugUnitTest 输出等），不是源码也不是报告。
 /*.log
+# 预览启动器（仓库根目录的 preview.ps1 / start-preview.bat）留下的产物：
+# 换签名重装前的 App 数据备份目录、模拟器日志、失败现场日志。
+# 备份目录里是 App 的 databases/shared_prefs —— 可能含个人信息，绝不能进版本库。
+/preview-data-*/
 
 # Python
 __pycache__/
