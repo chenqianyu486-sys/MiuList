@@ -1,4 +1,4 @@
-﻿package com.example.ui.screens
+package com.example.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -56,7 +56,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -74,6 +73,7 @@ import com.example.data.local.CourseEntity
 import com.example.data.local.CourseSlotEntity
 import com.example.data.local.CourseWithSlots
 import com.example.data.local.TaskEntity
+import com.example.data.model.ExamEntry
 import com.example.data.source.zju.CoursesTodoItem
 import com.example.ui.components.islandBottomInset
 import com.example.ui.components.TaskItemCard
@@ -82,6 +82,17 @@ import com.example.ui.components.WeatherLayout
 import com.example.ui.components.weatherStripHeight
 import com.example.ui.components.BlockWidth
 import com.example.ui.components.formatPeriodRange
+import com.example.ui.components.courseCardWash
+import com.example.ui.components.ExamCard
+import com.example.ui.components.ExamKindBadge
+import com.example.ui.components.PendingPill
+import com.example.ui.components.examClockRange
+import com.example.ui.components.DayItem
+import com.example.ui.components.FeaturedPick
+import com.example.ui.components.pickFeatured
+import com.example.ui.components.isExamToday
+import com.example.ui.components.lazyKey
+import com.example.ui.components.mergeDayItems
 import com.example.ui.components.formatRemaining
 import com.example.ui.components.periodStartMillis
 import com.example.ui.components.todayStatusLabel
@@ -372,15 +383,26 @@ internal fun heroDateColumnWidth(innerWidth: Dp, layout: HeroLayout): Dp = when 
     else -> innerWidth - HeroWeatherGap - layout.weatherWidth
 }
 
+/**
+ * 总览页。
+ *
+ * 原来还有 `onGenerateTodayTasks` / `onPreviewGenerateTasks` 两个参数 ——
+ * 它们**从来没有被调用过**：「生成本周待办」早就上顶栏成了常驻图标，
+ * 总览页上那个入口撤掉时参数忘了删。留着它们等于对外宣称「这一页上还有个生成入口」，
+ * 读代码的人会去找一个不存在的东西。
+ *
+ * 现在「生成待办」只有两个入口：顶栏那颗 ✨（直接生成）与
+ * 上手引导第 4 步（先看预览再收）。
+ */
 @Composable
 fun DashboardScreen(
     state: MainUiState,
-    onGenerateTodayTasks: () -> Unit = {},
-    onPreviewGenerateTasks: () -> Unit = {},
     onToggleTaskComplete: (TaskEntity) -> Unit,
     onToggleTaskStar: (TaskEntity) -> Unit,
     onInspectTask: (TaskEntity) -> Unit,
     onInspectCourse: (CourseWithSlots) -> Unit,
+    /** 点考试卡 → 打开考试编辑弹层（本地可改考场 / 座位 / 时刻）。 */
+    onEditExam: (ExamEntry) -> Unit = {},
     onOpenWeekPicker: () -> Unit,
     onRefreshCoursesTodo: () -> Unit = {},
     onOpenQuickLoginDialog: () -> Unit = {},
@@ -436,6 +458,28 @@ fun DashboardScreen(
         state.calendar.dayOffReason(EpochDays.today())
     }
 
+    // 考试：独立于课表的一份数据（另一个接口、另一张表），
+    // 但**摆进今天的列表**，和课按时刻混在一起 —— 不另起一段。
+    //
+    // 只取**今天**的：这一段是「今天」，放三周后的考试进来会让它既不是今天、
+    // 也不全是考试。后面几天的考试在课表页的列表视图里（那边按天分组）。
+    //
+    // **日期未知的考试不归今天**：教务网先公布考试周、后公布具体日期，
+    // 那种记录没有日历上的一天，硬塞进今天就是编造。
+    val todayExams = remember(state.exams, nowMillis) {
+        state.exams.filter { isExamToday(it, nowMillis) }
+    }
+    // 今天的「条目」：课 + 考试，按时刻排好（合并规则见 `mergeDayItems`）。
+    val todayItems = remember(todaySlots, todayExams, state.periodTable) {
+        mergeDayItems(todaySlots, todayExams, state.periodTable)
+    }
+    // 今天的考试时间窗，给组头算「下一件事」用。
+    val todayExamWindows = remember(todayExams) {
+        todayExams.mapNotNull { exam ->
+            if (exam.startAt > 0L && exam.endAt > exam.startAt) exam.startAt to exam.endAt else null
+        }
+    }
+
     // 当前/下一节：用来在原位置把其中一张卡加高。
     // 同一时间有多节重叠时取开始更早的那节；不改变列表顺序（用户选的是方案 A）。
     val nowMinute = remember(nowMillis) {
@@ -452,7 +496,37 @@ fun DashboardScreen(
     }
     val currentWindow = slotWindows.firstOrNull { nowMinute >= it.startMinute && nowMinute < it.endMinute }
     val nextWindow = slotWindows.firstOrNull { it.startMinute > nowMinute }
-    val featuredWindow = currentWindow ?: nextWindow
+
+    // 「下一件事」只有一个：课与考试**抢同一个位置**。
+    //
+    // 两边各挑一个加高的话，屏幕上会同时出现两张「下一节 / 下一场」，
+    // 用户得自己判断哪个才是真的下一件 —— 而时间线上明明只有一个下一件。
+    // 判据见 `pickFeatured`。
+    val examsWithTime = remember(todayExams) {
+        todayExams.filter { it.startAt > 0L && it.endAt > it.startAt }
+    }
+    val currentExamEntry = examsWithTime.firstOrNull {
+        nowMillis >= it.startAt && nowMillis < it.endAt
+    }
+    val nextExamEntry = examsWithTime.firstOrNull { it.startAt > nowMillis }
+    val nextClassStart = nextWindow?.let {
+        periodStartMillis(todayCalendar, it.slot, state.periodTable)
+    }
+    val featuredPick = pickFeatured(
+        currentClassStart = currentWindow?.let {
+            periodStartMillis(todayCalendar, it.slot, state.periodTable)
+        },
+        currentExamStart = currentExamEntry?.startAt,
+        nextClassStart = nextClassStart,
+        nextExamStart = nextExamEntry?.startAt
+    )
+    val featuredExam = if (featuredPick == FeaturedPick.EXAM) {
+        currentExamEntry ?: nextExamEntry
+    } else {
+        null
+    }
+    // 考试抢到时，课就不加高（同一时间只能有一张加高卡）。
+    val featuredWindow = if (featuredExam == null) (currentWindow ?: nextWindow) else null
     val featuredSlotId = featuredWindow?.slot?.id
     val featuredIsCurrent = currentWindow != null
     // 下一节的倒计时和组头共用同一个 nowMillis，避免组头 53 分、卡片 54 分。
@@ -468,6 +542,13 @@ fun DashboardScreen(
     } else {
         ""
     }
+    // 下一场考试的倒计时，理由与课程那张完全一样。
+    val featuredExamIsCurrent = featuredExam != null && currentExamEntry === featuredExam
+    val featuredExamCountdown = if (featuredExam != null && !featuredExamIsCurrent) {
+        "还有 ${formatRemaining((featuredExam.startAt - nowMillis).coerceAtLeast(0L))}"
+    } else {
+        ""
+    }
 
     val courseMap = remember(state.coursesWithSlots) {
         state.coursesWithSlots.associateBy { it.course.id }
@@ -476,6 +557,7 @@ fun DashboardScreen(
     val pendingTasks = remember(state.tasks) {
         state.tasks.filter { !it.isCompleted }
     }
+
 
     // 本周课时：走 slotsInWeek 让单双周过滤生效，否则周课表上只上单周，
     // 副标题却按全量算出一个对不上的小时数。
@@ -507,7 +589,11 @@ fun DashboardScreen(
         todaySlots,
         nowMillis,
         state.periodTable,
-        compact = compactStatus
+        compact = compactStatus,
+        // 考试与课在同一条时间线上，组头必须一起看：
+        // 只盯着课说「下节课还有 3 小时开始」，而考试两小时后就要考，是假话。
+        examWindows = todayExamWindows,
+        examCountToday = todayExams.size
     )
 
     // 主卡的**排法**要在卡片外面定：卡片的高度得先知道，而高度又取决于排法
@@ -582,7 +668,8 @@ fun DashboardScreen(
     // 「今日没课」的空态卡和学期卡同时亮，五张待办卡又和学期卡同时亮，整页就变成
     // 三批一起亮，看不出是从上往下的。
     val courseOrderBase = 1
-    val taskOrderBase = courseOrderBase + todaySlots.size
+    // 今天的条目里课与考试**混在一起**，所以条数是一起算的。
+    val taskOrderBase = courseOrderBase + todayItems.size
 
     LazyColumn(
         modifier = modifier
@@ -596,6 +683,15 @@ fun DashboardScreen(
             Spacer(modifier = Modifier.height(6.dp))
 
             var isHeroFlipped by rememberSaveable { mutableStateOf(false) }
+            // 引导最后一步「学在浙大翻面」的「去看看」：把人送到总览页，
+            // 并替他把卡翻到**背面**（学在浙大待交作业那一面）。
+            //
+            // 用**序号**而不是布尔开关：布尔只能表达「翻过一次」，
+            // 第二次点「翻给我看」时值没变，这边就收不到新的一次请求。
+            // 序号 +1 就是「又来一次」的信号。
+            LaunchedEffect(state.heroFlipRequest) {
+                if (state.heroFlipRequest > 0) isHeroFlipped = true
+            }
             val heroFlipRotation by animateFloatAsState(
                 targetValue = if (isHeroFlipped) 180f else 0f,
                 animationSpec = tween(durationMillis = 450, easing = FastOutSlowInEasing),
@@ -1025,7 +1121,12 @@ fun DashboardScreen(
             )
         }
 
-        if (todaySlots.isEmpty()) {
+        // 空态卡只在**一个条目都没有**时出现。
+        //
+        // 今天有课也有考试时当然不出现；今天**只有考试**时也不出现 ——
+        // 上面那张「今天没课」的卡摆在一张考试卡前面是自相矛盾的：
+        // 考试卡自己就说明了今天有事。
+        if (todayItems.isEmpty()) {
             item {
                 Card(
                     shape = MiuSurface.CardShape,
@@ -1051,7 +1152,7 @@ fun DashboardScreen(
                             )
                             Spacer(modifier = Modifier.height(4.dp * LocalEffectiveFontScale))
                             Text(
-                                text = pendingTasksSummary(pendingTasks.size),
+                                text = todayEmptyStateSummary(pendingTasks.size),
                                 style = MiuType.CourseMeta,
                                 color = TextSecondary
                             )
@@ -1065,161 +1166,200 @@ fun DashboardScreen(
             // 抛 `Key "N" was already used` 直接闪退。
             // 这个撞车平时看不出来——只有「今天有课」且「有待办」时才同时存在这两段，
             // 所以在周日（没排课）怎么测都复现不出来。
-            itemsIndexed(todaySlots, key = { _, slot -> "slot_${slot.id}" }) { slotIndex, slot ->
-                val cWithSlots = courseMap[slot.courseId]
-                val course = cWithSlots?.course
-                if (course != null) {
-                    val linked = state.tasks.filter { it.courseId == course.id }
-                    val pendingCount = linked.count { !it.isCompleted }
-                    val hasLinked = linked.isNotEmpty()
-                    val courseColor = parseColor(course.colorHex)
-                    val (timeStart, timeEnd) = state.periodTable.timeRange(slot.startPeriod, slot.endPeriod)
-                        ?: ("--" to "--")
-                    val room = slot.classroom.ifBlank { course.classroom }
-                    // 白胶囊是玻璃的一部分：不做深色模式，所有壁纸都走同一档。
-                    val isFeatured = slot.id == featuredSlotId
-
-                    if (isFeatured && featuredWindow != null) {
-                        FeaturedCourseCard(
-                            course = course,
-                            slot = slot,
-                            pendingCount = pendingCount,
-                            hasLinked = hasLinked,
-                            room = room,
-                            timeStart = timeStart,
-                            timeEnd = timeEnd,
-                            courseColor = courseColor,
-                            isCurrent = featuredIsCurrent,
-                            startMinute = featuredWindow.startMinute,
-                            endMinute = featuredWindow.endMinute,
-                            nowMinute = nowMinute,
-                            countdownText = featuredCountdown,
-                            contentBase = contentBase,
-                            courseTint = if (customWallpaper) 0.28f else 0.32f,
-                            modifier = Modifier
-                                .cardRevealAt(cardRevealProgress, courseOrderBase + slotIndex)
-                                .clickable { onInspectCourse(cWithSlots) }
-                        )
-                    } else {
-                    Card(
-                        shape = MiuSurface.CardShape,
-                        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .cardRevealAt(cardRevealProgress, courseOrderBase + slotIndex)
-                            .clickable { onInspectCourse(cWithSlots) }
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .glassSurface(
-                                    shape = MiuSurface.CardShape,
-                                    tint = cardTint(courseColor, courseTint),
-                                    tintAlpha = courseTint,
-                                    baseCoatAlpha = contentBase,
-                                )
-                                .courseCardWash(
-                                    courseColor = courseColor,
-                                    shape = MiuSurface.CardShape,
-                                    // 不描边：白边已取消，边界交给卡面本身。
-                                    washAlpha = 0.10f,
-                                    sheenAlpha = 0.11f
-                                )
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(4.dp, 44.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .background(
-                                        Brush.verticalGradient(
-                                            listOf(
-                                                accentBarColor(courseColor),
-                                                accentBarColor(courseColor).copy(alpha = 0.55f)
-                                            )
-                                        )
-                                    )
+            //
+            // 考试与课**在同一个列表里**，按时刻混排（见 `mergeDayItems`）。
+            itemsIndexed(todayItems, key = { _, item -> item.lazyKey(0) }) { itemIndex, dayItem ->
+                when (dayItem) {
+                    is DayItem.ExamItem -> {
+                        // 点考试卡 → **编辑考试**（本地可改考场 / 座位 / 时刻）。
+                        // 不是跳去课程详情：考试卡上的信息是**考试**的，
+                        // 而用户点它多半是因为「座位号没公布，我要自己补一个」。
+                        val onClick = { onEditExam(dayItem.entry) }
+                        val reveal = Modifier
+                            .cardRevealAt(cardRevealProgress, courseOrderBase + itemIndex)
+                            .clickable { onClick() }
+                        // 考试抢到「下一件事」时用加高卡 —— 与课程那张同一套骨架，
+                        // 只是换掉「下一节 / 开课 / 下课」这些**属于课**的词。
+                        if (featuredExam != null && dayItem.entry.id == featuredExam.id) {
+                            FeaturedExamCard(
+                                entry = dayItem.entry,
+                                isCurrent = featuredExamIsCurrent,
+                                startMinute = dayItem.entry.startMinute,
+                                endMinute = dayItem.entry.endMinute,
+                                nowMinute = nowMinute,
+                                countdownText = featuredExamCountdown,
+                                contentBase = contentBase,
+                                courseTint = if (customWallpaper) 0.28f else 0.32f,
+                                modifier = reveal
                             )
-                            Spacer(modifier = Modifier.width(12.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                // 这一行里挤着课程名与教室胶囊，两样都是**内容**，
-                                // 所以必须先知道这一行到底有多宽，才谈得上分配。
-                                //
-                                // 之前没有上限：胶囊是 Row 里没挂 weight 的子项，
-                                // Row 量它的时候给的是整行的约束，于是它按内容原宽铺开；
-                                // 课程名虽然挂了 weight(1f, fill=false)，但那份额是
-                                // 「整行减去胶囊实际占的宽」——胶囊把行占满了，
-                                // 课程名分到 0，而胶囊自己又溢出了这一列，
-                                // 直接画到右边的徽标底下（系统字号 1.5 时实测：
-                                // 「紫金港西2-105」压在「●1」上）。
-                                //
-                                // 现在给胶囊一个上限：它最多占这一行的 45%，
-                                // 剩下的留给课程名。45% 是按「课程名是主、教室是速查项」
-                                // 定的 —— 411dp 基准屏上最长的那颗胶囊约 120dp，
-                                // 在 305dp 的行里占 39%，所以 45% 不改变基准屏的观感，
-                                // 只在真的挤不下时才开始截断。
-                                BoxWithConstraints {
-                                    val roomMaxWidth = maxWidth * 0.45f
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = course.name,
-                                            style = MiuType.CourseTitle.copy(fontSize = 14.5.sp),
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            modifier = Modifier.weight(1f, fill = false),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        if (room.isNotBlank()) {
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            val roomShape = RoundedCornerShape(6.dp)
-                                            Box(
-                                                modifier = Modifier
-                                                    .widthIn(max = roomMaxWidth)
-                                                    .clip(roomShape)
-                                                    .background(courseColor.copy(alpha = 0.16f))
-                                                    .border(0.5.dp, courseColor.copy(alpha = 0.28f), roomShape)
-                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                                            ) {
-                                                Text(
-                                                    // 不带「@」：设计笔记的现状诊断第 6 条写着
-                                                    // 「@ 教室胶囊的『@』是程序员语法，不是学生语言」，
-                                                    // 加高主卡早就照这条改掉了，这一枚小胶囊
-                                                    // 却还留着。同一个 App 里同一件事实用两种写法，
-                                                    // 改掉一处就等于把另一处也标成了待办。
-                                                    text = room,
-                                                    color = accentOnCourse(courseColor),
-                                                    fontSize = 10.sp,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                                Spacer(modifier = Modifier.height(4.dp * LocalEffectiveFontScale))
-                                Text(
-                                    text = "${formatPeriodRange(slot.startPeriod, slot.endPeriod)} ($timeStart-$timeEnd) · ${course.teacher}",
-                                    style = MiuType.CourseMeta.copy(fontSize = 10.5.sp),
-                                    color = TextSecondary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-
-                            CoursePendingBadge(
-                                pendingCount = pendingCount,
-                                hasLinked = hasLinked,
-                                courseColor = courseColor
+                        } else {
+                            ExamCard(
+                                entry = dayItem.entry,
+                                now = nowMillis,
+                                onClick = onClick,
+                                modifier = reveal
                             )
                         }
                     }
+                    is DayItem.SlotItem -> {
+                        val slot = dayItem.slot
+                        val cWithSlots = courseMap[slot.courseId]
+                        val course = cWithSlots?.course
+                        if (course != null) {
+                            val linked = state.tasks.filter { it.courseId == course.id }
+                            val pendingCount = linked.count { !it.isCompleted }
+                            val hasLinked = linked.isNotEmpty()
+                            val courseColor = parseColor(course.colorHex)
+                            val (timeStart, timeEnd) = state.periodTable.timeRange(slot.startPeriod, slot.endPeriod)
+                                ?: ("--" to "--")
+                            val room = slot.classroom.ifBlank { course.classroom }
+                            // 白胶囊是玻璃的一部分：不做深色模式，所有壁纸都走同一档。
+                            val isFeatured = slot.id == featuredSlotId
+
+                            if (isFeatured && featuredWindow != null) {
+                                FeaturedCourseCard(
+                                    course = course,
+                                    slot = slot,
+                                    pendingCount = pendingCount,
+                                    hasLinked = hasLinked,
+                                    room = room,
+                                    timeStart = timeStart,
+                                    timeEnd = timeEnd,
+                                    courseColor = courseColor,
+                                    isCurrent = featuredIsCurrent,
+                                    startMinute = featuredWindow.startMinute,
+                                    endMinute = featuredWindow.endMinute,
+                                    nowMinute = nowMinute,
+                                    countdownText = featuredCountdown,
+                                    contentBase = contentBase,
+                                    courseTint = if (customWallpaper) 0.28f else 0.32f,
+                                    modifier = Modifier
+                                        .cardRevealAt(cardRevealProgress, courseOrderBase + itemIndex)
+                                        .clickable { onInspectCourse(cWithSlots) }
+                                )
+                            } else {
+                            Card(
+                                shape = MiuSurface.CardShape,
+                                colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .cardRevealAt(cardRevealProgress, courseOrderBase + itemIndex)
+                                    .clickable { onInspectCourse(cWithSlots) }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .glassSurface(
+                                            shape = MiuSurface.CardShape,
+                                            tint = cardTint(courseColor, courseTint),
+                                            tintAlpha = courseTint,
+                                            baseCoatAlpha = contentBase,
+                                        )
+                                        .courseCardWash(
+                                            courseColor = courseColor,
+                                            shape = MiuSurface.CardShape,
+                                            // 不描边：白边已取消，边界交给卡面本身。
+                                            washAlpha = 0.10f,
+                                            sheenAlpha = 0.11f
+                                        )
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(4.dp, 44.dp)
+                                            .clip(RoundedCornerShape(2.dp))
+                                            .background(
+                                                Brush.verticalGradient(
+                                                    listOf(
+                                                        accentBarColor(courseColor),
+                                                        accentBarColor(courseColor).copy(alpha = 0.55f)
+                                                    )
+                                                )
+                                            )
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        // 这一行里挤着课程名与教室胶囊，两样都是**内容**，
+                                        // 所以必须先知道这一行到底有多宽，才谈得上分配。
+                                        //
+                                        // 之前没有上限：胶囊是 Row 里没挂 weight 的子项，
+                                        // Row 量它的时候给的是整行的约束，于是它按内容原宽铺开；
+                                        // 课程名虽然挂了 weight(1f, fill=false)，但那份额是
+                                        // 「整行减去胶囊实际占的宽」——胶囊把行占满了，
+                                        // 课程名分到 0，而胶囊自己又溢出了这一列，
+                                        // 直接画到右边的徽标底下（系统字号 1.5 时实测：
+                                        // 「紫金港西2-105」压在「●1」上）。
+                                        //
+                                        // 现在给胶囊一个上限：它最多占这一行的 45%，
+                                        // 剩下的留给课程名。45% 是按「课程名是主、教室是速查项」
+                                        // 定的 —— 411dp 基准屏上最长的那颗胶囊约 120dp，
+                                        // 在 305dp 的行里占 39%，所以 45% 不改变基准屏的观感，
+                                        // 只在真的挤不下时才开始截断。
+                                        BoxWithConstraints {
+                                            val roomMaxWidth = maxWidth * 0.45f
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = course.name,
+                                                    style = MiuType.CourseTitle.copy(fontSize = 14.5.sp),
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    modifier = Modifier.weight(1f, fill = false),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                if (room.isNotBlank()) {
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    val roomShape = RoundedCornerShape(6.dp)
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .widthIn(max = roomMaxWidth)
+                                                            .clip(roomShape)
+                                                            .background(courseColor.copy(alpha = 0.16f))
+                                                            .border(0.5.dp, courseColor.copy(alpha = 0.28f), roomShape)
+                                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    ) {
+                                                        Text(
+                                                            // 不带「@」：设计笔记的现状诊断第 6 条写着
+                                                            // 「@ 教室胶囊的『@』是程序员语法，不是学生语言」，
+                                                            // 加高主卡早就照这条改掉了，这一枚小胶囊
+                                                            // 却还留着。同一个 App 里同一件事实用两种写法，
+                                                            // 改掉一处就等于把另一处也标成了待办。
+                                                            text = room,
+                                                            color = accentOnCourse(courseColor),
+                                                            fontSize = 10.sp,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(4.dp * LocalEffectiveFontScale))
+                                        Text(
+                                            text = "${formatPeriodRange(slot.startPeriod, slot.endPeriod)} ($timeStart-$timeEnd) · ${course.teacher}",
+                                            style = MiuType.CourseMeta.copy(fontSize = 10.5.sp),
+                                            color = TextSecondary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+
+                                    CoursePendingBadge(
+                                        pendingCount = pendingCount,
+                                        hasLinked = hasLinked,
+                                        courseColor = courseColor
+                                    )
+                                }
+                            }
+                            }
+                        }
+                        }
                     }
                 }
-            }
         }
+
 
         // Section: Urgent / Today's Pending Tasks
         item {
@@ -1772,30 +1912,13 @@ private data class SlotWindow(
  * （见 Mica.kt）。主卡那圈 1dp 课程色描边也跟着撤了：它原本是拿来当「这是主卡」
  * 的层级信号，现在主卡已经靠**加高 + 状态标记 + 右栏读数**站出来了，不必再描一圈。
  * 描边给出去就收回来，别留一个没人用的旋钮。
+ *
+ * 实现挪到了 `ui/components/CourseTimetableComponents.kt`：
+ * 考试卡要用同一套卡面语言，而它原来在这里是 private 的，课表页拿不到。
  */
-private fun Modifier.courseCardWash(
-    courseColor: Color,
-    shape: RoundedCornerShape,
-    washAlpha: Float = 0.10f,
-    sheenAlpha: Float = 0.11f
-): Modifier = this
-    .clip(shape)
-    .drawBehind {
-        drawRect(
-            brush = Brush.horizontalGradient(
-                0f to accentBarColor(courseColor).copy(alpha = washAlpha),
-                0.62f to Color.Transparent
-            )
-        )
-        drawRect(
-            brush = Brush.verticalGradient(
-                0f to Color.White.copy(alpha = sheenAlpha),
-                0.5f to Color.Transparent
-            )
-        )
-    }
-
-/** 课程卡右侧的待办小签：同色系描边，不再用一块高白胶囊。 */
+/**
+ * 课程卡右侧的待办小签：同色系描边，不再用一块高白胶囊。
+ */
 @Composable
 private fun CoursePendingBadge(
     pendingCount: Int,
@@ -1866,6 +1989,8 @@ private fun CoursePendingBadge(
 @Composable
 private fun FeaturedStateChip(
     isCurrent: Boolean,
+    /** 「还没发生」那一态的文案。课是「下一节」，考试是「下一场」。 */
+    nextLabel: String = "下一节",
     modifier: Modifier = Modifier
 ) {
     val background = if (isCurrent) {
@@ -1885,7 +2010,7 @@ private fun FeaturedStateChip(
             .padding(horizontal = 8.dp, vertical = 3.dp)
     ) {
         Text(
-            text = if (isCurrent) "现在" else "下一节",
+            text = if (isCurrent) "现在" else nextLabel,
             fontSize = 11.sp,
             lineHeight = 16.sp,
             fontWeight = FontWeight.Bold,
@@ -2211,6 +2336,245 @@ private fun FeaturedCourseCard(
     }
 }
 
+/**
+ * 加高的考试卡：正在考的 / 下一场考试。
+ *
+ * ## 为什么考试也要一张加高卡
+ *
+ * 考试与课在**同一条时间线上**（见 [mergeDayItems]），
+ * 而「下一件事」只能有一个 —— 两边各挑一个加高，屏幕上会同时出现
+ * 两张「下一节」/「下一场」，用户得自己判断哪个才是真的下一件。
+ *
+ * 所以课与考试**抢同一个位置**：谁先来谁加高。
+ * 考试抢到时，组头说的是「考试还有 X 开始」，卡片里也报同一个倒计时 ——
+ * 两处说的是同一件事。
+ *
+ * ## 排版沿用课程加高卡
+ *
+ * 左边是这门考试的事实（课名 / 考场 / 时刻），右边是一个时间读数，
+ * 中间一根发丝线分开，底部那行按这一态有没有百分比来给。
+ * 考试卡与课程卡**必须长得像同一家的两张卡**，否则用户在两个信息块之间
+ * 要重新学一遍阅读方式。
+ */
+@Composable
+private fun FeaturedExamCard(
+    entry: ExamEntry,
+    isCurrent: Boolean,
+    startMinute: Int,
+    endMinute: Int,
+    nowMinute: Int,
+    countdownText: String,
+    contentBase: Float,
+    courseTint: Float,
+    modifier: Modifier = Modifier
+) {
+    val shape = RoundedCornerShape(20.dp)
+    val examColor = parseColor(entry.courseColorHex)
+    val duration = (endMinute - startMinute).coerceAtLeast(1)
+    val progress = if (isCurrent) {
+        ((nowMinute - startMinute).toFloat() / duration).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val percent = (progress * 100).roundToInt()
+    // 卡高锚点与课程加高卡一致：两张卡在同一屏里，高矮不同会显得是两套东西。
+    val cardMinHeight = cardHeightAnchor(
+        designHeight = 124.dp,
+        designMainSp = CourseCardTitleFontSize,
+        mainSp = CourseCardTitleFontSize,
+        effectiveFontScale = LocalEffectiveFontScale
+    )
+    val contentAreaHeight = cardMinHeight - 28.dp * LocalEffectiveFontScale
+
+    val room = entry.classroom.trim()
+    val seat = entry.seat.trim()
+    val clock = examClockRange(entry)
+
+    Card(
+        shape = shape,
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = cardMinHeight)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .glassSurface(
+                    shape = shape,
+                    tint = cardTint(examColor, courseTint),
+                    tintAlpha = courseTint,
+                    baseCoatAlpha = contentBase
+                )
+                .courseCardWash(
+                    courseColor = examColor,
+                    shape = shape,
+                    washAlpha = 0.10f,
+                    sheenAlpha = 0.12f
+                )
+                .padding(
+                    horizontal = 16.dp,
+                    vertical = 14.dp * LocalEffectiveFontScale
+                ),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(5.dp)
+                    .fillMaxHeight()
+                    .heightIn(min = contentAreaHeight)
+                    .clip(RoundedCornerShape(2.5.dp))
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                accentBarColor(examColor),
+                                accentBarColor(examColor).copy(alpha = 0.55f)
+                            )
+                        )
+                    )
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 「下一节」在这里是「下一场」——考试不是一节课，
+                    // 说成「节」会让用户去找教室。
+                    FeaturedStateChip(isCurrent = isCurrent, nextLabel = "下一场")
+                    Spacer(modifier = Modifier.width(7.dp))
+                    Text(
+                        text = entry.courseName,
+                        fontSize = CourseCardTitleFontSize.sp,
+                        lineHeight = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    ExamKindBadge(kind = entry.kind, examColor = examColor)
+                }
+                Spacer(modifier = Modifier.height(4.dp * LocalEffectiveFontScale))
+                // 考场：速查项，单独一行。图标跟课程卡用同一个（LocationOn）。
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Outlined.LocationOn,
+                        contentDescription = null,
+                        modifier = Modifier.size(15.dp),
+                        tint = accentOnCourse(examColor)
+                    )
+                    Spacer(modifier = Modifier.width(5.dp))
+                    if (room.isNotEmpty()) {
+                        Text(
+                            text = if (seat.isNotEmpty()) "$room · 座位 $seat" else room,
+                            fontSize = 14.sp,
+                            lineHeight = 21.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    } else {
+                        // 考场还没定：空心胶囊 = 还没填上的格子。
+                        PendingPill(text = "考场待安排")
+                    }
+                }
+                Spacer(modifier = Modifier.height(3.dp * LocalEffectiveFontScale))
+                Text(
+                    text = listOfNotNull(
+                        clock.takeIf { it.isNotBlank() },
+                        entry.dateLabel.takeIf { it.isNotBlank() && !entry.hasDate }
+                    ).joinToString(" · ").ifEmpty { "时间待定" },
+                    style = MiuType.CourseMeta.copy(fontSize = 11.sp),
+                    color = TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(8.dp * LocalEffectiveFontScale))
+                // 底部：正在考时给进度，「下一场」只留倒计时本身。
+                if (isCurrent) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(Color.White.copy(alpha = 0.55f))
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(progress)
+                                    .height(4.dp)
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            listOf(
+                                                accentBarColor(examColor),
+                                                cardTint(examColor, 0.55f)
+                                            )
+                                        )
+                                    )
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(9.dp))
+                        Text(
+                            text = "已考 $percent%",
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = accentOnCourse(examColor),
+                            maxLines = 1
+                        )
+                    }
+                } else {
+                    Text(
+                        text = countdownText,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(10.dp))
+            Box(
+                modifier = Modifier
+                    .width(1.dp)
+                    .fillMaxHeight()
+                    .heightIn(min = contentAreaHeight)
+                    .background(Color.White.copy(alpha = 0.34f))
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(
+                modifier = Modifier.widthIn(min = 64.dp),
+                horizontalAlignment = Alignment.End
+            ) {
+                // 「考完 / 开考」而不是「下课 / 开课」：考试不是一节课。
+                Text(
+                    text = if (isCurrent) "考完" else "开考",
+                    fontSize = 10.5.sp,
+                    lineHeight = 14.sp,
+                    color = TextSecondary,
+                    maxLines = 1
+                )
+                Spacer(modifier = Modifier.height(1.dp))
+                Text(
+                    text = formatMinute(if (isCurrent) endMinute else startMinute),
+                    fontSize = 21.sp,
+                    lineHeight = 26.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun DashboardSectionHeader(
     title: String,
@@ -2258,9 +2622,14 @@ private fun DashboardSectionHeader(
     }
 }
 
-/** 没课 / 课上完时，空态把注意力引到待办上。 */
-private fun pendingTasksSummary(count: Int): String =
-    if (count > 0) "还有 $count 条待办" else "今天没有待办"
+/**
+ * 总览页「今天没课」空态卡第二行。
+ *
+ * 这一行只在**今天一个条目都没有**时出现（没课、也没考试），
+ * 所以它不必提考试 —— 有考试时那张卡根本不出现。
+ */
+internal fun todayEmptyStateSummary(pendingCount: Int): String =
+    if (pendingCount > 0) "还有 $pendingCount 条待办" else "今天没有待办"
 
 /**
  * 总览「今天没课」空态卡的第一行文案。

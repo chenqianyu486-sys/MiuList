@@ -88,13 +88,13 @@ fun periodEndMillis(
 const val ALL_DAY_DONE_TEXT = "课都上完啦，休息一下吧~"
 
 /**
- * 「今日」后面的状态后缀，按**现在落在哪一节课的哪一段**分三种。
+ * 「今日」后面的状态后缀，按**现在落在哪一件事的哪一段**分三种。
  *
  * 三态：
- *  1. **正在上课**（now 落在某一节课的 `[start, end)`）→「还有 X 下课」。
- *     数的是**当前这节课的结束时刻**减 now。
- *  2. **还没到下一节课**（有课的 start > now）→「下一节课还有 X 开始」。
- *  3. **课全上完 / 今天没课**（没有任何一节的 end > now）→「课都上完啦，休息一下吧~」。
+ *  1. **正在进行**（now 落在某一件事的 `[start, end)`）→「还有 X 下课」。
+ *     数的是**这件事的结束时刻**减 now。
+ *  2. **还没到下一件事**（start > now）→「下节课还有 X 开始」。
+ *  3. **都上完 / 今天没事**（没有任何一件的 end > now）→「课都上完啦，休息一下吧~」。
  *
  * 半开区间 `[start, end)` 的两端是有讲究的：下课那一刻就该切换成「下一节课还有
  * 多久开始」，而不是继续显示「还有 0 分下课」。
@@ -105,35 +105,79 @@ const val ALL_DAY_DONE_TEXT = "课都上完啦，休息一下吧~"
  *   2.0 时放不进一行，会断在「开 / 始」之间，最后一个字单独占一行。
  *   短句「距下节课 7 小时 49 分」少四个字，411dp 屏上能收回一行。
  *   默认 false：基准字号与所有既有测试文案保持不变。
+ * @param examWindows 今天的考试时间窗（开始, 结束）。**与课一起参与「下一件事」的判定**：
+ *   考试和课摆在同一条时间线上，组头只盯着课就会说错 ——
+ *   「下节课还有 3 小时开始」而那场考试两小时后就要考，是假话。
+ * @param examCountToday 今天有几场考试。**大于 0 时第 3 态要改口**：
+ *   「课都上完啦，休息一下吧~」在有考试的日子里是**说假话** ——
+ *   那句是在说「今天没有事了」，而今天恰恰有一件最该做的事。
  */
 fun todayStatusLabel(
     date: java.util.Calendar,
     slots: List<com.example.data.local.CourseSlotEntity>,
     now: Long,
     periodTable: com.example.data.timetable.PeriodTable,
-    compact: Boolean = false
+    compact: Boolean = false,
+    examWindows: List<Pair<Long, Long>> = emptyList(),
+    examCountToday: Int = 0
 ): String {
     val windows = slots.mapNotNull { slot ->
         val start = periodStartMillis(date, slot, periodTable)
         val end = periodEndMillis(date, slot, periodTable)
         if (start <= 0L || end <= start) null else start to end
     }
-    if (windows.isEmpty()) return ALL_DAY_DONE_TEXT
+    val exams = examWindows.filter { it.second > it.first }
 
+    // 正在进行：课与考试谁先算谁，但**同一时刻**以课为准（课是默认项）。
     windows.firstOrNull { (start, end) -> now >= start && now < end }
         ?.let { (_, end) -> return "还有 ${formatRemaining(end - now)} 下课" }
+    exams.firstOrNull { (start, end) -> now >= start && now < end }
+        ?.let { (_, end) -> return "考试还有 ${formatRemaining(end - now)} 结束" }
 
-    windows.firstOrNull { (start, _) -> start > now }
-        ?.let { (start, _) ->
-            return if (compact) {
-                "距下节课 ${formatRemaining(start - now)}"
-            } else {
-                "下节课还有 ${formatRemaining(start - now)} 开始"
-            }
-        }
+    // 下一件事：课与考试里**更早**的那个。
+    val nextClass = windows.firstOrNull { (start, _) -> start > now }
+    val nextExam = exams.firstOrNull { (start, _) -> start > now }
+    when {
+        nextClass == null && nextExam == null -> Unit
+        nextExam == null -> return classStartText(nextClass!!.first, now, compact)
+        nextClass == null -> return examStartText(nextExam!!.first, now, compact)
+        nextClass.first <= nextExam.first -> return classStartText(nextClass.first, now, compact)
+        else -> return examStartText(nextExam.first, now, compact)
+    }
 
-    return ALL_DAY_DONE_TEXT
+    return dayDoneLabel(examCountToday)
 }
+
+/** 「下节课还有 X 开始」。 */
+private fun classStartText(start: Long, now: Long, compact: Boolean): String =
+    if (compact) {
+        "距下节课 ${formatRemaining(start - now)}"
+    } else {
+        "下节课还有 ${formatRemaining(start - now)} 开始"
+    }
+
+/**
+ * 「考试还有 X 开始」。
+ *
+ * 考试与课在同一条时间线上，但**不能叫「下节课」** ——
+ * 考试不是一节课，说成「课」会让用户去找教室。
+ */
+private fun examStartText(start: Long, now: Long, compact: Boolean): String =
+    if (compact) {
+        "距考试 ${formatRemaining(start - now)}"
+    } else {
+        "考试还有 ${formatRemaining(start - now)} 开始"
+    }
+
+/**
+ * 「今天没课了」那一句。有考试时换成考试的说法。
+ *
+ * 抽成独立函数是为了让**组头**与**空态卡**说同一件事：
+ * 组头说「今天有 1 场考试」、下面的空态卡也写「今天有 1 场考试」，
+ * 整屏不会出现两套说法。
+ */
+internal fun dayDoneLabel(examCountToday: Int): String =
+    if (examCountToday > 0) "今天有 $examCountToday 场考试" else ALL_DAY_DONE_TEXT
 
 /**
  * 把剩余时长写成中文。

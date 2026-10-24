@@ -48,6 +48,34 @@ class PeriodTable(
     fun sectionOf(period: Int): String = byPeriod[period]?.section.orEmpty()
 
     /**
+     * 某个时刻落在哪一节。
+     *
+     * 落在两节之间的**空档**里（比如浙大作息的 09:35–10:00）时取**下一节** ——
+     * 那段时间属于「快到下一节了」，归到下一节才对。
+     *
+     * 用在哪：考试只有钟点、没有节号，要落进周课表的格子就得靠这个换算。
+     */
+    fun periodOfMinute(minute: Int): Int? {
+        periods.firstOrNull { minute >= it.startMinute && minute < it.endMinute }
+            ?.let { return it.period }
+        // 空档里：取下一节。
+        return periods.firstOrNull { minute < it.startMinute }?.period
+    }
+
+    /**
+     * 一段时间占哪几节：起始时刻所在的那一节，到**结束时刻之前**的最后一节。
+     *
+     * 结束那一拍用「结束时刻之前」而不是「结束时刻所在」：
+     * 08:00–09:00 的考试只占第 1 节 —— 它在第 2 节开课时就已经结束了，
+     * 占到第 2 节会让栅格上多出一节「其实没在考」的时间。
+     */
+    fun periodSpanOf(startMinute: Int, endMinute: Int): IntRange? {
+        val start = periodOfMinute(startMinute) ?: return null
+        val end = periods.lastOrNull { it.startMinute < endMinute }?.period ?: start
+        return start..maxOf(start, end)
+    }
+
+    /**
      * 大节分隔：**由 [PeriodSlot.section] 相邻差异推导**，不再硬编码 `period == 5 || period == 10`。
      * 改造前 `PeriodUtils.kt` 顶部那条「改这里要同步改 WeekTimetableGrid13 的分隔线」
      * 的警告，根因就是这两处需要人工同步；现在只有这一处数据源。

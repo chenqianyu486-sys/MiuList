@@ -150,6 +150,33 @@ open class ZjuImportService(
     }
 
     /**
+     * 取考试安排。
+     *
+     * **与课表用同一个账号、同一次登录**：[cas] 是本服务长期持有的那一个，
+     * 课表拉完之后会话还在，这里直接复用 —— 不会第二次输密码，
+     * 也不会第二次触发教务网的换票握手。
+     *
+     * 考试**独立于课表**：它不参与 v2 文档、不进导入预览那条管线，
+     * 而是单独解析成 [ZjuExamMapper.ExamRow] 交给 `ExamRepository` 落库。
+     * 这么分是因为两者的生命周期不同 ——
+     * 课表是「学期课表」，考试是「一次性的安排」，删课不该删考试，
+     * 而重新导入课表也不该重建考试。
+     *
+     * @throws ZjuException 会话失效或接口不可用。**调用方要按「尽力而为」处理**：
+     *   拉不到考试不该让整次课表同步失败。
+     */
+    open suspend fun fetchExams(studentId: String, password: String): List<ZjuExamMapper.ExamRow> =
+        withContext(Dispatchers.IO) {
+            if (studentId.isBlank() || password.isBlank()) {
+                throw ZjuException("学号与密码不能为空", ZjuFailureKind.CREDENTIAL)
+            }
+            // 课表刚拉过的话这里几乎不花时间：TGC 与 zdbk 会话都还在，
+            // 只是再走一次换票握手把会话刷新一遍。
+            cas.login(studentId, password)
+            ZjuExamMapper.parse(cas.fetchExams())
+        }
+
+    /**
      * 一行课表记录的身份 —— 用来把两半响应里**逐字重复**的那一行合成一条。
      *
      * 不能用 [ZjuClassRow.xkkh]（选课课号）：它带一个半学期序号，

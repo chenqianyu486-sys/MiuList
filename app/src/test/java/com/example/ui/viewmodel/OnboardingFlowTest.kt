@@ -98,22 +98,56 @@ class OnboardingFlowTest {
     }
 
     @Test
-    fun `四个目标各自认自己那个弹层`() {
+    fun `每个目标各自认自己那个弹层`() {
         val zju = MainUiState(isCloudAccountDialogOpen = true)
         val course = MainUiState(isCourseCategoryDialogOpen = true)
         val rules = MainUiState(isCategoryRulesDialogOpen = true)
         val wallpaper = MainUiState(isWallpaperDialogOpen = true)
+        val generation = MainUiState(isQuickGenerateDialogOpen = true)
 
         assertTrue(zju.isGuideTargetOpen(GuideTarget.ZJU_SYNC))
         assertTrue(course.isGuideTargetOpen(GuideTarget.COURSE_CATEGORY))
         assertTrue(rules.isGuideTargetOpen(GuideTarget.LINKAGE_RULES))
         assertTrue(wallpaper.isGuideTargetOpen(GuideTarget.WALLPAPER))
+        assertTrue(generation.isGuideTargetOpen(GuideTarget.WEEK_TASK_GENERATION))
 
         // 别人的弹层开着不算自己的
         assertFalse(zju.isGuideTargetOpen(GuideTarget.WALLPAPER))
         assertFalse(wallpaper.isGuideTargetOpen(GuideTarget.ZJU_SYNC))
         assertFalse(rules.isGuideTargetOpen(GuideTarget.COURSE_CATEGORY))
         assertFalse(course.isGuideTargetOpen(GuideTarget.LINKAGE_RULES))
+    }
+
+    @Test
+    fun `翻面那一步没有弹层可等`() {
+        // 「学在浙大翻面」的落点是总览页那张主卡的**背面**：没有弹层，
+        // 也就没有「做完之后接回来」这回事。所以它恒为 false ——
+        // 别的弹层关掉时不会因此把引导从总览页拽回来。
+        assertFalse(
+            "翻面这一步不该有弹层可等",
+            MainUiState().isGuideTargetOpen(GuideTarget.HERO_FLIP_CARD)
+        )
+    }
+
+    @Test
+    fun `预览弹层关掉了引导要接回来`() {
+        // 「一键生成本周待办」的「去看看」开到的是预览弹层：
+        // 用户在里面挑完（或按取消）关掉它，就是这一步做完了的信号。
+        val state = MainUiState(
+            isQuickGenerateDialogOpen = true,
+            onboardingAwaitingTarget = GuideTarget.WEEK_TASK_GENERATION
+        )
+
+        assertFalse(
+            "预览弹层还开着就不该接回引导",
+            state.resumeOnboardingIfTargetDone().isOnboardingGuideOpen
+        )
+
+        val after = state.copy(isQuickGenerateDialogOpen = false).resumeOnboardingIfTargetDone()
+
+        assertTrue("预览弹层关掉了，引导必须自己回来", after.isOnboardingGuideOpen)
+        assertNull("接回来之后就不该还在等", after.onboardingAwaitingTarget)
+        assertTrue(after.onboardingResumed)
     }
 
     @Test

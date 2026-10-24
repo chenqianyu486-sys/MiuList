@@ -2,6 +2,7 @@ package com.example.data.sync
 
 import com.example.data.repository.AcademicCalendarRepository
 import com.example.data.repository.CourseRepository
+import com.example.data.repository.ExamRepository
 import com.example.data.security.SecureAccountStorage
 import com.example.data.source.zju.ZjuException
 import com.example.data.source.zju.ZjuFailureKind
@@ -19,7 +20,16 @@ sealed interface SyncResult {
         val courseCount: Int,
         val slotCount: Int,
         val termLabel: String,
-        val report: ImportReport
+        val report: ImportReport,
+        /**
+         * 本次同步到的考试场次。
+         *
+         * 0 有两种含义：**学校还没公布考试**（正常）与**这次没拉到**（异常），
+         * 两种要靠 [examError] 区分 —— 只报一个 0，用户会以为「我一场考试都没有」。
+         */
+        val examCount: Int = 0,
+        /** 考试没拉到时的原因；null = 一切正常。 */
+        val examError: String? = null
     ) : SyncResult
 
     /**
@@ -41,7 +51,8 @@ class ScheduleSyncManager(
     private val importService: ScheduleImportService,
     private val courseRepo: CourseRepository,
     private val calendarRepo: AcademicCalendarRepository,
-    private val secureStorage: SecureAccountStorage
+    private val secureStorage: SecureAccountStorage,
+    private val examRepo: ExamRepository
 ) {
 
     /**
@@ -76,6 +87,25 @@ class ScheduleSyncManager(
                 password = password,
                 option = option
             )
+
+            // 1.5 考试。**同一个账号、同一个会话**：zjuImportService 长期持有那个
+            //      cas 客户端，刚才取课表时建立的 zdbk 会话还在，
+            //      所以这里不会再输一次密码、也不会第二次握手。
+            //
+            //      **写在这里而不是 commit 之后**，是因为考试是**独立于课表**的数据：
+            //      抓到就落库，不受课表落库那一步的成败影响。
+            //      反过来（课表落库失败就当考试也没拉到）会让一次课表校验失败
+            //      顺手把已经抓到的考试也吞掉。
+            //
+            //      拉不到考试**不算同步失败**：教务网在还没到考试季时本来就回空，
+            //      那是正常状态。真正的原因带在 [SyncResult.Success.examError] 里，
+            //      如实告诉用户，而不是悄悄吞掉。
+            val examOutcome = runCatching {
+                val rows = zjuImportService.fetchExams(studentId, password)
+                examRepo.replaceAll(rows)
+            }
+            val examCount = examOutcome.getOrDefault(0)
+            val examError = examOutcome.exceptionOrNull()?.message
 
             // 2. 整表替换。
             //    早先这里写的是 `if (isDemo) REPLACE else REPLACE` —— 两个分支一样，
@@ -127,7 +157,9 @@ class ScheduleSyncManager(
                 courseCount = finalCourses.size,
                 slotCount = finalSlots.size,
                 termLabel = option.label,
-                report = report
+                report = report,
+                examCount = examCount,
+                examError = examError
             )
         } catch (e: ZjuException) {
             fail(e.kind, e.message ?: "取课表失败", committed)

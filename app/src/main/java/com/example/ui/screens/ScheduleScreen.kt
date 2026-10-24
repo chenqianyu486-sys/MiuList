@@ -72,7 +72,15 @@ import com.example.data.local.CourseEntity
 import com.example.data.local.CourseSlotEntity
 import com.example.data.local.CourseWithSlots
 import com.example.data.local.TaskEntity
+import com.example.data.model.ExamEntry
 import com.example.ui.components.CourseTimetableCell
+import com.example.ui.components.DayItem
+import com.example.ui.components.ExamCard
+import com.example.ui.components.ExamTimetableCell
+import com.example.ui.components.examEpochDay
+import com.example.ui.components.lazyKey
+import com.example.ui.components.mergeDayItems
+import com.example.ui.components.pickDayOffsets
 import com.example.ui.components.islandBottomInset
 import com.example.ui.components.epochDayOf
 import com.example.ui.components.formatPeriodRange
@@ -124,6 +132,8 @@ fun ScheduleScreen(
     onSelectWeek: (Int) -> Unit,
     onOpenWeekPicker: () -> Unit,
     onInspectCourse: (CourseWithSlots) -> Unit,
+    /** 点考试卡/考试格 → 打开考试编辑弹层（本地可改考场 / 座位 / 时刻）。 */
+    onEditExam: (ExamEntry) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // 排课判定的唯一入口：开课周次、停课、补课都在它里面，
@@ -219,10 +229,12 @@ fun ScheduleScreen(
                         plan = plan,
                         coursesWithSlots = state.coursesWithSlots,
                         tasks = state.tasks,
+                        exams = state.exams,
                         periodTable = state.periodTable,
                         onSelectWeek = onSelectWeek,
                         onOpenWeekPicker = onOpenWeekPicker,
                         onInspectCourse = onInspectCourse,
+                        onEditExam = onEditExam,
                         modifier = Modifier.fillMaxWidth()
                     )
                 } else {
@@ -230,10 +242,12 @@ fun ScheduleScreen(
                         coursesWithSlots = state.coursesWithSlots,
                         slots = state.courseSlots,
                         tasks = state.tasks,
+                        exams = state.exams,
                         periodTable = state.periodTable,
                         resolver = resolver,
                         weeksBySlotId = state.slotWeeks,
                         onInspectCourse = onInspectCourse,
+                        onEditExam = onEditExam,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = PageHInset)
@@ -830,10 +844,14 @@ fun WeekTimetableGrid13(
     plan: List<WeekDayPlan>,
     coursesWithSlots: List<CourseWithSlots>,
     tasks: List<TaskEntity>,
+    /** 考试：按日期落到对应那一周的列里，再按时刻换算成节次。 */
+    exams: List<ExamEntry>,
     periodTable: PeriodTable,
     onSelectWeek: (Int) -> Unit,
     onOpenWeekPicker: () -> Unit,
     onInspectCourse: (CourseWithSlots) -> Unit,
+    /** 点考试格 → 打开考试编辑弹层。 */
+    onEditExam: (ExamEntry) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val dayLabels = listOf("一", "二", "三", "四", "五", "六", "日")
@@ -1040,8 +1058,39 @@ fun WeekTimetableGrid13(
                 val isHoliday = dayPlan.offReason == DayOffReason.NO_CLASS ||
                     dayPlan.offReason == DayOffReason.VACATED
                 val daySlots = dayPlan.slots
+                // 这一列的考试：按日期对上，再把钟点换算成节次（考试没有节号）。
+                val dayExams = remember(exams, dayPlan.epochDay, periodTable) {
+                    exams.filter { examEpochDay(it) == dayPlan.epochDay }
+                        .mapNotNull { exam ->
+                            if (exam.startMinute <= 0) return@mapNotNull null
+                            val span = periodTable.periodSpanOf(exam.startMinute, exam.endMinute)
+                                ?: return@mapNotNull null
+                            exam to span
+                        }
+                }
+                // 考试先折成「虚拟时段」，好和课程**一起**过分栏算法 ——
+                // 同一格里既有课又有考时，它们得并排，不能互相压住。
+                //
+                // 虚拟时段的 id 用**负数**：真实的时段 id 是自增正数，不会撞。
+                val examSlots = remember(dayExams) {
+                    dayExams.mapIndexed { index, (exam, span) ->
+                        CourseSlotEntity(
+                            id = (EXAM_SLOT_ID_BASE - index).toLong(),
+                            courseId = 0L,
+                            dayOfWeek = dayPlan.dayOfWeek,
+                            startPeriod = span.first,
+                            endPeriod = span.last,
+                            classroom = exam.classroom
+                        )
+                    }
+                }
+                val examBySlotId = remember(dayExams) {
+                    dayExams.mapIndexed { index, pair ->
+                        (EXAM_SLOT_ID_BASE - index).toLong() to pair.first
+                    }.toMap()
+                }
                 // 撞课的课在这里被分好列，后面按列宽摆格子
-                val placements = layoutDaySlots(daySlots)
+                val placements = layoutDaySlots(daySlots + examSlots)
                 // 入场序号按**节次**排，不按并排列：撞课并排的两块在同一行同一高度，
                 // 按列排会让它们一个在左上、一个在右下依次亮起，读起来像错位而不是
                 // 同时出现。所以这里只按 startPeriod 排序，同节次的块拿到同一个序号。
@@ -1164,9 +1213,10 @@ fun WeekTimetableGrid13(
                     // 4. 连堂课色块平铺在对应节次上；撞课的按列宽并排，互不遮挡
                     placements.forEach { place ->
                         val slot = place.slot
-                        val cWithSlots = courseMap[slot.courseId]
+                        val exam = examBySlotId[slot.id]
+                        val cWithSlots = if (exam == null) courseMap[slot.courseId] else null
                         val course = cWithSlots?.course
-                        if (course != null) {
+                        if (exam != null || course != null) {
                             val start = slot.startPeriod.coerceIn(1, periodsPerDay)
                             val end = slot.endPeriod.coerceIn(start, periodsPerDay)
                             val span = (end - start + 1).coerceAtLeast(1)
@@ -1180,7 +1230,11 @@ fun WeekTimetableGrid13(
                                 (maxWidth - gap * (place.columns - 1)) / place.columns
                             val left = cellWidth * place.column + gap * place.column
 
-                            val linkedTasks = tasks.filter { it.courseId == course.id }
+                            val linkedTasks = if (course != null) {
+                                tasks.filter { it.courseId == course.id }
+                            } else {
+                                emptyList()
+                            }
 
                             Box(
                                 modifier = Modifier
@@ -1193,14 +1247,25 @@ fun WeekTimetableGrid13(
                                         revealOrderBySlotId[slot.startPeriod] ?: 0
                                     )
                             ) {
-                                CourseTimetableCell(
-                                    course = course,
-                                    slot = slot,
-                                    linkedTasks = linkedTasks,
-                                    onClick = { onInspectCourse(cWithSlots) },
-                                    conflicted = place.conflicted,
-                                    modifier = Modifier.fillMaxSize()
-                                )
+                                if (exam != null) {
+                                    ExamTimetableCell(
+                                        entry = exam,
+                                        periodStart = start,
+                                        periodEnd = end,
+                                        onClick = { onEditExam(exam) },
+                                        conflicted = place.conflicted,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                } else if (cWithSlots != null && course != null) {
+                                    CourseTimetableCell(
+                                        course = course,
+                                        slot = slot,
+                                        linkedTasks = linkedTasks,
+                                        onClick = { onInspectCourse(cWithSlots) },
+                                        conflicted = place.conflicted,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
                             }
                         }
                     }
@@ -1234,36 +1299,71 @@ private const val CHIP_TEXT_TARGET = 6.5f
 /** 最多往后找几天（两周），够覆盖「这一整周都没课」的极端排课。 */
 private const val DAY_LOOKAHEAD = 14
 
+/**
+ * 考试折成的「虚拟时段」的 id 起点。
+ *
+ * **负数**：真实的时段 id 是自增正数（从 1 开始），用负数段不会撞上。
+ * 撞车了会让 `layoutDaySlots` 的 `columnOf[s.id]` 把两个不同的东西分到同一列。
+ */
+private const val EXAM_SLOT_ID_BASE = -1_000_000
+
 /** 当天那段的标题。用户用「今日」而不是「今天」。 */
 private const val TODAY_LABEL = "今日"
-/** 列表页里的一天：一个日期 + 当天的课（已按开始节次排好）。 */
+
+/**
+ * 「列表」页里的一天：一个日期 + 当天的课与考试。
+ *
+ * [slots] 与 [exams] 分开存是因为**组头文案要用课**（「还有 X 分 下课」
+ * 说的是课，不是考试），而**渲染顺序**要把两者混在一起按时刻排。
+ */
 private class ScheduleDayGroup(
     val dayOffset: Int, // 0 = 今天，1 = 明天，以此类推
     val date: Calendar, // 当天 00:00
-    val slots: List<CourseSlotEntity>
-)
+    val slots: List<CourseSlotEntity>,
+    /** 这天要考的考试（可能为空）。 */
+    val exams: List<ExamEntry>,
+    /** 当天的课与考试，按时刻排好。 */
+    val items: List<DayItem>
+) {
+    /** 这天有没有日程：有课**或**有考试。 */
+    val hasSchedule: Boolean get() = slots.isNotEmpty() || exams.isNotEmpty()
+}
 
 /**
- * 从系统时间往后推，收集「当天 + 接下来 [EXTRA_DAY_GROUPS] 个有课的日子」。
+ * 从系统时间往后推，收集「当天 + 接下来 [EXTRA_DAY_GROUPS] 个**有日程**的日子」。
  *
  * 中间没课的日子**直接跳过**而不是留一截空白：周一有课、周二空、周三有课，
  * 就只出周一、周三两段，留个空段只会让人以为那天漏渲染了。
  *
- * 今天自己没课时就不出今天这一段，于是总组数会少于 EXTRA_DAY_GROUPS + 1——
- * 这是按「当天及接下来 2 天」的字面意思来的，不是漏算。
+ * ## 「有日程」= 有课**或**有考试
+ *
+ * 只有考试的那天也算有日程 —— 它当然有日程，而且那一段里只有这一件事。
+ * 不算的话那天的考试就永远显示不出来。
+ *
+ * ## 仍然只看接下来三天
+ *
+ * 这一页是**近程时间线**，不是「日程总览」：
+ * 考试往往在一两周之后，把它塞进来会让这一页越拉越长、越拉越远。
+ * 更远的考试在**周课表**里看 —— 那边本来就是按周浏览的，
+ * 翻到考试那一周就能看到（见 `WeekTimetableGrid13`）。
  */
 private fun buildDayGroups(
     slots: List<CourseSlotEntity>,
     resolver: ScheduleResolver,
-    weeksBySlotId: Map<Long, Set<Int>>
+    weeksBySlotId: Map<Long, Set<Int>>,
+    exams: List<ExamEntry>,
+    periodTable: PeriodTable
 ): List<ScheduleDayGroup> {
-    val groups = ArrayList<ScheduleDayGroup>(EXTRA_DAY_GROUPS + 1)
     // 「今天」的锚点必须是北京（AppZone）的今天：设备在别的时区时，
     // 用系统时区会在北京 00:30 之前把前一天当成今天。
     val today = todayCalendar()
-    var extra = 0
-    var offset = 0
-    while (offset < DAY_LOOKAHEAD && extra < EXTRA_DAY_GROUPS) {
+    // 考试按天归堆。同一门课的期中与期末是两条记录，各归各的天。
+    val examsByDay = exams
+        .mapNotNull { exam -> examEpochDay(exam)?.let { it to exam } }
+        .groupBy({ it.first }, { it.second })
+
+    // 窗口内每天的日程先算一遍（有课**或**有考试就算有日程）。
+    val perDay = (0 until DAY_LOOKAHEAD).map { offset ->
         val date = (today.clone() as Calendar).apply {
             add(Calendar.DAY_OF_YEAR, offset)
             set(Calendar.HOUR_OF_DAY, 0)
@@ -1271,23 +1371,23 @@ private fun buildDayGroups(
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
+        val day = epochDayOf(date)
         // 判定权交给 resolver：停课日整天不产生分组，补课日走 effectiveDayOfWeek
-        val daySlots = resolver.slotsOn(
-            epochDayOf(date),
-            slots,
-            weeksBySlotId
+        val daySlots = resolver.slotsOn(day, slots, weeksBySlotId)
+        val dayExams = examsByDay[day].orEmpty()
+        offset to ScheduleDayGroup(
+            offset, date, daySlots, dayExams,
+            mergeDayItems(daySlots, dayExams, periodTable)
         )
-        if (daySlots.isNotEmpty()) {
-            if (offset == 0) {
-                groups += ScheduleDayGroup(0, date, daySlots)
-            } else if (extra < EXTRA_DAY_GROUPS) {
-                groups += ScheduleDayGroup(offset, date, daySlots)
-                extra++
-            }
-        }
-        offset++
-    }
-    return groups
+    }.toMap()
+
+    // 取「今天 + 后面两个有日程的日子」—— 规则见 [pickDayOffsets]。
+    val offsets = pickDayOffsets(
+        hasSchedule = { offset -> perDay.getValue(offset).hasSchedule },
+        extra = EXTRA_DAY_GROUPS,
+        horizon = DAY_LOOKAHEAD
+    )
+    return offsets.map { perDay.getValue(it) }
 }
 
 /**
@@ -1312,12 +1412,29 @@ private fun daySeparatorLabel(
         2 -> "后天"
         else -> "${group.date.get(Calendar.MONTH) + 1} 月 ${group.date.get(Calendar.DAY_OF_MONTH)} 日"
     }
-    val withStatus = if (group.dayOffset != 0) base
-    else "$base · ${todayStatusLabel(group.date, group.slots, now, periodTable, compact)}"
+    // 今天有几场考试、有考试的时间窗。组头不能说「课都上完啦，休息一下吧~」，
+    // 也不能在考试更早开始时还说「下节课还有 X 开始」—— 那是假话。
+    val isToday = group.dayOffset == 0
+    val examWindows = if (isToday) {
+        group.exams.mapNotNull { exam ->
+            if (exam.startAt > 0L && exam.endAt > exam.startAt) exam.startAt to exam.endAt else null
+        }
+    } else {
+        emptyList()
+    }
+    val withStatus = if (!isToday) base
+    else "$base · ${todayStatusLabel(group.date, group.slots, now, periodTable, compact, examWindows = examWindows, examCountToday = group.exams.size)}"
     // 补课必须挂一句话出来。不说的话用户看到周六有课只会以为本来就有 ——
     // 而"周六本来不上课"恰恰是需要提醒他的那件事。
     val makeup = makeupSuffixLabel(group, resolver)
-    return if (makeup == null) withStatus else "$withStatus · $makeup"
+    val labeled = if (makeup == null) withStatus else "$withStatus · $makeup"
+    // 只有考试、没有课的那天要标出来：否则用户看到一段只有一张卡的日期，
+    // 会以为那天漏渲染了课。
+    // **组头已经提到考试时就不重复标**（「今天有 1 场考试 · 考试日」是废话）。
+    val examNote = if (
+        group.slots.isEmpty() && group.exams.isNotEmpty() && !labeled.contains("考试")
+    ) " · 考试日" else ""
+    return "$labeled$examNote"
 }
 
 /**
@@ -1355,17 +1472,20 @@ fun DayTimelineView13(
     coursesWithSlots: List<CourseWithSlots>,
     slots: List<CourseSlotEntity>,
     tasks: List<TaskEntity>,
+    exams: List<ExamEntry>,
     periodTable: PeriodTable,
     resolver: ScheduleResolver,
     weeksBySlotId: Map<Long, Set<Int>>,
     onInspectCourse: (CourseWithSlots) -> Unit,
+    /** 点考试卡 → 打开考试编辑弹层。 */
+    onEditExam: (ExamEntry) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val courseMap = coursesWithSlots.associateBy { it.course.id }
     // 只跟着课表本身重算；「还有 X 小时 X 分」在每次重组时现算，不跟着这里缓存，
     // 否则从别的页面切回来会一直显示旧倒计时。
-    val groups = remember(slots, resolver, weeksBySlotId) {
-        buildDayGroups(slots, resolver, weeksBySlotId)
+    val groups = remember(slots, resolver, weeksBySlotId, exams, periodTable) {
+        buildDayGroups(slots, resolver, weeksBySlotId, exams, periodTable)
     }
     val now = System.currentTimeMillis()
 
@@ -1413,27 +1533,48 @@ fun DayTimelineView13(
                     Spacer(modifier = Modifier.height(CardBlockGap))
                 }
             }
-            group.slots.forEachIndexed { slotIndex, slot ->
-                item(key = "slot_${group.dayOffset}_${slot.id}") {
-                    val cWithSlots = courseMap[slot.courseId]
-                    val course = cWithSlots?.course
-                    if (course != null) {
-                        // 入场序号要跨分组累计，才是从整页最上面一路数下来。
-                        // 用 `groups.take(groupIndex).sumOf { … }` 而不是外面挂一个
-                        // 累加计数器：LazyColumn 的 item 内容是**懒执行**的，捕获的
-                        // 计数器在滚动时被后续 item 复用，会算到越滚越大的序号。
-                        val revealOrder = groups
-                            .take(groupIndex)
-                            .sumOf { it.slots.size } + slotIndex
+            // 当天的课与考试**混在一条时间线上**（见 [mergeDayItems]）：
+            // 课按节次折算成钟点，考试本来就有钟点，混完再排序。
+            group.items.forEachIndexed { itemIndex, dayItem ->
+                // key 必须带前缀：课程与考试在**同一个** LazyColumn 里，
+                // 裸 id 会让时段 id 与考试 id 撞进同一个 key 命名空间，直接闪退。
+                item(key = dayItem.lazyKey(group.dayOffset)) {
+                    // 入场序号要跨分组累计，才是从整页最上面一路数下来。
+                    // 用 `groups.take(groupIndex).sumOf { … }` 而不是外面挂一个
+                    // 累加计数器：LazyColumn 的 item 内容是**懒执行**的，捕获的
+                    // 计数器在滚动时被后续 item 复用，会算到越滚越大的序号。
+                    val revealOrder = groups
+                        .take(groupIndex)
+                        .sumOf { it.items.size } + itemIndex
 
-                        ScheduleCourseCard(
-                            courseWithSlots = cWithSlots,
-                            slot = slot,
-                            periodTable = periodTable,
-                            onInspectCourse = { onInspectCourse(cWithSlots) },
-                            modifier = Modifier.cardRevealAt(cardRevealProgress, revealOrder)
-                        )
-                        Spacer(modifier = Modifier.height(CardListGap))
+                    when (dayItem) {
+                        is DayItem.SlotItem -> {
+                            val slot = dayItem.slot
+                            val cWithSlots = courseMap[slot.courseId]
+                            val course = cWithSlots?.course
+                            if (course != null) {
+                                ScheduleCourseCard(
+                                    courseWithSlots = cWithSlots,
+                                    slot = slot,
+                                    periodTable = periodTable,
+                                    onInspectCourse = { onInspectCourse(cWithSlots) },
+                                    modifier = Modifier.cardRevealAt(cardRevealProgress, revealOrder)
+                                )
+                                Spacer(modifier = Modifier.height(CardListGap))
+                            }
+                        }
+                        is DayItem.ExamItem -> {
+                            // 点考试卡 → **编辑考试**（本地可改考场 / 座位 / 时刻）。
+                            // 不是跳去课程详情：考试卡上的信息是**考试**的，
+                            // 而用户点它多半是因为「座位号没公布，我要自己补一个」。
+                            ExamCard(
+                                entry = dayItem.entry,
+                                now = now,
+                                onClick = { onEditExam(dayItem.entry) },
+                                modifier = Modifier.cardRevealAt(cardRevealProgress, revealOrder)
+                            )
+                            Spacer(modifier = Modifier.height(CardListGap))
+                        }
                     }
                 }
             }

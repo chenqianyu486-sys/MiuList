@@ -11,6 +11,8 @@ import com.example.data.local.SemesterEntity
 import com.example.data.local.TaskEntity
 import com.example.data.model.CategoryRule
 import com.example.data.model.CustomTaskType
+import com.example.data.model.ExamEntry
+import com.example.data.model.ExamKind
 import com.example.data.model.TaskType
 import com.example.data.model.WallpaperConfig
 import com.example.data.source.zju.CoursesTodoItem
@@ -105,6 +107,15 @@ data class MainUiState(
     /** 时段 id → 开课周次。缺 key = 每周。 */
     val slotWeeks: Map<Long, Set<Int>> = emptyMap(),
     val coursesWithSlots: List<CourseWithSlots> = emptyList(),
+    /**
+     * 考试。**独立于课程**的一份数据（单独一张表、单独一次同步），
+     * 但读出来时已经挂好了对应课程（见 `ExamRepository.getExamEntries`）：
+     * [com.example.data.model.ExamEntry.courseId] 为 null 表示没对上，
+     * 这时考试照常显示，只是没有课程颜色可继承、也不能点进课程详情。
+     *
+     * 按时间升序；日期未知的排在最后（教务网先公布考试周、后公布具体日期）。
+     */
+    val exams: List<ExamEntry> = emptyList(),
     val tasks: List<TaskEntity> = emptyList(),
     /**
      * 用户自己新建的待办类型（内置的三个在 [com.example.data.model.TaskType] 枚举里）。
@@ -214,6 +225,14 @@ data class MainUiState(
     val inspectingCourse: CourseWithSlots? = null, // for detailed course + slots + linked tasks sheet
 
     /**
+     * 正在编辑的考试。
+     *
+     * 非 null 时弹层打开。考试**可以本地编辑**（考场 / 座位 / 时刻），
+     * 但教务网同步会整表覆盖回去 —— 所以它是临时补丁，不是对学校数据的修改。
+     */
+    val editingExam: ExamEntry? = null,
+
+    /**
      * 删除课程前的二次确认对象；null = 没在确认。
      *
      * 删课是不可逆的，而入口有两处（课程详情弹层、更多抽屉的课程行），两处都得先落到这里，
@@ -297,6 +316,20 @@ data class MainUiState(
      * 否则用户看到的是和离开前一模一样的第 N 步，会以为引导没动过。
      */
     val onboardingResumed: Boolean = false,
+
+    /**
+     * 让总览页那张主卡翻到背面的**请求序号**。
+     *
+     * 引导最后一步「学在浙大翻面」的「去看看」= 把人送到总览页并替他把卡翻过去
+     * （学在浙大待交作业那一面是**背面**，不翻就看不见）。
+     *
+     * 为什么是**序号**而不是一个布尔开关：布尔开关只能表达「翻过一次」，
+     * 第二次点「翻给我看」时值没变，总览页那边就收不到新的一次请求。
+     * 序号每次 +1，谁都能拿它当「又来一次」的信号（`LaunchedEffect(序号)`）。
+     *
+     * 0 = 没人要求翻面（App 起来的常态）。
+     */
+    val heroFlipRequest: Int = 0,
 
     // 浙大同步（账号 / 学期下拉 / 取课表）与文件导入导出各自的状态
     val isZjuImportRunning: Boolean = false,

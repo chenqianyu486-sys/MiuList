@@ -375,6 +375,63 @@ open class ZjuCasClient(
     }
 
     /**
+     * 取考试安排。返回的是教务网的原始 JSON，交由 [ZjuExamMapper] 解。
+     *
+     * 与课表**用同一个会话**（同一个 CAS 登录、同一对 `JSESSIONID` / `route`），
+     * 所以调用它之前不需要重新登录 —— [ZjuImportService] 会在同一次登录里
+     * 先取课表再取考试。
+     *
+     * 失败的处理与课表**刻意不一样**：
+     * 考试拉不到**不应该让整次同步失败**（考试只是课表之外的补充），
+     * 所以这里抛出的异常由调用方按「尽力而为」处理。
+     */
+    open suspend fun fetchExams(): String = withContext(Dispatchers.IO) {
+        try {
+            fetchExamsImpl()
+        } catch (e: ZjuException) {
+            throw e
+        } catch (e: Exception) {
+            throw networkFailure(e)
+        }
+    }
+
+    private suspend fun fetchExamsImpl(): String {
+        // 与课表同一套：不自动跟跳转。会话被顶掉时 zdbk 会 302 到登录页，
+        // 跟着跳完只会拿到一张 200 的登录页 HTML，被当成「没返回考试」。
+        val noRedirect = client.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
+        val response = noRedirect.newCall(
+            Request.Builder()
+                .url(EXAM_API_URL.toHttpUrl())
+                .post(FormBody.Builder().build())
+                .header("Referer", ZDBK_HOME_URL)
+                .header("X-Requested-With", "XMLHttpRequest")
+                .header("Accept", "application/json, text/javascript, */*; q=0.01")
+                .build()
+        ).execute()
+
+        val text = response.use { it.body?.string().orEmpty() }
+        if (response.code in 300..399 ||
+            CoursesAuthGuard.locationIndicatesAuthFailure(response.header("Location"))
+        ) {
+            throw ZjuException("教务网会话已失效，请重新登录", ZjuFailureKind.SESSION)
+        }
+        if (!response.isSuccessful) {
+            throw ZjuException("获取考试安排失败（HTTP ${response.code}）", ZjuFailureKind.SERVER)
+        }
+        val trimmed = text.trimStart()
+        if (text.isBlank() || !(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+            if (text.contains("登录") || text.contains("login")) {
+                throw ZjuException("教务网会话已失效，请重新登录", ZjuFailureKind.SESSION)
+            }
+            throw ZjuException("教务网没返回考试安排", ZjuFailureKind.EMPTY)
+        }
+        return text
+    }
+
+    /**
      * 课表接口失败时的文案。
      *
      * - **401/403** —— zdbk 会话失效，要重新登录。
@@ -476,6 +533,25 @@ open class ZjuCasClient(
         /** 课表（本科）。学号由 CAS 会话带，请求体里**只有**学年与学期两个参数。 */
         private const val SCHEDULE_API_URL =
             "https://zdbk.zju.edu.cn/jwglxt/kbcx/xskbcx_cxXsKb.html"
+
+        /**
+         * 考试（本科，个人考试查询）。
+         *
+         * `doType=query` 与 `queryModel.showCount` 都在查询串里，
+         * 请求体是空的 —— 与课表接口不同，**不传学年与学期**：
+         * 这个接口一次返回该生名下的全部考试（各学期都在里面），
+         * 学期是每条记录自己的字段。
+         *
+         * `showCount` 给到 5000 是照抄教务网页面的表格设置，
+         * 实测一学期的考试也就十几条。
+         */
+        private const val EXAM_API_URL =
+            "https://zdbk.zju.edu.cn/jwglxt/xskscx/kscx_cxXsgrksIndex.html" +
+                "?doType=query&queryModel.showCount=5000"
+
+        /** 教务网首页。教务网的 Ajax 接口都要带这个 Referer 才认。 */
+        private const val ZDBK_HOME_URL =
+            "https://zdbk.zju.edu.cn/jwglxt/xtgl/index_initMenu.html"
 
         /**
          * 会话 Cookie 手动存：CAS 登录要带着 cookie 才能接着调 zdbk。

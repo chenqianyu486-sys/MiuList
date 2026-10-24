@@ -215,4 +215,45 @@ class PeriodTableTest {
         assertEquals("下午", PeriodTable.DEFAULT.sectionOf(6))
         assertEquals("晚上", PeriodTable.DEFAULT.sectionOf(11))
     }
+
+    /**
+     * 时刻 → 节次。考试只有钟点、没有节号，要落进周课表的格子就得靠这个换算。
+     *
+     * 浙大作息第 1 节 08:00-08:45、第 2 节 08:50-09:35、第 3 节 10:00-10:45。
+     */
+    @Test
+    fun `时刻落在哪一节`() {
+        val t = PeriodTable.ZJU
+        assertEquals(1, t.periodOfMinute(8 * 60))
+        assertEquals(1, t.periodOfMinute(8 * 60 + 44))
+        assertEquals(2, t.periodOfMinute(8 * 60 + 50))
+        assertEquals(3, t.periodOfMinute(10 * 60))
+    }
+
+    /**
+     * 落在两节之间的空档里（09:35–10:00）时取**下一节**；
+     * 正好卡在上一节的结束时刻（09:35）也一样 —— 那时候下一节还没开始，
+     * 归到下一节才对。
+     */
+    @Test
+    fun `空档与边界上的时刻归到下一节`() {
+        val t = PeriodTable.ZJU
+        assertEquals(3, t.periodOfMinute(9 * 60 + 35))
+        assertEquals(3, t.periodOfMinute(9 * 60 + 36))
+        assertEquals(3, t.periodOfMinute(10 * 60 - 1))
+    }
+
+    /**
+     * 考试占哪几节：它**碰到**的那几节。
+     *
+     * 08:00–08:45 只碰第 1 节；09:00–11:00 碰到第 2、3、4 节；
+     * 09:00–10:00 碰到第 2 节 —— 它在第 3 节开课时就结束了。
+     */
+    @Test
+    fun `考试占的节次范围`() {
+        val t = PeriodTable.ZJU
+        assertEquals(1..1, t.periodSpanOf(8 * 60, 8 * 60 + 45))
+        assertEquals(2..4, t.periodSpanOf(9 * 60, 11 * 60))
+        assertEquals(2..2, t.periodSpanOf(9 * 60, 10 * 60))
+    }
 }

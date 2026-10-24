@@ -132,4 +132,54 @@ class PeriodUtilsTest {
         val status = todayStatusLabel(cal, slots, now, periodTable)
         assertEquals(ALL_DAY_DONE_TEXT, status)
     }
+
+    /**
+     * 考试与课在**同一条时间线上**，所以组头必须一起看。
+     *
+     * 只盯着课说「下节课还有 3 小时开始」，而考试两小时后就要考 —— 那是假话。
+     */
+    @Test
+    fun `考试比课更早开始时组头说的是考试`() {
+        val cal = makeCalendar()
+        val slots = listOf(
+            CourseSlotEntity(id = 1, courseId = 100, dayOfWeek = 4, startPeriod = 3, endPeriod = 4) // 10:00 - 11:35
+        )
+        val now = timeAt(cal, 8, 0)
+        // 考试 09:00 - 10:00，比 10:00 的课更早
+        val examWindow = timeAt(cal, 9, 0) to timeAt(cal, 10, 0)
+        val status = todayStatusLabel(cal, slots, now, periodTable, examWindows = listOf(examWindow))
+        assertEquals("考试还有 1 小时 开始", status)
+    }
+
+    /** 考试正在进行时，组头不能说「下课」—— 考试不是课。 */
+    @Test
+    fun `考试进行中组头说考试还有多久结束`() {
+        val cal = makeCalendar()
+        val now = timeAt(cal, 9, 30)
+        val examWindow = timeAt(cal, 9, 0) to timeAt(cal, 10, 30)
+        val status = todayStatusLabel(cal, emptyList(), now, periodTable, examWindows = listOf(examWindow))
+        assertEquals("考试还有 1 小时 结束", status)
+    }
+
+    /** 今天只有考试、课都上完了：不能说「休息一下吧~」。 */
+    @Test
+    fun `今天只有考试时不说课都上完啦`() {
+        val cal = makeCalendar()
+        val now = timeAt(cal, 12, 0)
+        val status = todayStatusLabel(cal, emptyList(), now, periodTable, examCountToday = 1)
+        assertEquals("今天有 1 场考试", status)
+    }
+
+    /** 大字号下的短句：考试也走紧凑写法。 */
+    @Test
+    fun `考试开始前的大字号短句`() {
+        val cal = makeCalendar()
+        val now = timeAt(cal, 8, 0)
+        val examWindow = timeAt(cal, 9, 0) to timeAt(cal, 10, 0)
+        val status = todayStatusLabel(
+            cal, emptyList(), now, periodTable, compact = true,
+            examWindows = listOf(examWindow)
+        )
+        assertEquals("距考试 1 小时", status)
+    }
 }

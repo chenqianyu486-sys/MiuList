@@ -421,3 +421,59 @@ val MIGRATION_10_11 = object : Migration(10, 11) {
         db.execSQL("ALTER TABLE courses ADD COLUMN note TEXT NOT NULL DEFAULT ''")
     }
 }
+
+/**
+ * v11 → v12。
+ *
+ * 新增一张 `exams` 表：**考试数据独立于课程数据**。
+ *
+ * ## 为什么是**新表**而不是给 `courses` 加列
+ *
+ * 考试来自另一个接口（教务网「个人考试查询」），粒度也不同：
+ * 一门课一个学期可能只有一场期末考，期中考干脆没有；
+ * 而考试里的教室与座位是**考试当天**才定的，和这门课平常上课的教室没有必然关系。
+ *
+ * 塞进 `courses` / `course_slots` 会带来两个坏处：
+ * 删课会连带删掉考试（考试是学校已经公布的事实，不该随用户的课程增删而消失），
+ * 而导入课表时又必然要把考试整个重建一遍（课表是 REPLACE 语义）。
+ *
+ * ## 关联靠**冗余字段**而不是外键
+ *
+ * `courseCode` / `courseName` 是冗余存的一份，用来在读时把考试挂回课程。
+ * 没有外键，于是删课程不会碰到这张表 —— 而这正是要的行为。
+ *
+ * ## `credit` 是 REAL
+ *
+ * 学分带小数（1.5 / 2.0），整数列存不下。
+ */
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `exams` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `xkkh` TEXT NOT NULL,
+                `courseCode` TEXT NOT NULL,
+                `courseName` TEXT NOT NULL,
+                `kind` TEXT NOT NULL,
+                `startAt` INTEGER NOT NULL,
+                `endAt` INTEGER NOT NULL,
+                `startMinute` INTEGER NOT NULL,
+                `endMinute` INTEGER NOT NULL,
+                `dateLabel` TEXT NOT NULL,
+                `classroom` TEXT NOT NULL,
+                `seat` TEXT NOT NULL,
+                `credit` REAL NOT NULL,
+                `termLabel` TEXT NOT NULL,
+                `updatedAt` INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_exams_courseCode` ON `exams` (`courseCode`)"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_exams_startAt` ON `exams` (`startAt`)"
+        )
+    }
+}

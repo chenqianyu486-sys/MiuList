@@ -49,6 +49,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -62,6 +64,8 @@ import com.example.data.local.CourseSlotEntity
 import com.example.data.local.CourseWithSlots
 import com.example.data.local.TaskEntity
 import com.example.data.model.CustomTaskType
+import com.example.data.model.ExamEntry
+import com.example.data.model.ExamKind
 import com.example.data.model.TaskStar
 import com.example.data.model.TaskTypes
 import com.example.data.timetable.PeriodTable
@@ -83,12 +87,56 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.TextTertiary
 import com.example.ui.theme.accentOnCourse
+import com.example.ui.theme.accentBarColor
 import com.example.ui.theme.deepEnoughForWhite
 import com.example.ui.theme.isGreenishColor
 import com.example.ui.theme.isLightColor
 import com.example.ui.theme.glassSurface
 import com.example.ui.theme.pushAwayFrom
 import com.example.ui.theme.readableOn
+
+/**
+ * 课程色卡面的那层「晕开 + 高光」。
+ *
+ * ## 这层为什么必须留着
+ *
+ * 纯色块看上去像一张贴纸：颜色从边缘一刀切下去。而真实的东西（比如一张卡片）
+ * 靠近边缘时会透出底下的颜色 —— 这层横向渐变做的就是这件事：
+ * 左边压一点课程色，往右淡出，于是卡片像是**泡在**这张底色里，而不是**贴在**上面。
+ * 上面那层竖向的白色高光则给它一个受光面。
+ *
+ * 早先这两道渐变被当成「装饰」删过一次，删完所有卡片都变得像色块矩阵，
+ * 层次感全靠描边撑着 —— 而描边在浅色和花纹壁纸上都不成立。
+ *
+ * ## 为什么从 `DashboardScreen` 挪到这里
+ *
+ * 考试卡也要用同一套卡面语言（同一个 App 里的卡片长得不一样，比颜色不一致更刺眼）。
+ * 原来它是 Dashboard 里的 private 函数，课表页那边拿不到。
+ *
+ * @param washAlpha 横向晕开的强度
+ * @param sheenAlpha 顶部高光的强度
+ */
+fun Modifier.courseCardWash(
+    courseColor: Color,
+    shape: RoundedCornerShape,
+    washAlpha: Float = 0.10f,
+    sheenAlpha: Float = 0.11f
+): Modifier = this
+    .clip(shape)
+    .drawBehind {
+        drawRect(
+            brush = Brush.horizontalGradient(
+                0f to accentBarColor(courseColor).copy(alpha = washAlpha),
+                0.62f to Color.Transparent
+            )
+        )
+        drawRect(
+            brush = Brush.verticalGradient(
+                0f to Color.White.copy(alpha = sheenAlpha),
+                0.5f to Color.Transparent
+            )
+        )
+    }
 
 /**
  * Adjust color saturation using Android HSV conversion.
@@ -164,6 +212,120 @@ fun TaskDotsBadge(
                 fontWeight = FontWeight.Bold,
                 color = dotColor
             )
+        }
+    }
+}
+
+/**
+ * 周课表栅格里的**考试**格。
+ *
+ * ## 为什么考试也占格子
+ *
+ * 考试有具体时刻（09:00–11:00），而周课表是**按节次排的时间轴** ——
+ * 把考试放进对应的那几行，它才和课落在同一条时间线上：
+ * 「周三下午有考试」这件事，在这一格里一眼能看见。
+ *
+ * 列表页只看接下来三天（见 `buildDayGroups`），更远的考试得靠这里看 ——
+ * 翻到考试那一周就摆在对应节次上。
+ *
+ * ## 它和课程格怎么区分
+ *
+ * - **底色是深档**：课程格里深档表示「有未完成待办」，
+ *   而考试本身就是一件必须到场的事 —— 深档在这里是恰当的强调，不是挪用。
+ * - **底部徽标写「期末 / 期中」**：课程格那一行写的是「N 待办」，
+ *   位置一样、语义不同，一眼能分。
+ * - **跨行**：考试一般横跨两三节，块更高，本身就是视觉信号。
+ */
+@Composable
+fun ExamTimetableCell(
+    entry: ExamEntry,
+    periodStart: Int,
+    periodEnd: Int,
+    onClick: () -> Unit,
+    conflicted: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val baseColor = parseColor(entry.courseColorHex)
+    val deepColor = deepEnoughForWhite(baseColor)
+    val cellShape = RoundedCornerShape(if (conflicted) 6.dp else 9.dp)
+    val span = (periodEnd - periodStart + 1).coerceAtLeast(1)
+
+    Card(
+        modifier = modifier
+            .fillMaxSize()
+            .clip(cellShape)
+            .clickable { onClick() }
+            .testTag("exam_cell_${entry.id}"),
+        shape = cellShape,
+        colors = CardDefaults.cardColors(containerColor = deepColor),
+        elevation = CardDefaults.cardElevation(0.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(
+                    start = if (conflicted) 2.dp else 4.dp,
+                    end = if (conflicted) 2.dp else 4.dp,
+                    top = if (conflicted) 8.dp else 3.dp,
+                    bottom = 3.dp
+                ),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column {
+                Text(
+                    text = entry.courseName,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        lineHeight = if (conflicted) 10.5.sp else 12.5.sp
+                    ),
+                    color = CourseCellOnPending,
+                    maxLines = when {
+                        conflicted -> 4
+                        span >= 2 -> 3
+                        else -> 1
+                    },
+                    overflow = TextOverflow.Ellipsis,
+                    fontSize = if (conflicted) 9.sp else 10.5.sp
+                )
+                // 跨节的考试把时刻写出来：它横跨的节次比课程多，
+                // 只看行高说不出「到底是 09:00 还是 14:00 开考」。
+                //
+                // **只写开始时刻**：一格净宽约 55dp，「09:00-11:00」在 8.5sp 下放不下
+                // （实测被截成「09:00-…」，半截时间比没有更让人困惑）。
+                // 结束时刻点开编辑弹层就能看到。
+                if (span >= 2 && entry.startMinute > 0) {
+                    Text(
+                        text = formatMinuteOfDay(entry.startMinute),
+                        color = CourseCellOnPending.copy(alpha = 0.8f),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = if (conflicted) 7.5.sp else 8.5.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            // 底部徽标：期末 / 期中。
+            // 样式沿用课程格那枚（磨砂白玻璃底 + 墨黑字）——
+            // 同一张表里的徽标必须长得一样，否则读者要重新学一遍。
+            Box(
+                modifier = Modifier
+                    .glassSurface(
+                        shape = RoundedCornerShape(5.dp),
+                        tint = Color.White,
+                        tintAlpha = 0.82f,
+                        blurRadius = 0.dp
+                    )
+                    .padding(horizontal = 3.5.dp, vertical = 1.dp)
+            ) {
+                Text(
+                    text = entry.kind.label,
+                    color = TextPrimary,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    fontSize = 7.5.sp,
+                    maxLines = 1
+                )
+            }
         }
     }
 }

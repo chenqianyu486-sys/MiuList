@@ -100,6 +100,7 @@ import com.example.ui.components.FloatingIslandNav
 import com.example.ui.components.islandBottomInset
 import com.example.ui.components.MoreDrawer
 import com.example.ui.components.DeleteTaskTypeConfirmDialog
+import com.example.ui.components.ExamEditDialog
 import com.example.ui.components.NewTaskTypeDialog
 import com.example.ui.components.OnboardingGuide
 import com.example.ui.components.QuickGenerateDialog
@@ -674,15 +675,14 @@ fun MainApp(viewModel: MainViewModel) {
                             NavigationTab.DASHBOARD -> {
                                 DashboardScreen(
                                     state = state,
-                                    onGenerateTodayTasks = { viewModel.generateTasksDirectlyForWeek() },
-                                    onPreviewGenerateTasks = { viewModel.openQuickGenerateWeekDialog() },
                                     onToggleTaskComplete = { viewModel.toggleTaskComplete(it) },
                                     onToggleTaskStar = { viewModel.toggleTaskStar(it) },
                                     onInspectTask = { viewModel.inspectTask(it) },
                                     onInspectCourse = { viewModel.inspectCourse(it) },
                                     onOpenWeekPicker = { viewModel.openWeekPicker() },
                                     onRefreshCoursesTodo = { viewModel.refreshCoursesTodos(silent = false) },
-                                    onOpenQuickLoginDialog = { viewModel.setQuickZjuLoginDialogOpen(true) }
+                                    onOpenQuickLoginDialog = { viewModel.setQuickZjuLoginDialogOpen(true) },
+                                    onEditExam = { viewModel.openExamEditor(it) }
                                 )
                             }
 
@@ -692,7 +692,8 @@ fun MainApp(viewModel: MainViewModel) {
                                     onSelectViewMode = { viewModel.setScheduleViewMode(it) },
                                     onSelectWeek = { viewModel.selectWeek(it) },
                                     onOpenWeekPicker = { viewModel.openWeekPicker() },
-                                    onInspectCourse = { viewModel.inspectCourse(it) }
+                                    onInspectCourse = { viewModel.inspectCourse(it) },
+                                    onEditExam = { viewModel.openExamEditor(it) }
                                 )
                             }
 
@@ -979,6 +980,17 @@ fun MainApp(viewModel: MainViewModel) {
                 totalWeeks = state.totalWeeks,
                 onDismiss = { viewModel.closeCourseDialog() },
                 onSave = { course, slots -> viewModel.saveCourseWithSlots(course, slots) }
+            )
+        }
+
+        // 考试编辑弹层：本地可改考场 / 座位 / 时刻，但教务网同步会整表覆盖回来。
+        state.editingExam?.let { exam ->
+            ExamEditDialog(
+                entry = exam,
+                onDismiss = { viewModel.closeExamEditor() },
+                onSave = { classroom, seat, startMinute, endMinute ->
+                    viewModel.saveExamEdit(exam, classroom, seat, startMinute, endMinute)
+                }
             )
         }
 

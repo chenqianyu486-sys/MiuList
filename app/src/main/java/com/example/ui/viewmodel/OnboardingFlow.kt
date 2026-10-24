@@ -25,7 +25,12 @@ internal fun MainUiState.isGuideTargetOpen(target: GuideTarget): Boolean = when 
     GuideTarget.ZJU_SYNC -> isCloudAccountDialogOpen
     GuideTarget.COURSE_CATEGORY -> isCourseCategoryDialogOpen
     GuideTarget.LINKAGE_RULES -> isCategoryRulesDialogOpen
+    GuideTarget.WEEK_TASK_GENERATION -> isQuickGenerateDialogOpen
     GuideTarget.WALLPAPER -> isWallpaperDialogOpen
+    // 这一项**没有弹层**：它是总览页那张主卡的背面。
+    // 「去看看」是直接把人送到总览页并替他把卡翻过去 —— 没有弹层开着，
+    // 也就没有「做完之后接回来」这回事，所以恒为 false。
+    GuideTarget.HERO_FLIP_CARD -> false
 }
 
 /**

@@ -24,6 +24,7 @@ import com.example.data.local.SemesterEntity
 import com.example.data.local.TaskEntity
 import com.example.data.model.CategoryRule
 import com.example.data.model.CustomTaskType
+import com.example.data.model.ExamEntry
 import com.example.data.model.SlotWithWeeks
 import com.example.data.model.TaskStar
 import com.example.data.model.TaskType
@@ -58,6 +59,7 @@ class MainViewModel(
     private val settingsRepo = container.settingsRepository
     private val calendarRepo = container.calendarRepository
     private val taskTypeRepo = container.taskTypeRepository
+    private val examRepo = container.examRepository
     private val zjuImportService = container.zjuImportService
     private val calendarUpdates = container.calendarUpdateService
     private val secureStorage = container.secureAccountStorage
@@ -150,12 +152,16 @@ private val ruleFlow = combine(
      * repoFlow 已经是 5 路 combine 的上限，再加第 6 路会退化成 vararg + `Any?`
      * 强转（和上面 ruleFlow 那段注释是同一条理由）。自定义类型又是新建/删除都要
      * 立刻反映到界面上的东西，用独立一路喂给 uiState 更直接。
+     *
+     * 考试同样单独一路：它是**独立于课表**的一份数据，
+     * 混进课表那条流会让「课表变了」和「考试变了」变成同一件事。
      */
     val uiState: StateFlow<MainUiState> = combine(
         _uiState,
         repoFlow,
-        taskTypeRepo.observeAll()
-    ) { currentUi, repo, customTaskTypes ->
+        taskTypeRepo.observeAll(),
+        examRepo.getExamEntries()
+    ) { currentUi, repo, customTaskTypes, exams ->
         val resolver = ScheduleResolver(repo.calendar.calendar)
         val today = EpochDays.today()
         val derivedWeek = resolver.currentWeek(today)
@@ -165,6 +171,7 @@ private val ruleFlow = combine(
             courseSlots = repo.slots,
             slotWeeks = repo.slotWeeks,
             tasks = repo.tasks,
+            exams = exams,
             customTaskTypes = customTaskTypes,
             categoryRules = repo.rules,
             taskRules = repo.taskRules,
@@ -520,6 +527,35 @@ private val ruleFlow = combine(
 
     fun inspectCourse(c: CourseWithSlots?) = _uiState.update { it.copy(inspectingCourse = c) }
 
+    // ---------------------------------------------------------------- 考试编辑
+
+    /** 打开考试编辑弹层。 */
+    fun openExamEditor(exam: ExamEntry) = _uiState.update { it.copy(editingExam = exam) }
+
+    fun closeExamEditor() = _uiState.update { it.copy(editingExam = null) }
+
+    /**
+     * 保存本地对考试的修改。
+     *
+     * **教务网同步会把它覆盖掉** —— 本地编辑是临时补丁
+     * （学校还没公布座位号时学生自己补一个），不是对学校数据的修改。
+     */
+    fun saveExamEdit(
+        exam: ExamEntry,
+        classroom: String,
+        seat: String,
+        startMinute: Int,
+        endMinute: Int
+    ) = viewModelScope.launch {
+        val ok = examRepo.updateLocal(exam, classroom, seat, startMinute, endMinute)
+        _uiState.update {
+            it.copy(
+                editingExam = null,
+                userMessage = if (ok) "考试已更新（下次教务网同步会被覆盖）" else "考试已不存在"
+            )
+        }
+    }
+
     fun saveCourseWithSlots(course: CourseEntity, slots: List<SlotWithWeeks>) = viewModelScope.launch {
         courseRepo.saveCourseWithSlots(course, slots)
         _uiState.update {
@@ -778,9 +814,23 @@ private val ruleFlow = combine(
         return false
     }
 
-    fun openQuickGenerateWeekDialog() = viewModelScope.launch {
-        if (!requireSemester()) return@launch
-        val week = resolveRealGenerationWeek() ?: return@launch
+    /**
+     * 打开「生成本周待办」的预览弹层。
+     *
+     * @return 弹层**真的开起来**了吗。false = 没配校历或今天不在学期内 ——
+     *   失败原因已经写进 [MainUiState.userMessage] 了。
+     *
+     * 为什么要单独返回这个布尔：引导的「去看看」要用它判断**还能不能把引导接回来**
+     * （见 `openOnboardingTarget`）。弹层开不出来时若照旧把引导收掉，
+     * 用户点了个按钮却什么都没发生，而他还欠着几页没看 —— 人就卡在这儿了。
+     *
+     * 以前这里还有个公开的 `openQuickGenerateWeekDialog()`，唯一的调用点是总览页
+     * 那个**从来没被调用过**的回调参数（入口早就上顶栏了）。预览弹层现在只由
+     * 引导第 4 步打开，所以只留这一个私有的。
+     */
+    private suspend fun openQuickGenerateWeekDialogNow(): Boolean {
+        if (!requireSemester()) return false
+        val week = resolveRealGenerationWeek() ?: return false
         val batch = buildCandidatesForWeek(week)
         _uiState.update {
             it.copy(
@@ -790,14 +840,22 @@ private val ruleFlow = combine(
                 isQuickGenerateDialogOpen = true
             )
         }
+        return true
     }
 
+    /**
+     * 关掉预览弹层。
+     *
+     * 末尾接一个 [resumeOnboardingIfTargetDone]：引导的「去看看」会开到**这个**弹层，
+     * 用户在弹层里挑完（或按取消）关掉它，就是「这一步做完了」的信号，
+     * 引导要自己接回来 —— 否则用户被扔在总览页，还欠着几页没看。
+     */
     fun closeQuickGenerateDialog() = _uiState.update {
         it.copy(
             isQuickGenerateDialogOpen = false,
             quickGenerateWeek = null,
             quickGeneratePreStudyLastWeek = null
-        )
+        ).resumeOnboardingIfTargetDone()
     }
 
     fun confirmGenerateTasks(selected: List<TaskEntity>) = viewModelScope.launch {
@@ -886,6 +944,17 @@ private val ruleFlow = combine(
 
     private var pendingPreview: PreviewResult.Ready? = null
 
+    /**
+     * 「从浙大取课表」这条路上顺手抓到的考试，要带进导入完成的那句话里。
+     *
+     * 为什么单独存：考试是**独立于课表**的数据，它在抓到的当场就落库了
+     * （不等课表导入被确认），所以到「导入完成」这一刻它已经不在任何待提交状态里了。
+     * 不把结果记下来，这句话里就没法提考试 —— 而用户看不到考试时会以为同步没生效。
+     *
+     * null = 这条路上没有抓过考试（文件导入）。
+     */
+    private var pendingExamSuffix: String? = null
+
     fun importFromUri(uri: Uri, contentResolver: ContentResolver) = viewModelScope.launch {
         val text = withContext(Dispatchers.IO) {
             runCatching {
@@ -905,6 +974,8 @@ private val ruleFlow = combine(
         _uiState.update { it.copy(isImporting = true) }
         val report = withContext(Dispatchers.IO) { container.importService.commit(pending) }
         pendingPreview = null
+        val examSuffix = pendingExamSuffix
+        pendingExamSuffix = null
         _uiState.update {
             it.copy(
                 isImporting = false,
@@ -917,7 +988,11 @@ private val ruleFlow = combine(
                         "；待办新增 ${report.taskMerge.added} 条、覆盖 ${report.taskMerge.overwritten} 条"
                     } else {
                         ""
-                    }
+                    } +
+                    // 考试是**另一份数据**，单独说一句 —— 混进课程那句里，
+                    // 用户看不到考试时会去检查课表，而真正的原因常常是
+                    // 「学校还没安排座位表」。
+                    (examSuffix ?: "")
             )
         }
     }
@@ -992,6 +1067,25 @@ private val ruleFlow = combine(
         }
 
         json.onSuccess { text ->
+            // 考试与课表**同一个账号、同一次登录**：zjuImportService 长期持有那个
+            // cas 客户端，刚才取课表时建立的 zdbk 会话还在，
+            // 所以这里不会再输一次密码。
+            //
+            // **当场就落库**，不等课表导入被确认：考试是独立的一份数据，
+            // 用户取消课表导入不该让已经抓到的考试消失。
+            //
+            // 拉不到考试**不影响课表**：教务网在还没到考试季时本来就回空。
+            val examOutcome = runCatching {
+                examRepo.replaceAll(zjuImportService.fetchExams(studentId, password))
+            }
+            pendingExamSuffix = when {
+                examOutcome.isFailure ->
+                    "；考试没拉到（${examOutcome.exceptionOrNull()?.message ?: "未知原因"}）"
+                examOutcome.getOrDefault(0) > 0 ->
+                    "；同步到 ${examOutcome.getOrDefault(0)} 场考试"
+                else -> ""
+            }
+
             if (remember) {
                 secureStorage.saveCredentials(studentId, password, remember = true)
             } else {
@@ -1058,7 +1152,8 @@ private val ruleFlow = combine(
             when (result) {
                 is SyncResult.Success -> state.withSyncSuccess(
                     userMessage = "云端同步完成：${result.courseCount} 门课程已更新到本地缓存" +
-                        result.report.unlinkedTasksSuffix(),
+                        result.report.unlinkedTasksSuffix() +
+                        result.examSuffix(),
                     closeDialog = true
                 )
                 is SyncResult.Failed -> state.withSyncFailure(result.failure)
@@ -1083,7 +1178,8 @@ private val ruleFlow = combine(
             when (result) {
                 is SyncResult.Success -> state.withSyncSuccess(
                     userMessage = "云端同步完成：已更新本地缓存（${result.courseCount} 门课程）" +
-                        result.report.unlinkedTasksSuffix()
+                        result.report.unlinkedTasksSuffix() +
+                        result.examSuffix()
                 )
                 // 失败一律回到弹层里那张卡。早先这里只写了 userMessage，
                 // 于是「在弹层里点立即同步 → 失败」这条最常见的路径上，
@@ -1562,18 +1658,84 @@ private val ruleFlow = combine(
      * 要课程就取 `uiState.value`。
      */
     fun openOnboardingTarget(target: GuideTarget) {
-        _uiState.update { state ->
-            val opened = when (target) {
-                GuideTarget.ZJU_SYNC -> state.withCloudAccountOpen()
-                GuideTarget.COURSE_CATEGORY -> state.withCourseCategoryOpen()
-                GuideTarget.LINKAGE_RULES -> state.withCategoryRulesOpen()
-                GuideTarget.WALLPAPER -> state.withWallpaperOpen()
+        when (target) {
+            // ----------------------------------------------------------------
+            // 最后一步：学在浙大那一面。
+            //
+            // 它**没有弹层**：它是总览页最上面那张主卡的背面。
+            // 所以这里没有「暂停 → 接回」那套：直接把这一趟引导收尾，
+            // 把人送到总览页并替他把卡翻过去 —— 引导的活儿到这儿就干完了。
+            //
+            // 收尾时顺手记下「看过」：这一趟确实走完了（走完的那一步就是它）。
+            // ----------------------------------------------------------------
+            GuideTarget.HERO_FLIP_CARD -> {
+                onboardingRepo.hasSeenOnboarding = true
+                onboardingRepo.currentStep = 0
+                _uiState.update {
+                    it.copy(
+                        isOnboardingGuideOpen = false,
+                        // 没有弹层可等，就**不记**在等谁：
+                        // 记上了的话，别的弹层一关就会把引导从总览页拽回来。
+                        onboardingAwaitingTarget = null,
+                        onboardingResumed = false,
+                        currentTab = NavigationTab.DASHBOARD,
+                        heroFlipRequest = it.heroFlipRequest + 1,
+                        userMessage = "这是学在浙大待交的作业，点这张卡可以翻回天气"
+                    )
+                }
+                return
             }
-            opened.copy(
-                isOnboardingGuideOpen = false,
-                onboardingAwaitingTarget = target,
-                onboardingResumed = false
-            )
+            // ----------------------------------------------------------------
+            // 「一键生成本周待办」：落点是**预览弹层**，而它是**异步**造的
+            // （要读校历、课程与规则），不能像别的目标那样一次更新里开完。
+            //
+            // 做法：先把引导收起来，再去开弹层。两件事分开做的原因见上面
+            // 「为什么一次更新里做完两件事」—— 但这里不是「同一瞬间两层遮罩」，
+            // 而是「弹层开不起来」：那种情况下必须把引导**放回来**，
+            // 否则用户点了个按钮、界面上一件事都没发生，人还欠着几页没看。
+            //
+            // 「在等谁」要等弹层**真的开起来**才记：记早了的话，
+            // 在那几十毫秒里关掉别的弹层会把引导提前拽回来。
+            // ----------------------------------------------------------------
+            GuideTarget.WEEK_TASK_GENERATION -> {
+                _uiState.update {
+                    it.copy(
+                        isOnboardingGuideOpen = false,
+                        onboardingAwaitingTarget = null,
+                        onboardingResumed = false
+                    )
+                }
+                viewModelScope.launch {
+                    if (openQuickGenerateWeekDialogNow()) {
+                        _uiState.update {
+                            it.copy(onboardingAwaitingTarget = GuideTarget.WEEK_TASK_GENERATION)
+                        }
+                    } else {
+                        // 开不出来（没配校历 / 今天不在学期内）：原因已经写在
+                        // userMessage 里了，这里把引导放回原处。
+                        _uiState.update { it.copy(isOnboardingGuideOpen = true) }
+                    }
+                }
+                return
+            }
+            else -> {
+                _uiState.update { state ->
+                    val opened = when (target) {
+                        GuideTarget.ZJU_SYNC -> state.withCloudAccountOpen()
+                        GuideTarget.COURSE_CATEGORY -> state.withCourseCategoryOpen()
+                        GuideTarget.LINKAGE_RULES -> state.withCategoryRulesOpen()
+                        GuideTarget.WALLPAPER -> state.withWallpaperOpen()
+                        // 上面两个已经各自 return 了，走不到这里。
+                        GuideTarget.WEEK_TASK_GENERATION -> state
+                        GuideTarget.HERO_FLIP_CARD -> state
+                    }
+                    opened.copy(
+                        isOnboardingGuideOpen = false,
+                        onboardingAwaitingTarget = target,
+                        onboardingResumed = false
+                    )
+                }
+            }
         }
     }
 
@@ -1666,3 +1828,24 @@ class MainViewModelFactory(
  */
 private fun ImportReport.unlinkedTasksSuffix(): String =
     if (tasksUnlinked > 0) "；$tasksUnlinked 条待办已移入「未关联课程」" else ""
+
+/**
+ * 同步成功后追加的一句：这次同步到了几场考试。
+ *
+ * ## 为什么要单独说一句，而不是混进「N 门课程已更新」
+ *
+ * 考试是**独立于课表**的一份数据（另一个接口、另一张表）。
+ * 混进课程那一句里，用户会以为「课程 = 课表 + 考试」，
+ * 于是看不到考试时去检查课表 —— 而真正的原因往往是「学校还没安排座位表」。
+ *
+ * ## 两种「0」要分清
+ *
+ * - 没拉到考试（[SyncResult.Success.examError] 非空）：**如实说没拉到**，
+ *   别让用户以为是「一场考试都没有」；
+ * - 拉到了但确实是 0 场：学校还没到考试季，这是正常状态，不提。
+ */
+private fun SyncResult.Success.examSuffix(): String = when {
+    examCount > 0 -> "；同步到 $examCount 场考试"
+    examError != null -> "；考试没拉到（$examError）"
+    else -> ""
+}

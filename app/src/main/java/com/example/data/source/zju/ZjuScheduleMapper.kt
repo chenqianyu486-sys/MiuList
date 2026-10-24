@@ -359,16 +359,11 @@ object ZjuScheduleMapper {
      * **不要用上游那个 `xkkh[:22]`**：那个下标是按 `(2026-2027-1)` 正好 13 个字符
      * 算的，学年或学期的书写方式一变（比如将来写成 `(2026-2027-01)`）就会切错位置，
      * 而且切出来的东西不认得。这里按分隔符解析，形状变了会退回整串而不是错位。
+     *
+     * 抽取规则本身在 [ZjuCourseCode] 里 —— **考试那边也要用同一套**，
+     * 否则同一门课的考试与课程认不出是同一门。
      */
-    private fun ZjuClassRow.courseCodeOf(): String? {
-        val raw = xkkh?.trim().orEmpty()
-        if (raw.isEmpty()) return null
-        // `^(学年学期)-(课程代码)-` —— 课程代码本身不含连字符。
-        val m = COURSE_CODE_REGEX.find(raw) ?: return raw
-        return "${m.groupValues[1]}-${m.groupValues[2]}"
-    }
-
-    private val COURSE_CODE_REGEX = Regex("""^(\([^)]*\))-([^-]+)-.+""")
+    private fun ZjuClassRow.courseCodeOf(): String? = ZjuCourseCode.of(xkkh)
 
     /**
      * 把 `kcb` 切成四段。

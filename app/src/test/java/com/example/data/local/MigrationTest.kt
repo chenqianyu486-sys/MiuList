@@ -120,7 +120,7 @@ class MigrationTest {
         Room.databaseBuilder(context, AppDatabase::class.java, dbName)
             .addMigrations(
                 MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
-                MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11
+                MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
             )
             .build()
 
@@ -943,6 +943,93 @@ class MigrationTest {
             // 清空也要真的清空：备注不能变成「删不掉」的东西
             dao.updateCourse(course.copy(note = ""))
             assertEquals("", dao.getAllCoursesOnce().first { it.id == course.id }.note)
+        } finally {
+            db.close()
+        }
+    }
+
+    /**
+     * 造一个**真的处在 v11** 的库，用来单独验 v11 → v12（考试那张新表）。
+     *
+     * 一路迁到 10，再用声明版本 11 的 OpenHelper 跑 MIGRATION_10_11。
+     */
+    private fun createVersion11Database() {
+        createVersion10Database()
+
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(dbName)
+                .callback(object : SupportSQLiteOpenHelper.Callback(11) {
+                    override fun onCreate(db: SupportSQLiteDatabase) = Unit
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {
+                        MIGRATION_10_11.migrate(db)
+                    }
+                })
+                .build()
+        )
+        helper.close()
+    }
+
+    // ---------------------------------------------------------------- v11 → v12
+
+    /**
+     * 考试表是**新增**的，升级用户不该凭空多出几场考试。
+     *
+     * 更要紧的是**老课程一个字节都不能变**：
+     * 考试数据独立于课程，迁移不该借机改课程表。
+     */
+    @Test
+    fun `v11 to v12 starts the exam table empty and leaves the courses untouched`() = runBlocking {
+        createVersion11Database()
+        val db = openWithMigrations()
+        try {
+            assertEquals("升级用户不该凭空多出考试", 0, db.examDao().countExams())
+
+            val courses = db.courseDao().getAllCoursesOnce()
+            assertTrue("老课程一条都不能少", courses.isNotEmpty())
+            val math = courses.first { it.name == "高等数学" }
+            assertEquals("MATH101", math.code)
+            assertEquals("王教授", math.teacher)
+            assertEquals("", math.note)
+        } finally {
+            db.close()
+        }
+    }
+
+    /** 考试表要能真的写进去、读出来（列名与类型对不上时 Room 会在写入时报错）。 */
+    @Test
+    fun `the exam table survives a round-trip through the database`() = runBlocking {
+        createVersion11Database()
+        val db = openWithMigrations()
+        try {
+            db.examDao().insertExams(
+                listOf(
+                    ExamEntity(
+                        xkkh = "(2026-2027-1)-MATH2432F-0083261-1",
+                        courseCode = "(2026-2027-1)-MATH2432F",
+                        courseName = "高等数学(甲)II",
+                        kind = ExamEntity.KIND_FINAL,
+                        startAt = 1_800_000_000_000L,
+                        endAt = 1_800_003_600_000L,
+                        startMinute = 9 * 60,
+                        endMinute = 11 * 60,
+                        dateLabel = "",
+                        classroom = "紫金港东2-201",
+                        seat = "12-3-15",
+                        credit = 5.0,
+                        termLabel = "2026-2027 秋冬",
+                        updatedAt = 1_800_000_000_000L
+                    )
+                )
+            )
+
+            val rows = db.examDao().getAllExamsOnce()
+            assertEquals(1, rows.size)
+            val exam = rows.single()
+            assertEquals("高等数学(甲)II", exam.courseName)
+            assertEquals("紫金港东2-201", exam.classroom)
+            assertEquals("12-3-15", exam.seat)
+            assertEquals(5.0, exam.credit, 0.001)
         } finally {
             db.close()
         }

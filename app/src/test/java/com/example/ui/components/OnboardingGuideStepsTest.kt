@@ -7,26 +7,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 引导的四步与四个目标必须一一对应。
+ * 引导的六步与六个目标必须一一对应。
  *
  * ViewModel 用 [GuideTarget] 的枚举个数判断「是不是最后一步」，
  * 界面用 [GuideSteps] 决定显示什么。两边一旦对不上，
  * 表现是「最后一步按了没反应」或者「某一步跳过去了一页」——
  * 都不是编译期能发现的错，所以在这里钉住。
  *
- * ## 为什么这里只钉「标题 + 按钮」
+ * ## 为什么这里还要钉「谁有说明」
  *
- * 引导的每一步现在**只有标题和按钮上那句话**，没有说明文字。
- * 于是原来那三条守说明文字的断言也跟着没了：
+ * 引导的说明文字有一条规矩：**只有看不见的功能才写**。
  *
- * - 「第 2 步列出的类别要和 App 里真正的类别一致」——说明里那份类别清单已经删了，
- *   真正的清单在课程分类弹层里，那儿是唯一出处，不该在引导里存第二份。
- * - 「第 4 步说的预设张数要和真的预设数一致」——同理，「八张」这个数字跟着说明一起删了。
- * - 「第 1 步不许承诺把学在浙大的作业并进待办清单」——没有说明文字就没有可断言的承诺；
- *   这条事实（学在浙大的待办只以只读清单出现在总览页，不写进待办清单，
- *   登录课表那一步也不拉它）记在 [GuideSteps] 的代码注释里。
+ * 原来的四步全都没有说明 —— 标题已经说完了那一步要做什么，
+ * 再加一段解释只是把**那个功能自己页面上的话**抄一份，而抄本会先过期
+ * （「八张预设」「五个类别」这类数字，别的页面改了就轮到引导说错）。
  *
- * 真要再写说明文字，这三条断言得跟着一起加回来。
+ * 现在有**两步带说明**：「一键生成本周待办」（入口是顶栏一颗没有文字标签的图标）
+ * 与「学在浙大翻面」（那一面藏在主卡背面）。这两个是 App 里**唯二看不见**的功能，
+ * 功能自己那一页上也没有一句话在介绍它们 —— 引导是唯一能说清的地方。
+ *
+ * 所以这条断言的作用是：**别顺手给别的步骤也加一段说明**。
+ * 真要加，先想清楚「这句话在功能自己那一页上是不是已经有了」。
  */
 class OnboardingGuideStepsTest {
 
@@ -66,5 +67,64 @@ class OnboardingGuideStepsTest {
             "第 2 步的按钮不该是「去添加课程」",
             step.actionLabel.contains("添加课程")
         )
+    }
+
+    @Test
+    fun `只有那两个看不见的功能带说明`() {
+        val withDescription = GuideSteps.filter { it.description != null }.map { it.target }.toSet()
+
+        assertEquals(
+            "只有「一键生成本周待办」和「学在浙大翻面」该带说明：它们是 App 里唯二看不见的功能。" +
+                "给别的步骤加说明，等于把那个功能自己页面上的话抄一份，抄本会先过期。",
+            setOf(GuideTarget.WEEK_TASK_GENERATION, GuideTarget.HERO_FLIP_CARD),
+            withDescription
+        )
+    }
+
+    @Test
+    fun `带说明的那两步都要有内容`() {
+        GuideSteps.forEach { step ->
+            step.description?.let { desc ->
+                assertTrue("${step.target} 的说明不能是空白", desc.isNotBlank())
+            }
+        }
+    }
+
+    @Test
+    fun `生成那一步说的三样要跟引擎真会生成的对得上`() {
+        // 引擎生成的是三类：课后作业、实验报告、预习。
+        // 说明里少说一类，用户就会以为那一类不归它管；
+        // 多说一类，就是引导在承诺引擎不做的事。
+        val desc = GuideSteps.first { it.target == GuideTarget.WEEK_TASK_GENERATION }
+            .description.orEmpty()
+
+        assertTrue("说明里该说到课后作业", desc.contains("作业"))
+        assertTrue("说明里该说到实验报告", desc.contains("实验报告"))
+        assertTrue("说明里该说到预习", desc.contains("预习"))
+    }
+
+    @Test
+    fun `生成那一步不许把学在浙大的作业说成会进待办清单`() {
+        // 这条事实是真的：学在浙大的待办只以**只读清单**出现在总览页，
+        // 从来不写进待办清单；登录课表那一步也不拉它。
+        // 引导里一旦写成「学在浙大的作业也会并进待办清单」，就是在骗人。
+        val desc = GuideSteps.first { it.target == GuideTarget.WEEK_TASK_GENERATION }
+            .description.orEmpty()
+
+        assertFalse(
+            "生成这一步的说明不该提学在浙大：它的待办从来不写进待办清单",
+            desc.contains("学在浙大")
+        )
+    }
+
+    @Test
+    fun `翻面那一步要说到背面是学在浙大`() {
+        // 这一步的全部意义就是「那一面藏着」：说明里得说清翻过去是什么，
+        // 否则用户点开引导还是不知道那张卡能翻。
+        val desc = GuideSteps.first { it.target == GuideTarget.HERO_FLIP_CARD }
+            .description.orEmpty()
+
+        assertTrue("说明里该说到学在浙大", desc.contains("学在浙大"))
+        assertTrue("说明里该说到翻面", desc.contains("翻"))
     }
 }

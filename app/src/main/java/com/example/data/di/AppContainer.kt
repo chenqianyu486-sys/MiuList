@@ -9,6 +9,7 @@ import com.example.data.model.CategoryRule
 import com.example.data.model.CourseCategory
 import com.example.data.repository.AcademicCalendarRepository
 import com.example.data.repository.CourseRepository
+import com.example.data.repository.ExamRepository
 import com.example.data.repository.OnboardingRepository
 import com.example.data.repository.ScheduleSettingsRepository
 import com.example.data.repository.TaskRepository
@@ -55,6 +56,22 @@ class AppContainer(context: Context) {
     }
 
     val taskRepository: TaskRepository by lazy { TaskRepository(database.taskDao()) }
+
+    /**
+     * 考试。**独立于课程**：它有自己的表、自己的同步路径，
+     * 不参与课表那条「编码 → 校验 → 预览 → 提交」的管线。
+     *
+     * 与课程的关系在**读时**解析（见 `ExamRepository.getExamEntries`），
+     * 所以这里同时拿着 `courseDao` —— 删课不会牵连考试，
+     * 而考试仍然能认出自己属于哪门课。
+     */
+    val examRepository: ExamRepository by lazy {
+        ExamRepository(
+            db = database,
+            examDao = database.examDao(),
+            courseDao = database.courseDao()
+        )
+    }
 
     val taskTypeRepository: TaskTypeRepository by lazy {
         TaskTypeRepository(database, database.customTaskTypeDao())
@@ -189,7 +206,8 @@ class AppContainer(context: Context) {
             importService = importService,
             courseRepo = courseRepository,
             calendarRepo = calendarRepository,
-            secureStorage = secureAccountStorage
+            secureStorage = secureAccountStorage,
+            examRepo = examRepository
         )
     }
 

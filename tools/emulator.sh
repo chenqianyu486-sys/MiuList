@@ -116,9 +116,17 @@ status_emulator() {
 
 case "${1:-status}" in
   start)
-    GPU="host"
-    if [ "${2:-}" != "--gpu host" ]; then
-      GPU="swiftshader_indirect"
+    # `--gpu host` 与 "--gpu host" **两种写法都认**。
+    #
+    # 原来只认后者（拿 "$2" 整个字符串去比 "--gpu host"），于是 README 与
+    # 脚本注释里写的 `start --gpu host` 会**静默**退回 swiftshader ——
+    # "$2" 其实是 "--gpu"，不等于 "--gpu host"。
+    # 命令看起来执行成功、也打印了「已启动」，渲染模式却不是要的那个。
+    GPU="swiftshader_indirect"
+    if [ "${2:-}" = "--gpu host" ]; then
+      GPU="host"
+    elif [ "${2:-}" = "--gpu" ] && [ "${3:-}" = "host" ]; then
+      GPU="host"
     fi
     start_emulator "$GPU"
     ;;

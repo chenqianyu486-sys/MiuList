@@ -19,6 +19,7 @@ import com.example.data.model.SlotWithWeeks
 import com.example.data.security.SecureAccountStorage
 import com.example.data.source.zju.ZjuException
 import com.example.data.source.zju.ZjuFailureKind
+import com.example.data.source.zju.ZjuExamMapper
 import com.example.data.source.zju.ZjuImportService
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -83,7 +84,20 @@ class ScheduleSyncManagerTest {
         )
     }
 
-    private fun zjuReturning(json: String) = object : ZjuImportService() {
+    /**
+     * 假的浙大导入源。
+     *
+     * **考试必须在这里被掐掉**：默认实现会真的去登录浙大取考试，
+     * 而单测里既没有网也不该有网 —— 那会让「同步」这个测试去访问真实服务。
+     * 考试与课表是两份独立的数据，所以这里只掐考试那一条，课表照旧走桩。
+     */
+    private open class FakeZjuService : ZjuImportService() {
+        override suspend fun fetchExams(
+            studentId: String,
+            password: String
+        ): List<ZjuExamMapper.ExamRow> = emptyList()
+    }
+    private fun zjuReturning(json: String) = object : FakeZjuService() {
         override suspend fun fetchScheduleJson(
             studentId: String,
             password: String,
@@ -96,7 +110,8 @@ class ScheduleSyncManagerTest {
         importService = container.importService,
         courseRepo = container.courseRepository,
         calendarRepo = container.calendarRepository,
-        secureStorage = storage
+        secureStorage = storage,
+        examRepo = container.examRepository
     ).sync("3190101234", "pwd", ZjuImportService.TermOption("2026-2027", 0), rememberCredentials = false)
 
     private fun createSampleV2Json(): String {
@@ -144,7 +159,7 @@ class ScheduleSyncManagerTest {
 
         // 2. 构造支持桩数据的 ZjuImportService
         val sampleJson = createSampleV2Json()
-        val fakeZjuService = object : ZjuImportService() {
+        val fakeZjuService = object : FakeZjuService() {
             override suspend fun fetchScheduleJson(
                 studentId: String,
                 password: String,
@@ -157,7 +172,8 @@ class ScheduleSyncManagerTest {
             importService = container.importService,
             courseRepo = container.courseRepository,
             calendarRepo = container.calendarRepository,
-            secureStorage = storage
+            secureStorage = storage,
+            examRepo = container.examRepository
         )
 
         // 3. 执行云端同步
@@ -250,7 +266,7 @@ class ScheduleSyncManagerTest {
         assertEquals(1, coursesBefore.size)
 
         // 2. 模拟断网抛出 IOException
-        val offlineZjuService = object : ZjuImportService() {
+        val offlineZjuService = object : FakeZjuService() {
             override suspend fun fetchScheduleJson(
                 studentId: String,
                 password: String,
@@ -263,7 +279,8 @@ class ScheduleSyncManagerTest {
             importService = container.importService,
             courseRepo = container.courseRepository,
             calendarRepo = container.calendarRepository,
-            secureStorage = storage
+            secureStorage = storage,
+            examRepo = container.examRepository
         )
 
         val result = syncManager.sync(
@@ -294,7 +311,7 @@ class ScheduleSyncManagerTest {
         val sampleJson = createSampleV2Json()
         container.importService.commit(container.importService.preview(sampleJson, com.example.data.transfer.ImportStrategy.REPLACE) as com.example.data.transfer.PreviewResult.Ready)
 
-        val authFailZjuService = object : ZjuImportService() {
+        val authFailZjuService = object : FakeZjuService() {
             override suspend fun fetchScheduleJson(
                 studentId: String,
                 password: String,
@@ -307,7 +324,8 @@ class ScheduleSyncManagerTest {
             importService = container.importService,
             courseRepo = container.courseRepository,
             calendarRepo = container.calendarRepository,
-            secureStorage = storage
+            secureStorage = storage,
+            examRepo = container.examRepository
         )
 
         val result = syncManager.sync(
@@ -334,7 +352,7 @@ class ScheduleSyncManagerTest {
      */
     @Test
     fun `failure kind comes from the throw site not from the message text`() = runBlocking {
-        val service = object : ZjuImportService() {
+        val service = object : FakeZjuService() {
             override suspend fun fetchScheduleJson(
                 studentId: String,
                 password: String,
@@ -347,7 +365,8 @@ class ScheduleSyncManagerTest {
             importService = container.importService,
             courseRepo = container.courseRepository,
             calendarRepo = container.calendarRepository,
-            secureStorage = storage
+            secureStorage = storage,
+            examRepo = container.examRepository
         ).sync("3190101234", "pwd", ZjuImportService.TermOption("2026-2027", 0))
 
         val failure = (result as SyncResult.Failed).failure
@@ -364,7 +383,7 @@ class ScheduleSyncManagerTest {
     @Test
     fun `failure after commit reports local data as changed`() = runBlocking {
         val sampleJson = createSampleV2Json()
-        val okService = object : ZjuImportService() {
+        val okService = object : FakeZjuService() {
             override suspend fun fetchScheduleJson(
                 studentId: String,
                 password: String,
@@ -388,7 +407,8 @@ class ScheduleSyncManagerTest {
             importService = container.importService,
             courseRepo = container.courseRepository,
             calendarRepo = container.calendarRepository,
-            secureStorage = explodingStorage
+            secureStorage = explodingStorage,
+            examRepo = container.examRepository
         ).sync("3190101234", "pwd", ZjuImportService.TermOption("2026-2027", 0), rememberCredentials = true)
 
         val failure = (result as SyncResult.Failed).failure
@@ -423,7 +443,7 @@ class ScheduleSyncManagerTest {
         val sampleJson = createSampleV2Json()
 
         val failing = ScheduleSyncManager(
-            zjuImportService = object : ZjuImportService() {
+            zjuImportService = object : FakeZjuService() {
                 override suspend fun fetchScheduleJson(
                     studentId: String,
                     password: String,
@@ -433,13 +453,14 @@ class ScheduleSyncManagerTest {
             importService = container.importService,
             courseRepo = container.courseRepository,
             calendarRepo = container.calendarRepository,
-            secureStorage = storage
+            secureStorage = storage,
+            examRepo = container.examRepository
         )
         failing.sync("3190101234", "pwd", ZjuImportService.TermOption("2026-2027", 0))
         assertEquals(ZjuFailureKind.SERVER, storage.getLastSyncFailureKind())
 
         val succeeding = ScheduleSyncManager(
-            zjuImportService = object : ZjuImportService() {
+            zjuImportService = object : FakeZjuService() {
                 override suspend fun fetchScheduleJson(
                     studentId: String,
                     password: String,
@@ -449,7 +470,8 @@ class ScheduleSyncManagerTest {
             importService = container.importService,
             courseRepo = container.courseRepository,
             calendarRepo = container.calendarRepository,
-            secureStorage = storage
+            secureStorage = storage,
+            examRepo = container.examRepository
         )
         assertTrue(succeeding.sync("3190101234", "pwd", ZjuImportService.TermOption("2026-2027", 0))
             is SyncResult.Success)
@@ -461,7 +483,7 @@ class ScheduleSyncManagerTest {
     @Test
     fun `syncWithSavedCredentials succeeds when credentials exist`() = runBlocking {
         val sampleJson = createSampleV2Json()
-        val fakeZjuService = object : ZjuImportService() {
+        val fakeZjuService = object : FakeZjuService() {
             override suspend fun fetchScheduleJson(
                 studentId: String,
                 password: String,
@@ -474,7 +496,8 @@ class ScheduleSyncManagerTest {
             importService = container.importService,
             courseRepo = container.courseRepository,
             calendarRepo = container.calendarRepository,
-            secureStorage = storage
+            secureStorage = storage,
+            examRepo = container.examRepository
         )
 
         // 尚未保存凭据时报错
