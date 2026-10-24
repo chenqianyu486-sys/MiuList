@@ -78,6 +78,23 @@ private object ZjuTermLabels {
     fun of(term: Int): String = LABELS.getOrElse(term) { "未知学期" }
 }
 
+/**
+ * 待办编辑弹层要编辑什么。
+ *
+ * 「详情弹层」与「编辑弹窗」合成一层之后，打开弹层就等于进入编辑，
+ * 所以这个类型要同时表达两种入口：**新建**一条（[task] 为 null），
+ * 或者**编辑**已有的一条。
+ *
+ * 存 [task] 的**快照**而不是 id：弹层里那份草稿（标题、备注、分类…）
+ * 就是从这条待办读出来初始化的，用 id 反而要再查一次库、多一份可能对不上的副本。
+ */
+data class TaskEditorTarget(
+    /** 要编辑的待办；null = 新建。 */
+    val task: TaskEntity?,
+    /** 新建时预选的课程（从课程详情弹层「给这门课加待办」进来时带上）。 */
+    val preselectedCourseId: Long? = null
+)
+
 data class MainUiState(
     val currentTab: NavigationTab = NavigationTab.DASHBOARD,
     val currentWeek: Int = 6,
@@ -171,11 +188,13 @@ data class MainUiState(
     val scheduleViewMode: ScheduleViewMode = ScheduleViewMode.WEEK_GRID,
 
     // Dialog & Sheet states
-    val isAddTaskDialogOpen: Boolean = false,
-    val preselectedCourseIdForNewTask: Long? = null,
-    val editingTask: TaskEntity? = null,
-    /** 单条待办的详情弹层。编辑/删除入口都收在这里，卡片上不再挂图标。 */
-    val inspectingTask: TaskEntity? = null,
+    /**
+     * 待办编辑弹层：卡片上点一下待办进来的就是它，**弹层本身就是编辑面**。
+     *
+     * 原来是「详情弹层（只读）+ 编辑弹窗（表单）」两层，现在合成一层，
+     * 所以这里只有一个目标：编辑哪一条（或者新建一条）。
+     */
+    val taskEditor: TaskEditorTarget? = null,
     /** 「新建待办类型」弹层。清单页的类型 chip 行和编辑待办弹层都能打开它。 */
     val isNewTaskTypeDialogOpen: Boolean = false,
     /** 删除自定义类型前的二次确认对象；null = 没在确认。 */

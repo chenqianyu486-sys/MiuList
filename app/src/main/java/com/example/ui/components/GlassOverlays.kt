@@ -19,18 +19,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
-import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
@@ -631,8 +629,16 @@ fun GlassBottomSheetHost(
                 // 导航栏 inset 管不到那儿，弹层的内容会压在挖孔下面。
                 // 改用完整安全区：底部仍是导航栏，左右补上挖孔。
                 .windowInsetsPadding(
-                    WindowInsets.navigationBars
-                        .union(WindowInsets.displayCutout)
+                    // 用 safeDrawing 而不是只取导航栏：它 = 系统栏 ∪ 刘海/挖孔 ∪ **键盘**。
+                    //
+                    // 底部弹层现在**带输入框**（待办编辑弹层），键盘弹起时必须把内容
+                    // 抬到键盘上方 —— edge-to-edge 下窗口不会自己 resize，
+                    // 键盘是以 inset 形式给出的，不接这一项，内容就正好压在键盘底下，
+                    // 而这时候用户正要往标题里打字。
+                    //
+                    // 底边取的是**最大值**（导航栏与键盘不叠），所以键盘在时是键盘高、
+                    // 不在时是导航栏高，与居中弹窗那套 panelSafeArea 是同一个口径。
+                    WindowInsets.safeDrawing
                         .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
                 )
                 .onGloballyPositioned { coordinates ->

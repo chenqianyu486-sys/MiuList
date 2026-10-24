@@ -208,6 +208,42 @@ back() {
   sleep 1
 }
 
+# 与 tap_label 相同，但取**最后一个**匹配节点。
+#
+# 弹层是**同窗口 overlay**，合成树里它排在页面内容**之后** ——
+# 「同名文本既在背后的页面上、又在弹层里」时（待办标题就是最典型的例子：
+# 卡片上写着「【作业】数据结构 第6周作业」，弹层的标题输入框里也是同一句），
+# 点第一个等于点在**被遮住的**页面上，结果是点到了遮罩、把弹层直接关掉。
+tap_label_last() {
+  local text=$1
+  local tmp="$OUT_ROOT/.tmp_dump.xml"
+  dump_to "$tmp"
+  local bounds
+  bounds="$(grep -o "text=\"$text\"[^>]*bounds=\"[^\"]*\"" "$tmp" 2>/dev/null | tail -1 |
+    sed 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/')"
+  if [ -z "$bounds" ]; then
+    if [ ${#text} -ge 3 ]; then
+      bounds="$(grep -o "text=\"[^\"]*$text[^\"]*\"[^>]*bounds=\"[^\"]*\"" "$tmp" 2>/dev/null | tail -1 |
+        sed 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/')"
+    fi
+  fi
+  if [ -z "$bounds" ]; then
+    bounds="$(grep -o "content-desc=\"$text\"[^>]*bounds=\"[^\"]*\"" "$tmp" 2>/dev/null | tail -1 |
+      sed 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/')"
+  fi
+  rm -f "$tmp"
+  if [ -z "$bounds" ]; then
+    echo "    !! 找不到「$text」（取最后一个）"
+    FAILED="$FAILED $text"
+    return 1
+  fi
+  set -- $bounds
+  local x=$(( ($1 + $3) / 2 )) y=$(( ($2 + $4) / 2 ))
+  adb shell input tap "$x" "$y"
+  sleep 2
+  return 0
+}
+
 # 回到总览页（浮岛的三个页签之一）
 to_dashboard() { tap_label "总览" >/dev/null 2>&1; sleep 1; }
 
@@ -268,10 +304,44 @@ capture_dialog() {
   fi
 }
 
+# 待办编辑弹层的四张。这几张开的是**同一层**：
+# 以前是「详情弹层（只读）→ 点编辑 → 表单弹窗」两层，现在合成一层底部弹层，
+# 所以这里验的是同一层的四种状态。
+capture_task_shots() {
+  # 编辑弹层：清单页点一张待办，直接进的就是能改的那一层
+  relaunch
+  tap_label "清单" >/dev/null 2>&1
+  capture_dialog 05_task_editor tap_label "第6周作业"
+
+  # 新建待办：右下角 FAB（**只在清单页**有）
+  relaunch
+  tap_label "清单" >/dev/null 2>&1
+  capture_dialog 06_task_new tap_label "添加待办"
+
+  # 编辑弹层里**就地展开**课程滚筒：点「课程」那一行
+  relaunch
+  tap_label "清单" >/dev/null 2>&1
+  tap_label "第6周作业" >/dev/null 2>&1
+  sleep 1
+  capture_dialog 06b_task_course_picker tap_label_last "课程"
+
+  # 编辑弹层里把键盘叫起来：点标题输入框。
+  # 这一张验的是「键盘弹起时内容有没有被挡住」——底部弹层要自己让开 IME。
+  relaunch
+  tap_label "清单" >/dev/null 2>&1
+  tap_label "第6周作业" >/dev/null 2>&1
+  sleep 1
+  capture_dialog 06c_task_keyboard tap_label_last "第6周作业"
+}
+
 capture_one() {
   local label=$1 size=$2 density=$3 font=$4
   OUT="$OUT_ROOT/$label"
-  rm -rf "$OUT"
+  # TASKS_ONLY=1：只重抓「待办编辑弹层」那几张，**不清空**目录。
+  # 改完待办编辑弹层后只想重验它时用，省得把整轮弹层重跑一遍。
+  if [ "${TASKS_ONLY:-0}" != "1" ]; then
+    rm -rf "$OUT"
+  fi
   mkdir -p "$OUT"
 
   adb shell wm size "$size" >/dev/null
@@ -286,6 +356,12 @@ capture_one() {
   W="${size%x*}"
   H="${size#*x}"
 
+  if [ "${TASKS_ONLY:-0}" = "1" ]; then
+    capture_task_shots
+    echo "  抓到 $(ls "$OUT"/*.png 2>/dev/null | wc -l) 张"
+    return 0
+  fi
+
   # ---------- 页面 ----------
   shot 01_dashboard
   tap_label "课表" >/dev/null 2>&1; shot 02_schedule
@@ -298,15 +374,8 @@ capture_one() {
   relaunch
   capture_dialog 04_week_picker tap_label "第 6 周"
 
-  # 任务详情：清单页点一张待办
-  relaunch
-  tap_label "清单" >/dev/null 2>&1
-  capture_dialog 05_task_detail tap_label "第6周作业"
-
-  # 新建待办：右下角 FAB（**只在清单页**有）
-  relaunch
-  tap_label "清单" >/dev/null 2>&1
-  capture_dialog 06_task_edit tap_label "添加待办"
+  # 待办编辑弹层的四张（详见 capture_task_shots）
+  capture_task_shots
 
   # 课程详情：总览页点一张课程卡
   relaunch

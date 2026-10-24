@@ -78,7 +78,7 @@ fun NewTaskTypeDialog(
             ) {
                 // 用 BasicTextField 而不是 OutlinedTextField：
                 // 这里只有一行短输入，OutlinedTextField 按自己的 MinHeight
-                // 顶起来的上下留白比文字本身还高（TaskEditDialog 里有同样的记录）。
+                // 顶起来的上下留白比文字本身还高（待办编辑弹层里有同样的记录）。
                 val shape = RoundedCornerShape(12.dp)
                 BasicTextField(
                     value = label,

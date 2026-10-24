@@ -534,8 +534,8 @@ val ChipSurfaceNeutral = Color(0xFFF1F5F9)
  * 而不是一张张摆在白纸上的名片。深色壁纸上的可读性由自适应白衬底解决，
  * 不靠把页面四周留白撑大来获得呼吸。
  *
- * 弹窗（TaskEditDialog / NewTaskTypeDialog）里那个 16.dp 不跟着改：
- * 那是弹窗自己离屏幕多远，不是页面边距。
+ * 弹层里那个 16.dp 不跟着改（待办编辑弹层 / NewTaskTypeDialog）：
+ * 那是弹层自己离屏幕多远，不是页面边距。
  */
 val PageHInset = 6.dp
 

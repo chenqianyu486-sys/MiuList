@@ -61,6 +61,23 @@ tools/capture-matrix.sh --baseline
 
 横屏这两档最慢，但也是**唯一能暴露「高度不够」问题**的两档，别把它们从矩阵里删掉。
 
+## 弹层矩阵（`capture-dialogs.sh`）
+
+页面矩阵只抓四个**页面**；弹层要另跑：
+
+```bash
+tools/capture-dialogs.sh                 # 跑默认断点
+tools/capture-dialogs.sh C411 G800       # 只跑指定断点
+TASKS_ONLY=1 tools/capture-dialogs.sh    # 只重抓「待办编辑弹层」那四张，不清空目录
+```
+
+`TASKS_ONLY=1` 是改完待办编辑弹层之后**只想重验它**时用的：
+整轮弹层要跑二十分钟，而待办那四张（编辑 / 新建 / 课程滚筒展开 / 键盘弹起）只要五分钟。
+
+弹层是**同窗口 overlay**，合成树里排在页面内容之后 —— 要点弹层里那个和页面同名的节点
+（待办标题就是典型），必须用脚本里的 `tap_label_last`（取最后一个匹配），
+用取第一个的那档会点在**被遮住的**页面上，等于点到了遮罩、把弹层关掉。
+
 ## 前提
 
 - 模拟器在跑（`adb devices` 能看到）。

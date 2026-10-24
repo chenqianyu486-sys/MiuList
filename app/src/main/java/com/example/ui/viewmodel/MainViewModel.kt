@@ -356,37 +356,27 @@ private val ruleFlow = combine(
 
     // ------------------------------------------------------------ 待办
 
-    fun openAddTaskDialog(courseId: Long? = null) = _uiState.update {
-        it.copy(
-            isAddTaskDialogOpen = true,
-            preselectedCourseIdForNewTask = courseId,
-            editingTask = null
-        )
+    /**
+     * 打开待办编辑弹层（新建）。
+     *
+     * 新建与编辑**共用同一个弹层**：以前是两个入口、两种外观（一个居中弹窗、
+     * 一个底部弹层），同一件事却两种样子。现在合成一层，新建只是「一条空的草稿」。
+     */
+    fun openTaskEditor(courseId: Long? = null) = _uiState.update {
+        it.copy(taskEditor = TaskEditorTarget(task = null, preselectedCourseId = courseId))
     }
 
-    fun openEditTaskDialog(task: TaskEntity) = _uiState.update {
-        it.copy(
-            isAddTaskDialogOpen = true,
-            preselectedCourseIdForNewTask = task.courseId,
-            editingTask = task
-        )
+    /**
+     * 打开一条已有待办 —— 进弹层就等于在编辑它。
+     *
+     * 这一层原来是「详情弹层（只读）→ 点编辑 → 编辑弹窗（表单）」，
+     * 为了改一个字要点三次、还要在两个弹层之间来回。现在弹层本身就是编辑面。
+     */
+    fun inspectTask(task: TaskEntity) = _uiState.update {
+        it.copy(taskEditor = TaskEditorTarget(task = task, preselectedCourseId = task.courseId))
     }
 
-    fun closeTaskDialog() = _uiState.update {
-        it.copy(isAddTaskDialogOpen = false, editingTask = null, preselectedCourseIdForNewTask = null)
-    }
-
-    fun inspectTask(task: TaskEntity) = _uiState.update { it.copy(inspectingTask = task) }
-    fun closeTaskSheet() = _uiState.update { it.copy(inspectingTask = null) }
-
-    fun editTaskFromSheet(task: TaskEntity) = _uiState.update {
-        it.copy(
-            inspectingTask = null,
-            isAddTaskDialogOpen = true,
-            preselectedCourseIdForNewTask = task.courseId,
-            editingTask = task
-        )
-    }
+    fun closeTaskEditor() = _uiState.update { it.copy(taskEditor = null) }
 
     fun toggleTaskComplete(task: TaskEntity) = viewModelScope.launch {
         taskRepo.toggleTaskComplete(task.id, task.isCompleted)
@@ -451,7 +441,9 @@ private val ruleFlow = combine(
             it.copy(
                 deletingTaskType = null,
                 selectedTaskTypeKey = it.selectedTaskTypeKey?.takeIf { key -> key != type.key },
-                inspectingTask = it.inspectingTask?.takeIf { task -> task.taskType != type.key },
+                // 正在编辑的那条正好属于这个分类 → 它连同分类下的待办一起被删了，
+                // 弹层得跟着收掉，不能停在一个已经不存在的待办上。
+                taskEditor = it.taskEditor?.takeIf { editor -> editor.task?.taskType != type.key },
                 userMessage = "已删除「${type.label}」及该分类下的待办"
             )
         }
@@ -465,12 +457,12 @@ private val ruleFlow = combine(
             taskRepo.updateTask(task)
             _uiState.update { it.copy(userMessage = "待办已更新") }
         }
-        closeTaskDialog()
+        closeTaskEditor()
     }
 
     fun deleteTask(task: TaskEntity) = viewModelScope.launch {
         taskRepo.deleteTask(task)
-        _uiState.update { it.copy(userMessage = "待办已删除", inspectingTask = null) }
+        _uiState.update { it.copy(userMessage = "待办已删除", taskEditor = null) }
     }
 
     // ------------------------------------------------------------ 课程

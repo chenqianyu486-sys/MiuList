@@ -106,8 +106,7 @@ import com.example.ui.components.QuickGenerateDialog
 import com.example.ui.components.QuickZjuLoginDialog
 import com.example.ui.components.ScheduleTransferDialog
 import com.example.ui.components.TaskCategoryManageDialog
-import com.example.ui.components.TaskDetailSheet
-import com.example.ui.components.TaskEditDialog
+import com.example.ui.components.TaskEditorSheet
 import com.example.ui.components.TaskRulesDialog
 import com.example.ui.components.WallpaperSettingDialog
 import com.example.ui.components.WeekPickerDialog
@@ -772,7 +771,7 @@ fun MainApp(viewModel: MainViewModel) {
                             .padding(end = 24.dp, bottom = islandBottomInset())
                     ) {
                         FloatingActionButton(
-                            onClick = { viewModel.openAddTaskDialog() },
+                            onClick = { viewModel.openTaskEditor() },
                             shape = RoundedCornerShape(20.dp),
                             containerColor = MaterialTheme.colorScheme.primary,
                             contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -869,7 +868,7 @@ fun MainApp(viewModel: MainViewModel) {
                 onAddNewTaskForCourse = {
                     val cId = courseWithSlots.course.id
                     viewModel.inspectCourse(null)
-                    viewModel.openAddTaskDialog(cId)
+                    viewModel.openTaskEditor(cId)
                 },
                 onEditCourse = {
                     viewModel.inspectCourse(null)
@@ -897,31 +896,24 @@ fun MainApp(viewModel: MainViewModel) {
             )
         }
 
-        // 单条待办详情弹层：卡片上点一下进来，编辑/删除都在这里
-        state.inspectingTask?.let { inspectingTask ->
-            val currentTask = state.tasks.find { it.id == inspectingTask.id } ?: inspectingTask
-            TaskDetailSheet(
-                task = currentTask,
-                customTypes = state.customTaskTypes,
-                onDismiss = { viewModel.closeTaskSheet() },
-                onEdit = { viewModel.editTaskFromSheet(currentTask) },
-                // 删完就把弹层收掉，否则它会停在一个已经不存在的待办上
-                onDelete = {
-                    viewModel.closeTaskSheet()
-                    viewModel.deleteTask(currentTask)
-                }
-            )
-        }
-
-        // Task Edit/Add Dialog
-        if (state.isAddTaskDialogOpen) {
-            TaskEditDialog(
-                initialTask = state.editingTask,
+        // 待办编辑弹层：卡片上点一下待办，进来的就是这一层。
+        //
+        // 这里是**唯一**的待办编辑入口 —— 原来的「详情弹层（只读）+ 编辑弹窗（表单）」
+        // 两层已经合成这一层：标题、备注常驻可输入，分类 / 截止 / 课程就地可改，
+        // 保存按钮固定在底部。
+        state.taskEditor?.let { editor ->
+            TaskEditorSheet(
+                initialTask = editor.task,
                 courses = state.courses,
                 customTypes = state.customTaskTypes,
-                preselectedCourseId = state.preselectedCourseIdForNewTask,
-                onDismiss = { viewModel.closeTaskDialog() },
+                preselectedCourseId = editor.preselectedCourseId,
+                onDismiss = { viewModel.closeTaskEditor() },
                 onCreateTaskType = { viewModel.openNewTaskTypeDialog() },
+                // 删完就把弹层收掉，否则它会停在一个已经不存在的待办上
+                onDelete = { task ->
+                    viewModel.closeTaskEditor()
+                    viewModel.deleteTask(task)
+                },
                 onSave = { viewModel.saveTask(it) }
             )
         }
