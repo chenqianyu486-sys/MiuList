@@ -161,6 +161,46 @@ class AcademicCalendar(
     }
 
     /**
+     * 这一天**为什么**没课。
+     *
+     * 这是「放假停课」与「周末」分开的**唯一入口**：
+     *
+     * - [DayOffReason.NO_CLASS] —— 校历明确记的停课日（放假）。硬闸门。
+     * - [DayOffReason.VACATED] —— 课被搬到别的日子去了（调休让出）。硬闸门。
+     * - [DayOffReason.OUT_OF_TERM] —— 落在学期范围之外。硬闸门。
+     * - [DayOffReason.WEEKEND] —— 普通周末。**软**闸门：周末是「默认没课」，
+     *   不是「一定没课」；用户自己排了课，周末就该上课。
+     *   周末到底有没有课，要连排课数据一起看，见 [ScheduleResolver.slotsOn]。
+     *
+     * 判定的**先后顺序**是有讲究的，不能换：
+     *
+     * 1. **停课 > 让出 > 学期外 > 周末**。
+     *    国庆假期里的周六，校历既记了停课、那天也确实是周末 ——
+     *    先判周末会把它说成「普通休息日」，于是总览写「今天周末」而不是「今天停课」，
+     *    把一件真事说成了一件没发生的事。先判停课才对。
+     * 2. **学期外排在周末前面**：学期外那一周的周六周日不是休息日，
+     *    是这一天根本不属于这个学期。先判周末会把整个学期外的周说成
+     *    「两个休息日 + 五天正常」，与周次条上的「不在学期范围内」自相矛盾。
+     */
+    fun dayOffReason(epochDay: Long): DayOffReason? = when {
+        isNoClass(epochDay) -> DayOffReason.NO_CLASS
+        isVacatedForShift(epochDay) -> DayOffReason.VACATED
+        !isInTerm(epochDay) -> DayOffReason.OUT_OF_TERM
+        !isMakeup(epochDay) && EpochDays.isWeekend(epochDay) -> DayOffReason.WEEKEND
+        else -> null
+    }
+
+    /**
+     * 这一天是否**确定**没课（校历明确记着的停课 / 让出 / 学期外）。
+     *
+     * 周末**不算**：周末是「默认没课」，不是「一定没课」。
+     * 用户自己的排课里排了课，周末就该出课 ——
+     * 所以排课判定（[ScheduleResolver.slotsOn]）的闸门用的是这里，不是 [isSchoolDay]。
+     */
+    fun isOffDay(epochDay: Long): Boolean =
+        dayOffReason(epochDay)?.blocksAllClasses() == true
+
+    /**
      * 是否上课日：不在停课日；让出课的日子不上；周末只有标了补课才算；学期内才算。
      *
      * 注意周末判断先于学期判断，这样「未配置学期」时也仍然保留
@@ -168,6 +208,13 @@ class AcademicCalendar(
      *
      * 周次用 [weekOf]（补课当天那一周）而不是 [teachingWeekOf]：这里判的是
      * 「这一天要不要显示课表」，来源周次只影响显示**哪些**课，不影响那天有没有课。
+     *
+     * ## 它是**校历口径**，不是排课口径
+     *
+     * 这里判的是「学校规定的上课日」：周末默认**不是**上学日。
+     * 但它**不**用来决定「那天显示哪些课」—— 排课判定走 [isOffDay]，
+     * 因为周末排了课就该认，用户自己的排课数据说那天有课。
+     * 两者的差别正是「放假停课 ≠ 周末」的落点。
      */
     fun isSchoolDay(epochDay: Long): Boolean {
         if (isNoClass(epochDay)) return false

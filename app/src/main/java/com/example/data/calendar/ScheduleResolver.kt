@@ -3,27 +3,6 @@ package com.example.data.calendar
 import com.example.data.local.CourseSlotEntity
 
 /**
- * 这一天为什么不上课。
- *
- * 周课表要区分这几种「空列」，因为它们对用户的含义完全不同：
- * 「停课」和「让出课」是校历上明确记着的调休，空列里**本来是有课的**；
- * 「周末」和「学期外」则是本来就没课。前者不标出来，用户会以为自己的课被弄丢了。
- */
-enum class DayOffReason {
-    /** 校历里明确记的停课日。 */
-    NO_CLASS,
-
-    /** 调休让出课的那一天：这天的课被搬到别的日子去了。 */
-    VACATED,
-
-    /** 普通周末，且没有标补课。 */
-    WEEKEND,
-
-    /** 落在学期范围之外（开学前 / 学期结束后）。 */
-    OUT_OF_TERM
-}
-
-/**
  * 周课表的一列 = 学期里**真实的某一天**，而不是「星期几」。
  *
  * 这是周课表和「一周的结构」之间唯一也最重要的区别：2026-10-17 是周六，
@@ -58,11 +37,27 @@ data class WeekDayPlan(
  */
 class ScheduleResolver(val calendar: AcademicCalendar) {
 
-    /** 这天是否要显示课表。停课日 / 普通周末返回 false。 */
+    /**
+     * **校历口径**：这天是不是学校规定的上课日。停课日 / 普通周末返回 false。
+     *
+     * 注意它**不**决定「那天显示哪些课」—— 那是 [slotsOn] 的事，而 [slotsOn]
+     * 的闸门不含周末（周末排了课就该出课）。两者口径不同是**有意的**：
+     * 「周六不是上学日」是常识，「周六有课」是用户自己的排课，两件事都成立。
+     */
     fun isSchoolDay(epochDay: Long): Boolean = calendar.isSchoolDay(epochDay)
 
     /**
      * 这天的课。空时段列表由调用方自行跳过成组（列表页要靠这个判断是否出分组）。
+     *
+     * ## 周末为什么不再是闸门
+     *
+     * 以前这里第一行是 `if (!calendar.isSchoolDay(epochDay)) return emptyList()`，
+     * 而 [AcademicCalendar.isSchoolDay] 把周末判成「不上课」。于是用户自己在周六
+     * 排的课，总览的「今日课程」与课表页的「列表」视图**都看不见**，
+     * 只有周课表格栅格（[weekPlan]）认 —— 同一份数据在两个视图里给出相反的答案。
+     *
+     * 现在闸门只看**硬**理由（停课 / 让出 / 学期外，见 [AcademicCalendar.isOffDay]），
+     * 周末交给排课数据自己说话：**周六排了课就出课，没排就空着**。
      *
      * 筛开课周次时用 [AcademicCalendar.teachingWeekOf] 而不是 [AcademicCalendar.weekOf]：
      * 补课日归属**来源日**那一周，10-17 补的 10-02 的课要按第 3 周去匹配。
@@ -72,7 +67,7 @@ class ScheduleResolver(val calendar: AcademicCalendar) {
         allSlots: List<CourseSlotEntity>,
         weeksBySlotId: Map<Long, Set<Int>> = emptyMap()
     ): List<CourseSlotEntity> {
-        if (!calendar.isSchoolDay(epochDay)) return emptyList()
+        if (calendar.isOffDay(epochDay)) return emptyList()
         val targetDow = calendar.effectiveDayOfWeek(epochDay)
         val candidates = allSlots.filter { it.dayOfWeek == targetDow }
         if (!calendar.hasSemester) {
@@ -98,8 +93,9 @@ class ScheduleResolver(val calendar: AcademicCalendar) {
      * **周末不是闸门，只是一个标签。** 这里刻意没有走 [slotsOn]：
      * 它按日期流水判断，会用「周末默认不上课」把整列挡掉，于是排进了课表的
      * 周六课在周课表里会整列消失。周末是「默认没课」，不是「一定没课」——
-     * 用户自己的排课数据说那天有课，就该认。（列表页那边仍按日期流水走，
-     * 两边在「没标调休的周六课」上口径不同是既有事实，不在这次改动范围内。）
+     * 用户自己的排课数据说那天有课，就该认。
+     *
+     * 现在 [slotsOn] 也改成同样的口径了（闸门只看硬理由），两个视图不再打架。
      */
     fun weekPlan(
         week: Int,
@@ -110,16 +106,8 @@ class ScheduleResolver(val calendar: AcademicCalendar) {
         return (0 until 7).map { offset ->
             val day = monday + offset
             val makeupDow = calendar.makeupDayOfWeek(day)
-            val off = when {
-                calendar.isNoClass(day) -> DayOffReason.NO_CLASS
-                calendar.isVacatedForShift(day) -> DayOffReason.VACATED
-                // 「不在学期内」排在「周末」前面：学期外那一周的周六周日不是休息日，
-                // 是这一天根本不属于这个学期。先判周末会把整个学期外的周说成
-                // 「两个休息日 + 五天正常」，与周次条上的「不在学期范围内」自相矛盾。
-                !calendar.isInTerm(day) -> DayOffReason.OUT_OF_TERM
-                makeupDow == null && EpochDays.isWeekend(day) -> DayOffReason.WEEKEND
-                else -> null
-            }
+            // 「为什么没课」只判一次，周课表与列表页共用同一套口径（见 AcademicCalendar.dayOffReason）。
+            val off = calendar.dayOffReason(day)
             val dow = makeupDow ?: EpochDays.dayOfWeek1To7(day)
             // 没配置学期时 teachingWeekOf 恒为 0，而 occursInWeek 会把 0 判成「不开课」，
             // 所以这里要显式退回「不看开课周次」——与 slotsOn 的降级路径保持一致。
@@ -139,7 +127,10 @@ class ScheduleResolver(val calendar: AcademicCalendar) {
                 dayOfWeek = EpochDays.dayOfWeek1To7(day),
                 slots = slots,
                 makeupDayOfWeek = makeupDow,
-                offReason = off
+                // 周末**排了课** → 那天就不是「没课日」了。列头因此不会再把它说成休息日，
+                // 而用户看到的正是自己排的课 —— 两边不打架。
+                // 周末没排课 → 保留 [DayOffReason.WEEKEND]，那一列是空的，标签仍然成立。
+                offReason = if (off == DayOffReason.WEEKEND && slots.isNotEmpty()) null else off
             )
         }
     }

@@ -51,11 +51,32 @@ class ScheduleResolverTest {
         assertEquals(2, resolver.slotsOn(today, slots, weeks).size)
     }
 
+    /**
+     * 周末排的课要出来 —— 配没配学期都一样。
+     *
+     * 以前这里断言的是「周末没课」，于是用户自己在周六排的课在**总览的今日课程**
+     * 与**课表页的列表视图**里全部消失，只有周课表格栅格认 ——
+     * 同一份数据在两个视图里给出相反的答案。
+     *
+     * 现在周末只是「默认没课」，不是「一定没课」：排进了课表就得出课。
+     */
     @Test
-    fun `without a semester weekends still have no classes`() {
+    fun `a weekend with classes on the timetable shows them`() {
         val resolver = ScheduleResolver(AcademicCalendar.EMPTY)
         val slots = listOf(slot(1, 6, 1))
-        assertTrue(resolver.slotsOn(firstMonday + 5, slots).isEmpty())
+        assertEquals(1, resolver.slotsOn(firstMonday + 5, slots).size)
+    }
+
+    /**
+     * 但「周六不是上学日」这条**校历口径**的常识仍然成立。
+     *
+     * 它不参与「那天显示哪些课」的判定 —— 那由排课数据决定。
+     */
+    @Test
+    fun `without a semester weekends are still not school days`() {
+        val resolver = ScheduleResolver(AcademicCalendar.EMPTY)
+        assertFalse(resolver.isSchoolDay(firstMonday + 5))
+        assertFalse(resolver.isSchoolDay(firstMonday + 6))
     }
 
     // ---------------------------------------------------------------- 开课周次
@@ -166,6 +187,86 @@ class ScheduleResolverTest {
         )
     }
 
+    // ------------------------------------------------- 周末 vs 放假停课
+
+    /**
+     * 周末排的课，在**按日期流水**的 [slotsOn] 里也要出来。
+     *
+     * 这一条是用户报的缺陷本身：周六排了课，总览的「今日课程」是空的、
+     * 课表页的「列表」视图里也没有这一天，只有周课表格栅格认 ——
+     * 同一份数据在两个视图里给出相反的答案。
+     */
+    @Test
+    fun `saturday classes show up in the day timeline and the dashboard`() {
+        val resolver = ScheduleResolver(AcademicCalendar(semester()))
+        val saturdayClass = slot(1, 6, 2)
+
+        assertEquals(
+            "周六排的课要出",
+            listOf(1L),
+            resolver.slotsOn(firstMonday + 5, listOf(saturdayClass)).map { it.id }
+        )
+    }
+
+    @Test
+    fun `a weekend without classes on the timetable stays empty`() {
+        val resolver = ScheduleResolver(AcademicCalendar(semester()))
+        val mondayClass = slot(1, 1, 1)
+        assertTrue(resolver.slotsOn(firstMonday + 5, listOf(mondayClass)).isEmpty())
+    }
+
+    /** 周末排的课照样要按开课周次筛 —— 单双周在周末同样成立。 */
+    @Test
+    fun `weekend classes respect the opening weeks`() {
+        val resolver = ScheduleResolver(AcademicCalendar(semester()))
+        val oddOnly = slot(1, 6, 2)
+
+        assertEquals(
+            "第 1 周（单周）要出",
+            1,
+            resolver.slotsOn(firstMonday + 5, listOf(oddOnly), mapOf(1L to setOf(1, 3))).size
+        )
+        assertEquals(
+            "第 2 周（双周）不出",
+            0,
+            resolver.slotsOn(firstMonday + 12, listOf(oddOnly), mapOf(1L to setOf(1, 3))).size
+        )
+    }
+
+    /**
+     * 放假停课盖过周末：国庆里的周六是「停课」，不是「普通休息日」。
+     *
+     * 判定的先后顺序（停课 > 让出 > 学期外 > 周末）就锁在这里 ——
+     * 顺序一换，假期里的周末就会被说成「今天周末」，把一件真事说成没发生的事。
+     */
+    @Test
+    fun `a holiday on a weekend wins over the weekend label`() {
+        val saturday = firstMonday + 5
+        val cal = AcademicCalendar(semester(), noClassDays = setOf(saturday))
+        val resolver = ScheduleResolver(cal)
+
+        assertEquals(DayOffReason.NO_CLASS, cal.dayOffReason(saturday))
+        assertTrue(
+            "放假停课那天一节都不上",
+            resolver.slotsOn(saturday, listOf(slot(1, 6, 1))).isEmpty()
+        )
+    }
+
+    /** 补课的周六仍然出课，且出的是**被补那天**的课。 */
+    @Test
+    fun `a make up weekend is a normal class day`() {
+        val saturday = firstMonday + 5
+        val cal = AcademicCalendar(semester(), makeupDays = mapOf(saturday to MakeupShift(firstMonday)))
+        val resolver = ScheduleResolver(cal)
+
+        assertNull("补课日不是休息日", cal.dayOffReason(saturday))
+        assertFalse(cal.isOffDay(saturday))
+        assertEquals(
+            listOf(1L),
+            resolver.slotsOn(saturday, listOf(slot(1, 1, 1))).map { it.id }
+        )
+    }
+
     // ---------------------------------------------------------------- 周课表（按真实日期）
 
     /**
@@ -263,9 +364,11 @@ class ScheduleResolverTest {
         val resolver = ScheduleResolver(AcademicCalendar(semester()))
         val saturdayClass = slot(2, 6, 2)
 
-        // 周末默认不上课，但排进了课表就算数——不能因为「周末」两个字把整列吃掉
+        // 周末默认不上课，但排进了课表就算数——不能因为「周末」两个字把整列吃掉。
+        // 列里有课 → 那天就不再是「没课日」，offReason 归 null，
+        // 列头不会一边说有课一边说这是休息日。
         val saturday = resolver.weekPlan(1, listOf(saturdayClass))[5]
-        assertEquals(DayOffReason.WEEKEND, saturday.offReason)
+        assertNull("周六有课就不再是休息日", saturday.offReason)
         assertEquals(listOf(2L), saturday.slots.map { it.id })
     }
 

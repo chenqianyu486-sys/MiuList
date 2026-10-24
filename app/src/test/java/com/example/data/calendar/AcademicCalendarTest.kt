@@ -59,6 +59,75 @@ class AcademicCalendarTest {
         assertFalse(cal.isSchoolDay(firstMonday + 6))
     }
 
+    // ------------------------------------------------- 为什么没课（放假停课 vs 周末）
+
+    /**
+     * 周末是**软**理由：它说明「这天默认没课」，不说明「这天一定没课」。
+     *
+     * 所以周末不是硬闸门 —— 用户自己把课排在周六，那天就该上课。
+     * 这条是「周末排的课要显示」与「放假停课要显示」能同时成立的前提。
+     */
+    @Test
+    fun `a weekend is a soft reason and not a hard off day`() {
+        val saturday = firstMonday + 5
+        val cal = AcademicCalendar(semester())
+
+        assertEquals(DayOffReason.WEEKEND, cal.dayOffReason(saturday))
+        assertEquals(DayOffReason.WEEKEND, cal.dayOffReason(firstMonday + 6))
+        assertFalse("周末不是硬闸门", cal.isOffDay(saturday))
+    }
+
+    @Test
+    fun `a holiday is a hard off day and beats the weekend`() {
+        val saturday = firstMonday + 5
+        val cal = AcademicCalendar(semester(), noClassDays = setOf(saturday))
+
+        assertEquals(DayOffReason.NO_CLASS, cal.dayOffReason(saturday))
+        assertTrue(cal.isOffDay(saturday))
+    }
+
+    @Test
+    fun `a vacated day is a hard off day but the make up day is not`() {
+        val from = EpochDays.parse("2026-10-02")!!   // 周五，被搬走
+        val to = EpochDays.parse("2026-10-17")!!     // 周六，补课
+        val cal = AcademicCalendar(semester(), makeupDays = mapOf(to to MakeupShift(from)))
+
+        assertEquals(DayOffReason.VACATED, cal.dayOffReason(from))
+        assertTrue(cal.isOffDay(from))
+        assertNull("补课日不是休息日", cal.dayOffReason(to))
+        assertFalse(cal.isOffDay(to))
+    }
+
+    @Test
+    fun `a day outside the term is a hard off day`() {
+        val cal = AcademicCalendar(semester(totalWeeks = 16))
+        val past = firstMonday + 16 * 7
+
+        assertEquals(DayOffReason.OUT_OF_TERM, cal.dayOffReason(past))
+        assertTrue(cal.isOffDay(past))
+    }
+
+    @Test
+    fun `a normal weekday has no reason to be empty`() {
+        val cal = AcademicCalendar(semester())
+
+        assertNull(cal.dayOffReason(firstMonday))
+        assertNull(cal.dayOffReason(firstMonday + 4))
+        assertFalse(cal.isOffDay(firstMonday))
+    }
+
+    /**
+     * 未配置学期时，学期外这条判不出来（没有学期这个概念），
+     * 但周末那条仍然成立 —— 周末与学期无关。
+     */
+    @Test
+    fun `without a semester a weekend is still a weekend`() {
+        val cal = AcademicCalendar.EMPTY
+
+        assertEquals(DayOffReason.WEEKEND, cal.dayOffReason(firstMonday + 5))
+        assertNull(cal.dayOffReason(firstMonday))
+    }
+
     @Test
     fun `no class days win over everything including makeup`() {
         val saturday = firstMonday + 5

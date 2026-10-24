@@ -87,6 +87,7 @@ import com.example.ui.components.periodStartMillis
 import com.example.ui.components.todayStatusLabel
 import com.example.ui.components.todayCalendar
 import com.example.data.calendar.AppZone
+import com.example.data.calendar.DayOffReason
 import com.example.data.calendar.EpochDays
 import com.example.data.timetable.formatMinute
 import com.example.data.calendar.ScheduleResolver
@@ -420,13 +421,19 @@ fun DashboardScreen(
     val heroBase = if (customWallpaper) 0.55f else 0f
 
     // 今日课程：判定权交给 resolver（开课周次 / 停课 / 补课都在它里面）。
-    // 停课日这里会得到空列表，界面据此显示「今天停课」而不是一片空白。
     val resolver = remember(state.calendar) { ScheduleResolver(state.calendar) }
     val todaySlots = remember(state.courseSlots, state.slotWeeks, state.calendar) {
         resolver.slotsOn(EpochDays.today(), state.courseSlots, state.slotWeeks)
     }
-    val todayIsNoClassDay = remember(state.calendar, state.noClassDayCount) {
-        !state.calendar.isSchoolDay(EpochDays.today())
+    // 「今天停课」只在**校历明确记的停课日**出现。
+    //
+    // 以前这里用的是 `!calendar.isSchoolDay(today)`，而 isSchoolDay 把**周末**
+    // 也判成「不上课」—— 于是每个周末的总览都写着「今天停课」，把放假停课
+    // 和周末混成同一件事。用户原话：「放假停课与周末还是有区别的」。
+    //
+    // 现在按**原因**分档，见 [todayEmptyStateLabel]。
+    val todayOffReason = remember(state.calendar, state.noClassDayCount) {
+        state.calendar.dayOffReason(EpochDays.today())
     }
 
     // 当前/下一节：用来在原位置把其中一张卡加高。
@@ -1038,7 +1045,7 @@ fun DashboardScreen(
                     ) {
                         Column {
                             Text(
-                                text = if (todayIsNoClassDay) "今天停课" else "今天没课",
+                                text = todayEmptyStateLabel(todayOffReason),
                                 style = MiuType.CourseTitle,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -2254,4 +2261,32 @@ private fun DashboardSectionHeader(
 /** 没课 / 课上完时，空态把注意力引到待办上。 */
 private fun pendingTasksSummary(count: Int): String =
     if (count > 0) "还有 $count 条待办" else "今天没有待办"
+
+/**
+ * 总览「今天没课」空态卡的第一行文案。
+ *
+ * ## 为什么按**原因**分档，而不是一律「今天停课」
+ *
+ * 「放假停课」和「周末」是两件事，混着说就是**说假话**：
+ * 校历上没记今天停课，只是今天恰好是周六，写「今天停课」是在宣称一件
+ * 没发生的事。反过来，放假停课的日子写成「今天没课」又太轻 —— 那天本来是有课的。
+ *
+ * 四档：
+ *
+ * | 原因 | 文案 | 为什么是这句 |
+ * |------|------|--------------|
+ * | [DayOffReason.NO_CLASS] | 今天停课 | 校历明确记的停课日（放假） |
+ * | [DayOffReason.VACATED] | 今天的课调到别的日子了 | 课没消失，是被搬走了；说「停课」会让人以为白放了一天 |
+ * | [DayOffReason.WEEKEND] | 今天周末 | 周末默认没课，但不是停课 |
+ * | 其余 | 今天没课 | 普通工作日没排课 / 学期外 |
+ *
+ * 抽成纯函数是为了能直接单测：文案档位是这次改动的核心语义，
+ * 不该只能靠截图去看。
+ */
+internal fun todayEmptyStateLabel(reason: DayOffReason?): String = when (reason) {
+    DayOffReason.NO_CLASS -> "今天停课"
+    DayOffReason.VACATED -> "今天的课调到别的日子了"
+    DayOffReason.WEEKEND -> "今天周末"
+    else -> "今天没课"
+}
 
