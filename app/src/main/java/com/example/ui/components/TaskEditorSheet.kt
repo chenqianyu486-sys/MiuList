@@ -130,6 +130,11 @@ private val UTC: TimeZone = TimeZone.getTimeZone("UTC")
  * - 分类、截止、课程**就地可改**，不需要先切模式；
  * - 保存按钮固定在底部，永远看得见、点得到。
  *
+ * 底部那枚主按钮**跟着「有没有改动过」变**：没改动时它是「关闭」（描边），
+ * 改动了才变成实心的「保存」。没东西可存的时候摆一个「保存」，
+ * 只会让人以为要点它一下 —— 尤其新建待办：什么都没填就按「保存」，
+ * 会造出一条空记录。
+ *
  * 「查看」和「编辑」不再分成两个状态：弹层里看到的就是能改的那份，
  * 改完不点保存就当作没改（和所有表单一致）。
  *
@@ -163,19 +168,24 @@ fun TaskEditorSheet(
     var selectedIndex by remember { mutableIntStateOf(initialIndex) }
     val selectedCourse = courseOptions.getOrNull(selectedIndex)
 
-    var title by remember { mutableStateOf(initialTask?.title ?: "") }
-    var description by remember { mutableStateOf(initialTask?.description ?: "") }
+    // ---- 初值：留着算「有没有改动过」 ----
+    // 打开弹层时的那一份。它不参与渲染，只用来跟草稿比差别 ——
+    // 有差别才谈得上「保存」。
+    val initialTitle = remember(initialTask) { initialTask?.title ?: "" }
+    val initialDescription = remember(initialTask) { initialTask?.description ?: "" }
+    val initialTypeKey = remember(initialTask) { initialTask?.taskType.orEmpty() }
+    val initialIsStarred = remember(initialTask) {
+        // 旧的三级值（高/中/低）在这里就已经归一成两态了。
+        initialTask?.let { TaskStar.isMarked(it.priority) } ?: false
+    }
+
+    var title by remember { mutableStateOf(initialTitle) }
+    var description by remember { mutableStateOf(initialDescription) }
     // 类型存 key 字符串（枚举名 / CUSTOM:<id> / 空串），不再存枚举：
     // 用户新建的类型不在枚举里，存枚举就等于把新建的类型在编辑时也一起丢掉。
     // 新建待办时默认不选类型——「先想清楚这条属于哪类」不该是记一件事的前置条件。
-    var selectedTypeKey by remember {
-        mutableStateOf(initialTask?.taskType.orEmpty())
-    }
-    var isStarred by remember {
-        // 默认不标星：新建待办不该顺手替用户做一次重要性判断。
-        // 旧的三级值（高/中/低）在这里就已经归一成两态了。
-        mutableStateOf(initialTask?.let { TaskStar.isMarked(it.priority) } ?: false)
-    }
+    var selectedTypeKey by remember { mutableStateOf(initialTypeKey) }
+    var isStarred by remember { mutableStateOf(initialIsStarred) }
 
     // 截止存真实时间戳，不存「几天后」的偏移——偏移只在保存那一刻才有意义。
     // 关掉「不设截止」时 dueMillis 里的值原样留着不清零，这样用户改主意打开它，
@@ -183,13 +193,77 @@ fun TaskEditorSheet(
     val initialHasDue = remember(initialTask) {
         initialTask?.let { TaskEntity.hasDue(it) } ?: true
     }
-    var hasDue by remember { mutableStateOf(initialHasDue) }
-    var dueMillis by remember {
-        mutableStateOf(
-            initialTask?.dueDateTimestamp?.takeIf { initialHasDue } ?: defaultDueTimestamp()
-        )
+    // 新建时的默认截止**只算一次**：算两次会差几毫秒，于是新建待办刚打开
+    // 就被判成「已经改过了」。
+    val initialDueMillis = remember(initialTask, initialHasDue) {
+        initialTask?.dueDateTimestamp?.takeIf { initialHasDue } ?: defaultDueTimestamp()
     }
+    var hasDue by remember { mutableStateOf(initialHasDue) }
+    var dueMillis by remember { mutableStateOf(initialDueMillis) }
     val dueCal = remember(dueMillis) { AppZone.calendar(dueMillis) }
+
+    // ---- 有没有改动过 ----
+    // 没改动就没有东西要存，主按钮就不该叫「保存」，该叫「关闭」。
+    // 新建待办尤其要紧：什么都没填就按「保存」，会造出一条标题是「待办」的
+    // 空记录 —— 而用户其实只是误点开了这个弹层。
+    val hasChanges = title != initialTitle ||
+        description != initialDescription ||
+        selectedTypeKey != initialTypeKey ||
+        isStarred != initialIsStarred ||
+        hasDue != initialHasDue ||
+        // 截止按**秒**比：时间选择器会把毫秒清零，拿毫秒比会算出「改过了」，
+        // 而用户其实只是选了个一样的时刻。
+        (hasDue && dueMillis / 1000 != initialDueMillis / 1000) ||
+        selectedIndex != initialIndex
+
+    // 保存：把草稿拼成一条待办交出去。抽成 lambda 是为了让操作栏里只剩
+    // 「按了会发生什么」，不夹着一大段拼字段的代码。
+    val saveDraft: () -> Unit = {
+        val course = selectedCourse
+        val cal = AppZone.calendar(dueMillis)
+        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).apply {
+            timeZone = AppZone.TIME_ZONE
+        }
+        val typeOption = TaskTypes.resolve(selectedTypeKey, customTypes)
+        val resolvedTitle = title.ifBlank {
+            course?.let { autoTitle(selectedTypeKey, it) }
+                ?: typeOption?.label
+                ?: "待办"
+        }
+
+        val taskToSave = initialTask?.copy(
+            courseId = course?.id ?: TaskEntity.UNLINKED_COURSE_ID,
+            courseName = course?.name ?: TaskEntity.UNLINKED_COURSE_NAME,
+            courseCategory = course?.category ?: "",
+            courseColorHex = course?.colorHex ?: TaskEntity.UNLINKED_COLOR_HEX,
+            title = resolvedTitle,
+            description = description,
+            taskType = selectedTypeKey,
+            startTimeString = initialTask?.startTimeString
+                ?: course?.let { "本周排期 · ${it.name}" }
+                ?: "",
+            priority = TaskStar.encode(isStarred),
+            // 不设截止时两列一起清：只把时间戳换成哨兵、dueDateString
+            // 还留着旧日期的话，弹层里就会显示一个和「不设截止」矛盾的时间。
+            dueDateTimestamp = if (hasDue) dueMillis else TaskEntity.NO_DUE_TIMESTAMP,
+            dueDateString = if (hasDue) sdf.format(cal.time) else ""
+        ) ?: TaskEntity(
+            courseId = course?.id ?: TaskEntity.UNLINKED_COURSE_ID,
+            courseName = course?.name ?: TaskEntity.UNLINKED_COURSE_NAME,
+            courseCategory = course?.category ?: "",
+            courseColorHex = course?.colorHex ?: TaskEntity.UNLINKED_COLOR_HEX,
+            title = resolvedTitle,
+            description = description,
+            taskType = selectedTypeKey,
+            startTimeString = course?.let { "本周排期 · ${it.name}" } ?: "",
+            priority = TaskStar.encode(isStarred),
+            dueDateTimestamp = if (hasDue) dueMillis else TaskEntity.NO_DUE_TIMESTAMP,
+            dueDateString = if (hasDue) sdf.format(cal.time) else "",
+            isAutoGenerated = false
+        )
+
+        onSave(taskToSave)
+    }
 
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
@@ -314,9 +388,15 @@ fun TaskEditorSheet(
                             label = option.label,
                             selected = selectedTypeKey == option.key,
                             onClick = {
+                                val previousTypeKey = selectedTypeKey
                                 selectedTypeKey = option.key
                                 selectedCourse?.let { c ->
-                                    if (title.isBlank() || title.startsWith("【")) {
+                                    // 标题只在「它正好是按（课程 + 类型）算出来的那份模板」
+                                    // 时才跟着分类变。判据不能是「以【开头」——
+                                    // 用户自己写的「【作业】数据结构 第6周作业」也是以【开头，
+                                    // 而用户只是点了个**同名**的 chip，
+                                    // 标题却被改写成了「【作业】数据结构」。
+                                    if (title.isBlank() || isAutoTitle(title, previousTypeKey, c)) {
                                         title = autoTitle(option.key, c)
                                     }
                                 }
@@ -433,10 +513,12 @@ fun TaskEditorSheet(
                         options = courseOptions,
                         selectedIndex = selectedIndex,
                         onSelected = { index ->
+                            val previousCourse = courseOptions.getOrNull(selectedIndex)
                             selectedIndex = index
-                            // 换课程时补上自动标题，但只在标题还是空或模板时才动
+                            // 换课程时补上自动标题，但只在标题还是模板时才动
+                            // （理由同上面的分类 chip）
                             val c = courseOptions.getOrNull(index)
-                            if (c != null && (title.isBlank() || title.startsWith("【"))) {
+                            if (c != null && (title.isBlank() || isAutoTitle(title, selectedTypeKey, previousCourse))) {
                                 title = autoTitle(selectedTypeKey, c)
                             }
                         }
@@ -471,8 +553,12 @@ fun TaskEditorSheet(
                     }
                 } else {
                     if (initialTask == null) {
-                        TextButton(onClick = onDismiss) {
-                            Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        // 新建待办：没改动时**没有「取消」的意义** —— 右边那个
+                        // 「关闭」做的就是同一件事，两个都摆着只会让人犹豫按哪个。
+                        if (hasChanges) {
+                            TextButton(onClick = onDismiss) {
+                                Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     } else {
                         TextButton(onClick = { confirmDelete = true }) {
@@ -480,64 +566,32 @@ fun TaskEditorSheet(
                         }
                     }
                     Spacer(modifier = Modifier.weight(1f))
-                    Button(
-                        onClick = {
-                            val course = selectedCourse
-                            val cal = AppZone.calendar(dueMillis)
-                            val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).apply {
-                                timeZone = AppZone.TIME_ZONE
-                            }
-                            val typeOption = TaskTypes.resolve(selectedTypeKey, customTypes)
-                            val resolvedTitle = title.ifBlank {
-                                course?.let { autoTitle(selectedTypeKey, it) }
-                                    ?: typeOption?.label
-                                    ?: "待办"
-                            }
-
-                            val taskToSave = initialTask?.copy(
-                                courseId = course?.id ?: TaskEntity.UNLINKED_COURSE_ID,
-                                courseName = course?.name ?: TaskEntity.UNLINKED_COURSE_NAME,
-                                courseCategory = course?.category ?: "",
-                                courseColorHex = course?.colorHex ?: TaskEntity.UNLINKED_COLOR_HEX,
-                                title = resolvedTitle,
-                                description = description,
-                                taskType = selectedTypeKey,
-                                startTimeString = initialTask?.startTimeString
-                                    ?: course?.let { "本周排期 · ${it.name}" }
-                                    ?: "",
-                                priority = TaskStar.encode(isStarred),
-                                // 不设截止时两列一起清：只把时间戳换成哨兵、dueDateString
-                                // 还留着旧日期的话，弹层里就会显示一个和「不设截止」矛盾的时间。
-                                dueDateTimestamp = if (hasDue) dueMillis else TaskEntity.NO_DUE_TIMESTAMP,
-                                dueDateString = if (hasDue) sdf.format(cal.time) else ""
-                            ) ?: TaskEntity(
-                                courseId = course?.id ?: TaskEntity.UNLINKED_COURSE_ID,
-                                courseName = course?.name ?: TaskEntity.UNLINKED_COURSE_NAME,
-                                courseCategory = course?.category ?: "",
-                                courseColorHex = course?.colorHex ?: TaskEntity.UNLINKED_COLOR_HEX,
-                                title = resolvedTitle,
-                                description = description,
-                                taskType = selectedTypeKey,
-                                startTimeString = course?.let { "本周排期 · ${it.name}" } ?: "",
-                                priority = TaskStar.encode(isStarred),
-                                dueDateTimestamp = if (hasDue) dueMillis else TaskEntity.NO_DUE_TIMESTAMP,
-                                dueDateString = if (hasDue) sdf.format(cal.time) else "",
-                                isAutoGenerated = false
+                    if (hasChanges) {
+                        Button(
+                            onClick = saveDraft,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            ),
+                            modifier = Modifier.testTag("save_task_button")
+                        ) {
+                            Text(
+                                text = if (initialTask == null) "保存待办" else "保存",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimary
                             )
-
-                            onSave(taskToSave)
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary
-                        ),
-                        modifier = Modifier.testTag("save_task_button")
-                    ) {
-                        Text(
-                            text = if (initialTask == null) "保存待办" else "保存",
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
+                        }
+                    } else {
+                        // 没改动：主按钮让位给「关闭」。
+                        // 它是**描边**而不是实心绿 —— 此刻没有任何东西要提交，
+                        // 摆一个主按钮在那儿只会让人以为要点它一下。
+                        OutlinedButton(
+                            onClick = onDismiss,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.testTag("close_task_button")
+                        ) {
+                            Text("关闭", color = MaterialTheme.colorScheme.onSurface)
+                        }
                     }
                 }
             }
@@ -964,6 +1018,14 @@ private fun PickerSegment(text: String, modifier: Modifier = Modifier, onClick: 
         )
     }
 }
+
+/**
+ * 标题「是不是按（课程 + 类型）算出来的那一份模板」。
+ *
+ * 只有是模板，标题才跟着分类/课程变 —— 用户自己写的标题不该被顺手改掉。
+ */
+private fun isAutoTitle(title: String, typeKey: String, course: CourseEntity?): Boolean =
+    course != null && title == autoTitle(typeKey, course)
 
 /**
  * 换课程时补的默认标题。
