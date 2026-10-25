@@ -50,7 +50,7 @@ CITY_NAME = os.environ.get("WEATHER_CITY_NAME", "杭州")
 LATITUDE = float(os.environ.get("WEATHER_LATITUDE", "30.2741"))
 LONGITUDE = float(os.environ.get("WEATHER_LONGITUDE", "120.1551"))
 
-# 与客户端 OpenMeteoWeatherSource.TIMEZONE 一致。
+# 与客户端 AppZone（app/src/main/java/com/example/data/calendar/AppZone.kt）一致。
 # `current` 本身不分日，但两端时区不一致时排查问题会很难受。
 TIMEZONE = "Asia/Shanghai"
 
