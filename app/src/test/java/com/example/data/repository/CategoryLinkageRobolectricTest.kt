@@ -134,6 +134,48 @@ class CategoryLinkageRobolectricTest {
         assertFalse("用户单独打开的实验被批量覆盖成类别值", lab)
     }
 
+    /**
+     * 「没有改动也能应用」在数据层的含义：
+     * 重新应用同一份规则时，**用户在单门课上单独调过的开关照样被推回类别值**。
+     *
+     * 这是弹层「应用」任何时候都能按的前提：按下去是一次**真实的批量设置**，
+     * 不是「什么都没发生」。所以「这次没改任何东西」不能成为禁用的理由。
+     *
+     * 另一条同样重要：重新应用同一份规则时，**本来就已经一致**的课不会被重写
+     * （返回 0 门），否则每按一次「应用」都要 UPDATE 一遍全部课程，整屏卡片跟着重建。
+     */
+    @Test
+    fun `没有净改动时重新应用仍会把单独设过的开关推回类别值`() = runBlocking {
+        val c = container()
+        reset(c)
+        addCourse(c, "操作系统实验", "实验实践", pre = false, post = true, lab = true)
+
+        val rule = CategoryRule(
+            "实验实践",
+            autoPreStudy = true,
+            autoPostHomework = true,
+            autoLabReport = false
+        )
+        c.settingsRepository.saveRule(rule)
+
+        // 用户在这门课上单独关掉了预习 —— 这是「用户自己的值」。
+        val id = c.courseRepository.getAllCoursesOnce().first { it.name == "操作系统实验" }.id
+        val current = c.courseRepository.getCourseById(id)!!
+        c.courseRepository.saveCourseWithSlots(
+            current.copy(autoPreStudy = false),
+            listOf(SlotWithWeeks(slot = slotForCourse(), weeks = emptySet()))
+        )
+
+        // 弹层里一个字都没改，再应用一次：照样推平。
+        val synced = c.settingsRepository.saveRules(listOf(rule))
+
+        assertEquals("没改动也照样是一次真实同步", 1, synced)
+        assertTrue("单独设过的开关被推回类别值", switchesOf(c, "操作系统实验").first)
+
+        // 再按一次：这次没人跟类别不一致了，不该再写任何行。
+        assertEquals("已经一致就不重写", 0, c.settingsRepository.saveRules(listOf(rule)))
+    }
+
     @Test
     fun `规则表本身也照常保存`() = runBlocking {
         val c = container()
@@ -195,8 +237,9 @@ class CategoryLinkageRobolectricTest {
      * 规则表空着的时候（全新安装，或者曾被一次不带规则的导入清空过），
      * `ensureDefaultRules` 补回内置默认值，并且**立刻写穿到课程上**。
      *
-     * 只补规则行而不写穿会留下一份「规则说有、课上说没有」的配置，而且用户自救不了：
-     * 弹层的「应用」在没有净改动时是禁用的。
+     * 只补规则行而不写穿会留下一份「规则说有、课上说没有」的配置。
+     * 用户现在能自己救（弹层里的「应用」任何时候都能按），但那要他
+     * **自己想起来去按**；自动写穿省掉的正是这一环。
      */
     @Test
     fun `重新播种时内置默认值会写穿到已有课程`() = runBlocking {

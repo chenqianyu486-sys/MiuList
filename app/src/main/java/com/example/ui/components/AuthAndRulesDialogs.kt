@@ -36,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -197,6 +198,22 @@ fun WeekPickerDialog(
  *
  * 每张类别卡上标出它影响几门课：批量设置改的是别人已经配好的课，
  * 不显示波及范围，用户是在不知情的情况下改动整批设置。
+ *
+ * ## 「应用」任何时候都能按，而且作用于**全部类别**
+ *
+ * 这一层的语义是**批量设置**：类别规则对它下面的所有课程有权威，
+ * 「应用」= 把当前这套规则**重新盖一遍**到所有类别的课程上。
+ * 于是「这次一个字都没改」≠「没什么可做」——
+ *
+ * - 改了某门课的**类别**之后（只改类别，不动那三个开关，见
+ *   `MainViewModel.updateCourseCategory`），要让它听新类别的话，
+ *   就得来点一次「应用」——而这时弹层里可能什么都没改；
+ * - 用户在**单门课**上单独调过的开关，会被下一次「应用」推回类别值
+ *   （这正是「批量设置」与「默认值」的差别，不是 bug）；
+ * - 新导入 / 新加的课，要等下一次「应用」才拿到类别规则。
+ *
+ * 早期版本把按钮禁在「这次有没有改动」上，于是上面第一条直接做不成：
+ * 用户只能先在弹层里造一处**无意义的改动**，才能把那门课推回新类别。
  */
 @Composable
 fun CategoryRulesDialog(
@@ -211,10 +228,13 @@ fun CategoryRulesDialog(
     // 所以这里记得的就是本次打开时的原始值，不需要额外的重置逻辑。
     var staged by remember { mutableStateOf(rules) }
 
+    // 这次改了哪几张卡 —— **只用来给卡片描边**，不决定「应用」的作用范围。
     val changed = staged.filter { next ->
         rules.firstOrNull { it.category == next.category } != next
     }
-    val affectedCourses = changed.sumOf { courseCountByCategory[it.category] ?: 0 }
+    // 「应用」覆盖的是**全部类别**下的课程，所以波及范围按全部类别算，
+    // 不是按这次改动过的类别算。
+    val affectedCourses = staged.sumOf { courseCountByCategory[it.category] ?: 0 }
 
     fun toggle(category: String, apply: (CategoryRule) -> CategoryRule) {
         staged = staged.map { if (it.category == category) apply(it) else it }
@@ -259,6 +279,15 @@ fun CategoryRulesDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
+                // 「应用」的作用范围要说出来：它套到**全部类别**上，没改动也能按。
+                // 不说清楚的话，用户会以为「没改就没必要按」而永远不按 ——
+                // 而改完某门课的类别之后，恰恰只能靠这一步把它纳入新类别。
+                Text(
+                    text = "「应用」会套用到全部类别的课程，没有改动时也可以按。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
                 staged.forEach { rule ->
                     val courseCount = courseCountByCategory[rule.category] ?: 0
                     val dirty = changed.any { it.category == rule.category }
@@ -297,36 +326,46 @@ fun CategoryRulesDialog(
                         SwitchRow(
                             label = "课前预习",
                             checked = rule.autoPreStudy,
-                            onChange = { on -> toggle(rule.category) { it.copy(autoPreStudy = on) } }
+                            onChange = { on -> toggle(rule.category) { it.copy(autoPreStudy = on) } },
+                            tag = "category_rules_switch_${rule.category}_pre_study"
                         )
                         SwitchRow(
                             label = "课后作业",
                             checked = rule.autoPostHomework,
-                            onChange = { on -> toggle(rule.category) { it.copy(autoPostHomework = on) } }
+                            onChange = { on -> toggle(rule.category) { it.copy(autoPostHomework = on) } },
+                            tag = "category_rules_switch_${rule.category}_post_homework"
                         )
                         SwitchRow(
                             label = "实验报告",
                             checked = rule.autoLabReport,
-                            onChange = { on -> toggle(rule.category) { it.copy(autoLabReport = on) } }
+                            onChange = { on -> toggle(rule.category) { it.copy(autoLabReport = on) } },
+                            tag = "category_rules_switch_${rule.category}_lab_report"
                         )
                     }
                 }
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, shape = RoundedCornerShape(10.dp)) {
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.testTag("category_rules_cancel")
+            ) {
                 Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
         confirmButton = {
             Button(
-                // 没改动时不让点：让「应用」永远代表一次真实写入，
-                // 也免得用户以为按了没反应。
-                enabled = changed.isNotEmpty(),
+                // 不按「这次有没有改动」设门：这一层是批量设置，「应用」=
+                // 把当前规则重新盖到所有类别的课程上，**没改动时它同样有事可做**
+                // （改过类别、单独调过开关、刚导入新课之后都要靠它推平）。
+                enabled = staged.isNotEmpty(),
                 onClick = {
-                    onApply(changed)
+                    // 提交**全部类别**，不是只提交改动过的那几张卡。
+                    onApply(staged)
                     onDismiss()
                 },
+                modifier = Modifier.testTag("category_rules_apply"),
                 shape = RoundedCornerShape(10.dp),
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary
@@ -347,7 +386,14 @@ fun CategoryRulesDialog(
 private fun SwitchRow(
     label: String,
     checked: Boolean,
-    onChange: (Boolean) -> Unit
+    onChange: (Boolean) -> Unit,
+    /**
+     * 勾选框上的 testTag。
+     *
+     * 每一张类别卡里都有这三个开关行，文字完全一样，只能靠 tag 区分
+     * 「哪一类的哪一个开关」——测试里要精确点到某一张卡上的某一格。
+     */
+    tag: String
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -358,6 +404,7 @@ private fun SwitchRow(
         Checkbox(
             checked = checked,
             onCheckedChange = onChange,
+            modifier = Modifier.testTag(tag),
             colors = androidx.compose.material3.CheckboxDefaults.colors(
                 checkedColor = MaterialTheme.colorScheme.primary
             )

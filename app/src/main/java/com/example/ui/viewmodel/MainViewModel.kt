@@ -611,11 +611,18 @@ private val ruleFlow = combine(
     }
 
     /**
-     * 批量应用类别联动规则（弹层「应用」一次可能改多个类别）。
+     * 批量应用类别联动规则（弹层「应用」一次覆盖**全部类别**）。
      *
      * [com.example.data.repository.ScheduleSettingsRepository.saveRules] 会把三个开关
-     * **批量设置**到该类别下的所有课程，所以这里把实际同步了几门课如实报给用户 ——
+     * **批量设置**到每个类别下的所有课程，所以这里把实际同步了几门课如实报给用户 ——
      * 联动改的是别人的课，闷头改完不吭声会让人以为没生效。
+     *
+     * 传进来的是**全部类别**，不是只传改动过的那几个：这一层是批量设置，
+     * 「应用」= 把当前规则重新盖一遍到所有类别的课程上，
+     * 所以**没有改动时也能应用**（改过类别、单独调过开关之后都要靠它推平）。
+     *
+     * 一门课都没同步时要说清楚「按了是生效的，只是没有课需要改」——
+     * 只报「已应用到 N 个类别」会被读成「什么都没发生」。
      */
     fun applyCategoryRules(rules: List<CategoryRule>) = viewModelScope.launch {
         if (rules.isEmpty()) {
@@ -629,7 +636,7 @@ private val ruleFlow = combine(
                 userMessage = if (synced > 0) {
                     "已应用到 $categories 个类别 · 同步 $synced 门课程"
                 } else {
-                    "已应用到 $categories 个类别"
+                    "已应用到 $categories 个类别 · 课程已是当前设置"
                 },
                 isCategoryRulesDialogOpen = false
             ).resumeOnboardingIfTargetDone()
