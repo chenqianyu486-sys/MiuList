@@ -46,6 +46,7 @@ import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material.icons.outlined.Rule
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Tune
@@ -123,6 +124,8 @@ fun MoreDrawer(
     onOpenAddCourse: () -> Unit,
     onEditCourse: (CourseWithSlots) -> Unit,
     onDeleteCourse: (CourseWithSlots) -> Unit,
+    /** 打开「网页同步」弹层。 */
+    onOpenWebSync: () -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -357,6 +360,17 @@ fun MoreDrawer(
                 item {
                     Spacer(modifier = Modifier.height(CardBlockGap))
                     DrawerSectionLabel("其他")
+
+                    // 网页端。**放在设置之前**：它是一个「别的设备要用 MiuList」的入口，
+                    // 与课表、分类、规则这些「我自己的数据怎么组织」不是一类事。
+                    DrawerRow(
+                        icon = Icons.Outlined.QrCode2,
+                        title = "网页同步",
+                        testTag = "drawer_web_sync_row",
+                        onClick = onOpenWebSync
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     DrawerRow(
                         icon = Icons.Outlined.School,

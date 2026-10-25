@@ -28,6 +28,25 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!--
+              局域网配对：网页端把 `miulist://pair?code=XXXXXX` 画成二维码，
+              手机相机扫到之后系统用这个过滤器把 App 唤起来，
+              App 再问一句「允许这台设备连接吗」。
+
+              走深链而不是让网页端直接调接口，是因为**授权必须发生在手机上**：
+              局域网里任何设备都能访问这个服务，光有配对码不构成授权。
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="pair"
+                    android:scheme="miulist" />
+            </intent-filter>
         </activity>
     </application>
 

@@ -239,12 +239,81 @@ open class SecureAccountStorage(
         }.getOrNull()
     }
 
+    // ── 局域网同步的凭据 ────────────────────────────────────────
+
+    /**
+     * 局域网同步密码（可选）。
+     *
+     * 它会**混进配对 secret** 再派生密钥，所以「二维码被别人拍到」不足以解密，
+     * 还得知道这个密码。它必须能**还原**（配对时要拿它参与派生），
+     * 所以不能只存哈希 —— 于是走同一套 Keystore AES-GCM 加密落盘。
+     */
+    @Synchronized
+    fun saveSyncPasscode(passcode: String) {
+        val editor = prefs.edit()
+        if (passcode.isBlank()) {
+            editor.remove(KEY_ENC_SYNC_PASSCODE)
+        } else {
+            editor.putString(KEY_ENC_SYNC_PASSCODE, encryptString(passcode))
+        }
+        editor.apply()
+    }
+
+    @Synchronized
+    fun getSyncPasscode(): String? {
+        val enc = prefs.getString(KEY_ENC_SYNC_PASSCODE, null) ?: return null
+        return decryptString(enc)
+    }
+
+    @Synchronized
+    fun clearSyncPasscode() {
+        prefs.edit().remove(KEY_ENC_SYNC_PASSCODE).apply()
+    }
+
+    /**
+     * 已配对设备的密钥（三把子密钥打包成一段 base64）。
+     *
+     * **它等价于配对 secret 本身** —— 拿到它就能冒充那台设备，
+     * 所以和同步密码一样走加密落盘。
+     */
+    @Synchronized
+    fun saveSyncDeviceKeys(deviceId: String, blob: String) {
+        prefs.edit().putString(KEY_SYNC_DEVICE_PREFIX + deviceId, encryptString(blob)).apply()
+    }
+
+    @Synchronized
+    fun getSyncDeviceKeys(deviceId: String): String? {
+        val enc = prefs.getString(KEY_SYNC_DEVICE_PREFIX + deviceId, null) ?: return null
+        return decryptString(enc)
+    }
+
+    @Synchronized
+    fun allSyncDeviceKeys(): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        prefs.all.forEach { (key, value) ->
+            if (key.startsWith(KEY_SYNC_DEVICE_PREFIX) && value is String) {
+                val deviceId = key.removePrefix(KEY_SYNC_DEVICE_PREFIX)
+                decryptString(value)?.let { out[deviceId] = it }
+            }
+        }
+        return out
+    }
+
+    @Synchronized
+    fun removeSyncDeviceKeys(deviceId: String) {
+        prefs.edit().remove(KEY_SYNC_DEVICE_PREFIX + deviceId).apply()
+    }
+
     companion object {
         const val PREF_NAME = "miulist_secure_credentials"
         private const val AES_GCM_TRANSFORMATION = "AES/GCM/NoPadding"
 
         private const val KEY_ENC_STUDENT_ID = "enc_student_id"
         private const val KEY_ENC_PASSWORD = "enc_password"
+        /** 局域网同步密码（加密落盘）。 */
+        private const val KEY_ENC_SYNC_PASSCODE = "enc_sync_passcode"
+        /** 已配对设备的密钥（加密落盘），前缀 + deviceId。 */
+        private const val KEY_SYNC_DEVICE_PREFIX = "sync_device_"
         private const val KEY_REMEMBER = "pref_remember_credentials"
         private const val KEY_MASKED_ID = "pref_masked_student_id"
         private const val KEY_LAST_SYNC_TIME = "pref_last_sync_timestamp"

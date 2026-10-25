@@ -14,6 +14,52 @@ plugins {
   alias(libs.plugins.google.services)
 }
 
+// ── 网页端资源 ────────────────────────────────────────────────
+//
+// 源码在仓库根的 web/，**不复制进 app/src/main/assets**：
+// 复制会产生两份真相，改了 web/ 却忘了同步过去，App 里跑的是旧版网页。
+// 这里改成构建期同步一份到 build/generated，再由 AGP 打进 assets。
+//
+// 之所以要打包进 APK 而不是让浏览器去电脑上取文件：
+// 服务端是**手机**，网页端要能被别人直接打开 —— 没有电脑参与，
+// 手机必须自己把网页端发出去。
+
+/** 把 web/ 整份同步到构建目录。 */
+abstract class SyncWebAssets : DefaultTask() {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val source: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun sync() {
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        // **整体放进 web/ 子目录**，不能把内容直接铺在输出根上 ——
+        // AGP 把这个输出目录当成 assets 的根，铺平了 APK 里就成了
+        // `assets/app.js`；而 App 那边读的是 `assets/web/...`，
+        // 差一层目录的后果是「服务起来了，但网页 404」。
+        val dst = File(out, "web")
+        dst.mkdirs()
+        val src = source.get().asFile
+        src.copyRecursively(dst, overwrite = true)
+        // **测试文件不进包**：crypto.test.mjs 是给开发时跑的自测，
+        // 打进发布包只是白占体积，还让人以为线上要跑测试。
+        dst.listFiles()?.forEach { f ->
+            if (f.isFile && f.name.endsWith(".test.mjs")) f.delete()
+        }
+    }
+}
+
+val syncWebAssets = tasks.register<SyncWebAssets>("syncWebAssets") {
+    group = "build"
+    description = "把 web/ 同步到 assets"
+    source.set(rootProject.layout.projectDirectory.dir("web"))
+    outputDir.set(layout.buildDirectory.dir("generated/webAssets"))
+}
+
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
@@ -139,6 +185,8 @@ dependencies {
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
   implementation(libs.haze)
+  // 局域网配对的二维码（zxing core 是纯 Java，无原生库，不给 APK 增加 ABI 负担）。
+  implementation(libs.zxing.core)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
@@ -163,6 +211,15 @@ ksp {
   // 需要 app/schemas/<version>.json 才能建旧版库再升级验证。
   arg("room.schemaLocation", "$projectDir/schemas")
   arg("room.incremental", "true")
+}
+
+// 打包资源之前必须先把 web/ 同步过去。
+// 用 Variant API 的 generated source directory：任务依赖由 AGP 自动接上，
+// 不用自己去猜该挂到哪个 merge*Assets 上（AGP 的任务名会变）。
+androidComponents {
+  onVariants { variant ->
+    variant.sources.assets?.addGeneratedSourceDirectory(syncWebAssets) { it.outputDir }
+  }
 }
 
 // 让 JVM 单测里的 OkHttp 真的能出网 —— 调试「爬课表 / 拉校历」全靠这个。

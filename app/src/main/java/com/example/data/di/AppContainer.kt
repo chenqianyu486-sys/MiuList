@@ -25,6 +25,7 @@ import com.example.data.source.weather.WeatherCache
 import com.example.data.source.weather.WeatherService
 import com.example.data.security.SecureAccountStorage
 import com.example.data.sync.ScheduleSyncManager
+import com.example.data.sync.web.WebSyncService
 import com.example.data.transfer.ScheduleExportService
 import com.example.data.transfer.ScheduleImportService
 import com.example.data.validate.ScheduleBundleValidator
@@ -209,6 +210,17 @@ class AppContainer(context: Context) {
             secureStorage = secureAccountStorage,
             examRepo = examRepository
         )
+    }
+
+    /**
+     * 局域网同步服务。**手机是主机**：它持有数据，网页端通过扫码配对后连上来。
+     *
+     * 放在容器里而不是每个界面各建一个，是因为**服务必须活得比界面久** ——
+     * 用户在「网页同步」弹层里开了服务，然后去别的页面看一眼，
+     * 服务不该跟着弹层一起没了。
+     */
+    val webSyncService: WebSyncService by lazy {
+        WebSyncService(appContext, this)
     }
 
     companion object {

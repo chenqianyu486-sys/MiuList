@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -110,6 +111,7 @@ import com.example.ui.components.TaskCategoryManageDialog
 import com.example.ui.components.TaskEditorSheet
 import com.example.ui.components.TaskRulesDialog
 import com.example.ui.components.WallpaperSettingDialog
+import com.example.ui.components.WebSyncDialog
 import com.example.ui.components.WeekPickerDialog
 import com.example.ui.screens.ChecklistScreen
 import com.example.ui.screens.DashboardScreen
@@ -129,6 +131,11 @@ import com.example.ui.theme.scaledWithText
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.MainViewModelFactory
 import com.example.ui.viewmodel.NavigationTab
+import com.example.ui.viewmodel.WebSyncUiState
+import com.example.ui.viewmodel.WebSyncViewModel
+import com.example.ui.viewmodel.WebSyncViewModelFactory
+import com.example.data.sync.web.WebSyncApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
 
@@ -140,14 +147,56 @@ class MainActivity : ComponentActivity() {
         MainViewModelFactory(container)
     }
 
+    /**
+     * 「网页同步」那一屏的状态。
+     *
+     * 单独一个 ViewModel：服务要活得比这一屏久（用户关掉弹层，网页端还在连着），
+     * 而主 ViewModel 的状态机已经够大了，不该再塞这一摊。
+     */
+    private val webSyncViewModel: WebSyncViewModel by viewModels {
+        WebSyncViewModelFactory((application as MiuListApplication).container)
+    }
+
+    /** 深链带回来的配对码，等界面把它显示出来。 */
+    private var pendingPairingCode: String? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handlePairingIntent(intent)
         setContent {
             MyApplicationTheme {
-                MainApp(viewModel = viewModel)
+                MainApp(viewModel = viewModel, webSyncViewModel = webSyncViewModel)
             }
         }
+    }
+
+    /**
+     * 局域网配对的深链：`miulist://pair?v=3&s=<secret>&r=<requestId>`。
+     *
+     * 走深链而不是让网页端直接调接口，是因为**授权必须发生在手机上**：
+     * 局域网里任何设备都能访问这个服务，光有配对码不构成授权。
+     *
+     * `s` 是网页端本地生成的 32 字节 secret —— 它**从来没有经过网络**，
+     * 只走「二维码 → 手机相机」这条视觉通道（见 `PairingStore` 的说明）。
+     *
+     * 这里**只把码记下来**，批准与否由用户在界面上点 ——
+     * 收到深链就自动批准，等于把门开着。
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handlePairingIntent(intent)
+    }
+
+    private fun handlePairingIntent(intent: Intent?) {
+        val data = intent?.data ?: return
+        if (data.scheme != WebSyncApi.DEEP_LINK_SCHEME) return
+        if (data.host != "pair") return
+        val secret = data.getQueryParameter("s")?.trim().orEmpty()
+        val requestId = data.getQueryParameter("r")?.trim().orEmpty()
+        if (secret.isEmpty() || requestId.isEmpty()) return
+        pendingPairingCode = requestId
+        webSyncViewModel.offerPairing(requestId, secret)
     }
 }
 
@@ -496,7 +545,7 @@ private fun TopBarAction(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainApp(viewModel: MainViewModel) {
+fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -531,6 +580,23 @@ fun MainApp(viewModel: MainViewModel) {
 
     // 顶栏抽屉的开关。和搜索态一样是纯界面开关，不进 ViewModel。
     var moreDrawerVisible by remember { mutableStateOf(false) }
+
+    // 「网页同步」弹层的开关。深链带回来一个配对码时也要把它顶开 ——
+    // 用户扫完码回到 App，必须**立刻看到**「允许这台设备连接吗」。
+    var webSyncVisible by remember { mutableStateOf(false) }
+    val webSyncState by (webSyncViewModel?.uiState
+        ?: remember { MutableStateFlow(WebSyncUiState()) }
+    ).collectAsStateWithLifecycle()
+
+    LaunchedEffect(webSyncState.pendingPairing) {
+        if (webSyncState.pendingPairing) webSyncVisible = true
+    }
+    LaunchedEffect(webSyncState.message) {
+        webSyncState.message?.let {
+            snackbarHostState.showSnackbar(it)
+            webSyncViewModel?.consumeMessage()
+        }
+    }
 
     // 抽屉盖住大半屏时浮岛还浮在上面会很怪：它是「去哪一页」的入口，
     // 而抽屉里的设置才是此刻要去的地方。让它跟着抽屉一起收掉。
@@ -816,6 +882,12 @@ fun MainApp(viewModel: MainViewModel) {
             onOpenAddCourse = { viewModel.openAddCourseDialog() },
             onEditCourse = { viewModel.openEditCourseDialog(it) },
             onDeleteCourse = { viewModel.confirmDeleteCourse(it) },
+            // 「网页同步」是叠在抽屉之上的第二层：不收抽屉，
+            // 关掉弹层回到抽屉，接着还能点下一行。
+            onOpenWebSync = {
+                webSyncViewModel?.refresh()
+                webSyncVisible = true
+            },
             // 「设置」是切页不是叠层：切页由 LaunchedEffect(currentTab) 统一收抽屉。
             //
             // 但**已经在设置页上时**（从设置页打开抽屉再点「设置」）要自己收：
@@ -1135,6 +1207,28 @@ fun MainApp(viewModel: MainViewModel) {
                 totalWeeks = state.totalWeeks,
                 onDismiss = { viewModel.closeWeekPicker() },
                 onSelectWeek = { viewModel.selectWeek(it) }
+            )
+        }
+
+        // 网页同步。放在 Snackbar **之前**：Snackbar 要画在它上面，
+        // 否则「已允许，网页端会自己连上」那句话会被弹层挡住。
+        if (webSyncVisible && webSyncViewModel != null) {
+            WebSyncDialog(
+                running = webSyncState.running,
+                addresses = webSyncState.addresses,
+                port = webSyncState.port,
+                pairedDevices = webSyncState.pairedDevices,
+                pendingPairing = webSyncState.pendingPairing,
+                hasPasscode = webSyncState.hasPasscode,
+                localLatestEditAt = webSyncState.localLatestEditAt,
+                remoteLatestEditAt = webSyncState.remoteLatestEditAt,
+                onToggleService = { enabled -> webSyncViewModel.setServiceEnabled(enabled) },
+                onApprove = { webSyncViewModel.approve() },
+                onDeny = { webSyncViewModel.deny() },
+                onRevoke = { deviceId -> webSyncViewModel.revoke(deviceId) },
+                onRequestSync = { direction -> webSyncViewModel.requestSync(direction) },
+                onSetPasscode = { passcode -> webSyncViewModel.setPasscode(passcode) },
+                onDismiss = { webSyncVisible = false }
             )
         }
 

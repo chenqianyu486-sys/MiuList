@@ -47,6 +47,18 @@ class TaskRepository(private val taskDao: TaskDao) {
 
     suspend fun deleteTask(task: TaskEntity) = taskDao.deleteTask(task)
 
+    /**
+     * 按跨设备稳定身份找一条待办。
+     *
+     * **同步写回的入口。** 网页端只认 `syncUid`（它不知道也不该知道本机自增 id），
+     * 所以「改哪一条」只能用这个查。
+     *
+     * 空串不查：空串是「还没补齐 uid」的占位值，可能命中多行，
+     * 拿到任意一条都是错的匹配。
+     */
+    suspend fun getBySyncUid(syncUid: String): TaskEntity? =
+        if (syncUid.isBlank()) null else taskDao.getBySyncUid(syncUid)
+
     suspend fun countTasks(): Int = taskDao.countTasks()
 
     suspend fun toggleTaskComplete(id: Long, currentStatus: Boolean) {

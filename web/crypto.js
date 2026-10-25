@@ -1,0 +1,310 @@
+/* 浏览器端的密码学原语（纯 JS，零依赖）。
+ *
+ * ## 为什么不用 WebCrypto
+ *
+ * `crypto.subtle` **只在 secure context 里存在**（https 或 localhost）。
+ * 我们的网页端是手机在局域网里用 http://192.168.x.x 直接发的，
+ * 那个页面**不是 secure context** —— `crypto.subtle` 是 undefined。
+ * `crypto.getRandomValues` 不受限（非 secure context 也有），所以随机数用它。
+ *
+ * 于是 HMAC 与 ChaCha20 只能自己实现。
+ *
+ * ## 为什么是 ChaCha20 而不是 AES-GCM
+ *
+ * - ChaCha20 的核心是 4 个加法/异或/旋转，**没有查表**，纯 JS 写起来短，
+ *   而且可以用 **RFC 8439 的官方测试向量**逐位验证；
+ * - AES 除了轮函数还得搭 GHASH，JavaScript 里没有 64 位运算，
+ *   GHASH 只能用 BigInt 或拆成 32 位对，慢且更容易写错；
+ * - 两端（手机用 Kotlin、网页用 JS）能实现**同一份** ChaCha20，
+ *   不需要挑一个「Java 有、浏览器没有」的算法。
+ *
+ * 完整性与机密性分开做（encrypt-then-MAC）：
+ * ChaCha20 是流密码，只管机密性；防篡改交给 HMAC-SHA256。
+ *
+ * ⚠️ 这是**自定义组合**，不是标准 AEAD。它的安全性依赖
+ * 「先加密再认证」这个顺序和两把独立的密钥 —— 见 [deriveKeys]。
+ */
+
+/* ── 字节工具 ──────────────────────────────────────────────── */
+
+export function utf8Bytes(str) {
+  return new TextEncoder().encode(str);
+}
+
+export function toBase64(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+export function fromBase64(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/** URL 安全的 base64（无 padding）。配对码与 nonce 都用它。 */
+export function toBase64Url(bytes) {
+  return toBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+export function fromBase64Url(s) {
+  let b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4) b64 += '=';
+  return fromBase64(b64);
+}
+
+export function concatBytes(...parts) {
+  let len = 0;
+  for (const p of parts) len += p.length;
+  const out = new Uint8Array(len);
+  let off = 0;
+  for (const p of parts) { out.set(p, off); off += p.length; }
+  return out;
+}
+
+/**
+ * 随机字节。
+ *
+ * **必须分块取**：`getRandomValues` 单次最多 65536 字节，
+ * 超了会抛 `QuotaExceededError`（浏览器与 Node 都一样）。
+ * 这里按 64KB 一块循环，调用方要多少给多少。
+ */
+export function randomBytes(n) {
+  const out = new Uint8Array(n);
+  const CHUNK = 65536;
+  for (let off = 0; off < n; off += CHUNK) {
+    const len = Math.min(CHUNK, n - off);
+    const tmp = new Uint8Array(len);
+    // getRandomValues 在非 secure context 里也可用（受限的只有 crypto.subtle）。
+    crypto.getRandomValues(tmp);
+    out.set(tmp, off);
+  }
+  return out;
+}
+
+/* ── SHA-256 ───────────────────────────────────────────────── */
+
+const K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+
+/** SHA-256（同步）。输入输出都是字节。 */
+export function sha256(message) {
+  const h = new Uint32Array([
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  ]);
+
+  // 填充：0x80 + 若干 0 + 8 字节长度（大端）。
+  const bitLenHi = Math.floor((message.length * 8) / 0x100000000);
+  const bitLenLo = (message.length * 8) >>> 0;
+  const withPad = new Uint8Array(((message.length + 9 + 63) >> 6) << 6);
+  withPad.set(message);
+  withPad[message.length] = 0x80;
+  const dv = new DataView(withPad.buffer);
+  dv.setUint32(withPad.length - 8, bitLenHi, false);
+  dv.setUint32(withPad.length - 4, bitLenLo, false);
+
+  const w = new Uint32Array(64);
+  for (let off = 0; off < withPad.length; off += 64) {
+    for (let i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4, false);
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+      const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, hh] = h;
+    for (let i = 0; i < 64; i++) {
+      const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const t1 = (hh + S1 + ch + K[i] + w[i]) >>> 0;
+      const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const t2 = (S0 + maj) >>> 0;
+      hh = g; g = f; f = e;
+      e = (d + t1) >>> 0;
+      d = c; c = b; b = a;
+      a = (t1 + t2) >>> 0;
+    }
+    h[0] = (h[0] + a) >>> 0; h[1] = (h[1] + b) >>> 0;
+    h[2] = (h[2] + c) >>> 0; h[3] = (h[3] + d) >>> 0;
+    h[4] = (h[4] + e) >>> 0; h[5] = (h[5] + f) >>> 0;
+    h[6] = (h[6] + g) >>> 0; h[7] = (h[7] + hh) >>> 0;
+  }
+
+  const out = new Uint8Array(32);
+  const outView = new DataView(out.buffer);
+  for (let i = 0; i < 8; i++) outView.setUint32(i * 4, h[i], false);
+  return out;
+}
+
+/* ── HMAC-SHA256 ───────────────────────────────────────────── */
+
+/** HMAC-SHA256。key 可以是任意长度。 */
+export function hmacSha256(key, message) {
+  const BLOCK = 64;
+  let k = key;
+  if (k.length > BLOCK) k = sha256(k);
+  const padded = new Uint8Array(BLOCK);
+  padded.set(k);
+  const ipad = new Uint8Array(BLOCK);
+  const opad = new Uint8Array(BLOCK);
+  for (let i = 0; i < BLOCK; i++) {
+    ipad[i] = padded[i] ^ 0x36;
+    opad[i] = padded[i] ^ 0x5c;
+  }
+  const inner = sha256(concatBytes(ipad, message));
+  return sha256(concatBytes(opad, inner));
+}
+
+/* ── ChaCha20 ──────────────────────────────────────────────── */
+
+function rotl32(v, n) {
+  return ((v << n) | (v >>> (32 - n))) >>> 0;
+}
+
+function quarterRound(x, a, b, c, d) {
+  x[a] = (x[a] + x[b]) >>> 0; x[d] = rotl32(x[d] ^ x[a], 16);
+  x[c] = (x[c] + x[d]) >>> 0; x[b] = rotl32(x[b] ^ x[c], 12);
+  x[a] = (x[a] + x[b]) >>> 0; x[d] = rotl32(x[d] ^ x[a], 8);
+  x[c] = (x[c] + x[d]) >>> 0; x[b] = rotl32(x[b] ^ x[c], 7);
+}
+
+/** ChaCha20 密钥流块（RFC 8439 §2.3）。 */
+function chacha20Block(key, counter, nonce) {
+  const state = new Uint32Array(16);
+  state[0] = 0x61707865; state[1] = 0x3320646e; state[2] = 0x79622d32; state[3] = 0x6b206574;
+  for (let i = 0; i < 8; i++) {
+    state[4 + i] = (key[i * 4] | (key[i * 4 + 1] << 8) | (key[i * 4 + 2] << 16) | (key[i * 4 + 3] << 24)) >>> 0;
+  }
+  state[12] = counter >>> 0;
+  for (let i = 0; i < 3; i++) {
+    state[13 + i] = (nonce[i * 4] | (nonce[i * 4 + 1] << 8) | (nonce[i * 4 + 2] << 16) | (nonce[i * 4 + 3] << 24)) >>> 0;
+  }
+  const x = state.slice();
+  for (let i = 0; i < 10; i++) {
+    quarterRound(x, 0, 4, 8, 12);
+    quarterRound(x, 1, 5, 9, 13);
+    quarterRound(x, 2, 6, 10, 14);
+    quarterRound(x, 3, 7, 11, 15);
+    quarterRound(x, 0, 5, 10, 15);
+    quarterRound(x, 1, 6, 11, 12);
+    quarterRound(x, 2, 7, 8, 13);
+    quarterRound(x, 3, 4, 9, 14);
+  }
+  const out = new Uint32Array(16);
+  for (let i = 0; i < 16; i++) out[i] = (x[i] + state[i]) >>> 0;
+  return out;
+}
+
+/**
+ * ChaCha20 流密码。
+ *
+ * @param {Uint8Array} key 32 字节
+ * @param {Uint8Array} nonce 12 字节
+ * @param {number} counter 起始块计数
+ * @param {Uint8Array} data 明文或密文
+ * @returns {Uint8Array} 与 data 等长（异或密钥流）
+ */
+export function chacha20(key, nonce, counter, data) {
+  if (key.length !== 32) throw new Error('ChaCha20 密钥必须是 32 字节');
+  if (nonce.length !== 12) throw new Error('ChaCha20 nonce 必须是 12 字节');
+  const out = new Uint8Array(data.length);
+  let offset = 0;
+  let c = counter >>> 0;
+  while (offset < data.length) {
+    const block = chacha20Block(key, c, nonce);
+    c = (c + 1) >>> 0;
+    const take = Math.min(64, data.length - offset);
+    for (let i = 0; i < take; i++) {
+      out[offset + i] = data[offset + i] ^ (block[i >> 2] >>> ((i & 3) * 8)) & 0xff;
+    }
+    offset += take;
+  }
+  return out;
+}
+
+/* ── 组合：加密 + 认证（encrypt-then-MAC） ─────────────────── */
+
+/**
+ * 从配对 secret 派生两把子密钥。
+ *
+ * - `kEnc` —— ChaCha20 密钥（32 字节）
+ * - `kAuth` —— HMAC 密钥（认证请求用）
+ * - `kMac` —— 密文的 MAC 密钥（**必须与 kEnc 不同**）
+ *
+ * **为什么不用 kEnc 直接当 MAC 密钥**：流密码的密钥复用会毁掉整个结构
+ * （用它认证等于用同一把钥匙既锁又签）。分开派生是必须的。
+ *
+ * 标签（label）分开是为了让同一把 secret 在不同用途上不产生相同的子密钥。
+ *
+ * @param {Uint8Array} secret 配对 secret（32 字节）
+ * @param {string} passcode 同步密码（可空）。**它会先混进 secret** ——
+ *   于是「二维码被别人拍到了」不足以解密，还得知道这个密码。
+ */
+export function deriveKeys(secret, passcode = '') {
+  const effective = passcode
+    ? hmacSha256(secret, utf8Bytes('miulist-pw-v3' + passcode))
+    : secret;
+  const master = hmacSha256(effective, utf8Bytes('miulist-master-v3'));
+  return {
+    master,
+    kEnc: hmacSha256(master, utf8Bytes('miulist-enc-v3')),
+    kAuth: hmacSha256(master, utf8Bytes('miulist-auth-v3')),
+    kMac: hmacSha256(master, utf8Bytes('miulist-mac-v3')),
+  };
+}
+
+/**
+ * 加密一段负载。
+ *
+ * @returns {Uint8Array} nonce(12) ‖ 密文 ‖ MAC(32)
+ */
+export function seal(keys, plaintext) {
+  const nonce = randomBytes(12);
+  const ciphertext = chacha20(keys.kEnc, nonce, 1, plaintext);
+  const mac = hmacSha256(keys.kMac, concatBytes(nonce, ciphertext));
+  return concatBytes(nonce, ciphertext, mac);
+}
+
+/**
+ * 验签并解密。MAC 不对就抛错 —— **先验后解**，不要反过来。
+ */
+export function open(keys, sealed) {
+  if (sealed.length < 12 + 32) throw new Error('密文太短');
+  const nonce = sealed.subarray(0, 12);
+  const ciphertext = sealed.subarray(12, sealed.length - 32);
+  const mac = sealed.subarray(sealed.length - 32);
+  const expect = hmacSha256(keys.kMac, concatBytes(nonce, ciphertext));
+  let diff = 0;
+  for (let i = 0; i < 32; i++) diff |= mac[i] ^ expect[i];
+  if (diff !== 0) throw new Error('校验失败：数据被改过');
+  return chacha20(keys.kEnc, nonce, 1, ciphertext);
+}
+
+/* ── 请求签名 ──────────────────────────────────────────────── */
+
+/**
+ * 签名一次请求。
+ *
+ * 覆盖：协议版本、方法、路径、时间戳、nonce、请求体摘要。
+ * **请求体也要进签名** —— 否则抓包的人可以把密文换成另一段密文。
+ */
+export function signRequest(keys, { method, path, ts, nonce, body }) {
+  const bodyHash = sha256(body || new Uint8Array(0));
+  const canonical = utf8Bytes(
+    `v3\n${method.toUpperCase()}\n${path}\n${ts}\n${nonce}\n${toBase64Url(bodyHash)}`
+  );
+  return toBase64Url(hmacSha256(keys.kAuth, canonical));
+}
