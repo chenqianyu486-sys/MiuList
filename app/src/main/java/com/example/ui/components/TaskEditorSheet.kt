@@ -346,7 +346,7 @@ fun TaskEditorSheet(
                 PlainTextInput(
                     value = description,
                     onValueChange = { description = it },
-                    placeholder = "点击编辑备注",
+                    placeholder = "（点击编辑备注）",
                     textStyle = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 14.sp,
                         lineHeight = 21.sp,

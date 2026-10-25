@@ -32,8 +32,8 @@ class TaskDisplayTitleTest {
     @Test
     fun `the bracketed course name of the new format is cut`() {
         assertEquals(
-            "第3周（周三）预习",
-            taskDisplayTitle(task("【高等数学】第3周（周三）预习"))
+            "第3周周三预习",
+            taskDisplayTitle(task("【高等数学】第3周周三预习"))
         )
     }
 

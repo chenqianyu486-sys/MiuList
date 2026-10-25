@@ -232,13 +232,15 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
     /**
      * 自动生成待办的**名称**。
      *
-     * 形状：`【课程名】第N周（周几）作业`。
+     * 形状：`【课程名】第N周周几作业`。
      *
      * - **课程名放进【】**：名字里自带「哪门课」，于是这条待办被单独拎出来的时候
      *   （搜索结果、待办详情、导出、通知）仍然说得清自己是谁的活儿。
      * - **周几只在按节生成时才有**：「每次课」这条待办对应的就是某一节课，
      *   落在周几是它的一部分；「每周一次」覆盖的是整周，写上某一天反而会误导
      *   ——读起来像只有那天要交。
+     * - **周几不加括号**：一个名字里混两种括号（【】和（））看着像两段拼起来的，
+     *   而它本来就是一件事。去掉之后整条名字是一串连续的字。
      *
      * 卡片上显示的名字会把 `【课程名】` 裁掉（见 `taskDisplayTitle`）：
      * 卡片的 meta 行里本来就写着课程名，标题再带一遍是同一句话说两遍。
@@ -255,7 +257,7 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
             TaskType.LAB_REPORT -> "实验报告"
             else -> "作业"
         }
-        val weekday = if (rule.perClass) "（${getDayName(anchor.dayOfWeek)}）" else ""
+        val weekday = if (rule.perClass) getDayName(anchor.dayOfWeek) else ""
         return "【${course.name}】第${week}周${weekday}${typeWord}"
     }
 

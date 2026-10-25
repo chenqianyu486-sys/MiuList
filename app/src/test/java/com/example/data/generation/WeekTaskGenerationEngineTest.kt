@@ -220,7 +220,7 @@ class WeekTaskGenerationEngineTest {
         assertEquals("【高等数学】第3周作业", out.first { it.taskType == TaskType.POST_CLASS.name }.title)
         assertEquals("【高等数学】第3周实验报告", out.first { it.taskType == TaskType.LAB_REPORT.name }.title)
         // 预习默认「每次课」，对应的是某一节课 —— 落在周几是它的一部分。
-        assertEquals("【高等数学】第3周（周一）预习", out.first { it.taskType == TaskType.PRE_STUDY.name }.title)
+        assertEquals("【高等数学】第3周周一预习", out.first { it.taskType == TaskType.PRE_STUDY.name }.title)
     }
 
     @Test
@@ -236,7 +236,7 @@ class WeekTaskGenerationEngineTest {
         )
         assertEquals(
             "按节生成的作业要带周几",
-            "【高等数学】第3周（周三）作业",
+            "【高等数学】第3周周三作业",
             perClass.first { it.taskType == TaskType.POST_CLASS.name }.title
         )
 
@@ -470,8 +470,8 @@ class WeekTaskGenerationEngineTest {
         assertEquals(setOf(3, 4), prestudy.map { it.week }.toSet())
 
         // 标题里的周次要跟着各自的范围走，否则下周那条会写成「第3周预习」。
-        assertEquals("【高等数学】第3周（周三）预习", prestudy.first { it.week == 3 }.title)
-        assertEquals("【高等数学】第4周（周三）预习", prestudy.first { it.week == 4 }.title)
+        assertEquals("【高等数学】第3周周三预习", prestudy.first { it.week == 3 }.title)
+        assertEquals("【高等数学】第4周周三预习", prestudy.first { it.week == 4 }.title)
     }
 
     @Test
