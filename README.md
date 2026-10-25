@@ -6,7 +6,7 @@
 基于课程表的自动化轻量作业待办软件，能够根据每日课程智能联动生成预习与课后作业待办，提供分类清单与日程表双重视图。
 
 - 🔗 **开源仓库**：[https://github.com/chenqianyu486-sys/MiuList](https://github.com/chenqianyu486-sys/MiuList)
-- 📥 **下载安装**：见 [Releases](https://github.com/chenqianyu486-sys/MiuList/releases) 页面，下载 `MiuList-v1.0.3.apk` 直接安装（Android 7.0 / API 24 及以上）。当前为**测试版**，请先在测试机上安装。
+- 📥 **下载安装**：见 [Releases](https://github.com/chenqianyu486-sys/MiuList/releases) 页面，下载 `MiuList-v1.0.4.apk` 直接安装（Android 7.0 / API 24 及以上）。当前为**测试版**，请先在测试机上安装。
 
 ## ✨ 特性
 
