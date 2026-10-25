@@ -122,9 +122,7 @@ import com.example.ui.theme.rememberCappedFontDensity
 import com.example.ui.theme.TimetableMaxFontScale
 import com.example.ui.viewmodel.MainUiState
 import com.example.ui.viewmodel.ScheduleViewMode
-import java.time.ZoneId
 import java.util.Calendar
-import java.util.TimeZone
 
 @Composable
 fun ScheduleScreen(
