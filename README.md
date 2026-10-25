@@ -8,7 +8,7 @@
 基于课程表的自动化轻量作业待办软件：把每天的课程自动转成预习、复习与课后作业待办，
 用**清单**和**日程表**两个视角呈现。
 
-- 📥 **下载安装**：[Releases](https://github.com/chenqianyu486-sys/MiuList/releases) 页面下载 `MiuList-v1.0.4.apk`（Android 7.0 / API 24 及以上）
+- 📥 **下载安装**：[Releases](https://github.com/chenqianyu486-sys/MiuList/releases) 页面下载 `MiuList-v1.0.5.apk`（Android 7.0 / API 24 及以上）
 - 🧪 当前为**测试版**，功能仍在调整，遇到问题请提到 [Issues](https://github.com/chenqianyu486-sys/MiuList/issues)
 - 🪞 国内网络不稳时可走 [Gitee 镜像](https://gitee.com/zjuchenqianyu/MiuList)
 
@@ -54,7 +54,7 @@
 
 ## 📲 安装
 
-1. 打开 [Releases](https://github.com/chenqianyu486-sys/MiuList/releases) 页面，下载 `MiuList-v1.0.4.apk`。
+1. 打开 [Releases](https://github.com/chenqianyu486-sys/MiuList/releases) 页面，下载 `MiuList-v1.0.5.apk`。
 2. 用手机安装（需允许「安装未知来源应用」）。
 3. 打开 App：浙大同学填学号密码登录统一身份认证即可同步课表与考试；其他学校手动添加课程并填写学期校历即可。
 
