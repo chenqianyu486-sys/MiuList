@@ -1,10 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12 及以上的备份与设备迁移规则：**全部排除**。
+
+  两个 section 都要排：
+  - `cloud-backup`：Auto Backup 上传到 Google 账号；
+  - `device-transfer`：设备到设备的一键迁移（换机）。
+
+  排掉的是什么：课表、考场与座位号、待办与作业标题、用户挑的壁纸照片，
+  以及学号密码的密文。用户没有一条是打算公开的，而「用户没主动上传」
+  与「数据离机」不是一回事。
+
+  **代价要知道**：换机、重装之后系统不会自动把数据搬过来。
+  跨设备靠 App 自带的「导出快照 / 导入快照」（JSON 文件，用户自己选位置）。
+  这是有意的取舍：要的是「数据默认不离开设备」，而不是「数据自动跟着走」。
+
+  凭据安全：即便将来有人收窄上面的排除范围，这一行也不许删。
+-->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- 凭据安全：绝不将硬件加密密钥派生的凭据配置上传到云端备份 -->
-        <exclude domain="sharedpref" path="miulist_secure_credentials.xml"/>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="sharedpref" path="miulist_secure_credentials.xml" />
     </cloud-backup>
     <device-transfer>
-        <exclude domain="sharedpref" path="miulist_secure_credentials.xml"/>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="sharedpref" path="miulist_secure_credentials.xml" />
     </device-transfer>
 </data-extraction-rules>

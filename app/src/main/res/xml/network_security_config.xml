@@ -1,19 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  明文 HTTP 只对浙大课表接口这一个域名放行。
+  传输安全基线：**全 App 不允许明文 HTTP**。
 
-  为什么需要：appservice.zju.edu.cn 是 zju-ical 一直用的取课表地址，
-  它**只有 HTTP**（实测 https://appservice.zju.edu.cn 的 TLS 校验直接失败），
-  而 targetSdk 28 以上的默认策略是全面禁明文。
+  为什么曾经放行过 appservice.zju.edu.cn：
+  那时候取课表打的是 `http://appservice.zju.edu.cn/...`，而该域名**只有 HTTP**
+  （实测 https://appservice.zju.edu.cn 的 TLS 校验直接失败），targetSdk 28 以上的
+  默认策略是全面禁明文，于是只能单开一个域名例外。
 
-  为什么只放行这一个域名：CAS 登录走的是 https://zjuam.zju.edu.cn，公共校历配置
-  走 https://raw.githubusercontent.com，都不需要明文。全局
-  cleartextTrafficPermitted="true" 会让所有请求都失去传输保护，
-  不值得为省事开这个口子。
+  为什么现在不需要了：
+  那个接口**已经退役**（认证正常时固定约 10 秒后回 504，接口随教务系统迁移废弃），
+  现在的课表与考试全部走 `https://zdbk.zju.edu.cn`，登录走 `https://zjuam.zju.edu.cn`，
+  校历与天气走 HTTPS 的静态托管。**代码里已经没有任何一处请求打向 appservice**，
+  那个例外纯属历史残留 —— 而它留着的代价是：这一整个域名（含将来可能新增的子域）
+  在本 App 里永久失去传输保护。
+
+  所以这里收回它，`base-config` 一律禁明文。
+  真要再引入只支持 HTTP 的第三方接口时，先问一句「能不能走 HTTPS 代理/网关」，
+  而不是再往这里加一行域名。
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">appservice.zju.edu.cn</domain>
-    </domain-config>
 </network-security-config>

@@ -70,6 +70,7 @@ import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
+import com.example.ui.security.SecureWindowEffect
 import com.example.ui.theme.GlassTintNeutral
 import com.example.ui.theme.LocalEffectiveFontScale
 import com.example.ui.theme.LocalLayoutScale
@@ -259,7 +260,21 @@ fun GlassOverlayHost(
     scrimAlpha: Float = GlassOverlayScrimAlpha,
     horizontalPadding: Dp = 40.dp,
     alignment: Alignment = Alignment.Center,
+    /**
+     * 弹层挂着期间禁止截屏 / 录屏（`FLAG_SECURE`）。
+     *
+     * **只有含密码的弹层才该打开它。** 开着的时候整个窗口都不能被截图，
+     * 所以「给课表截张图」这种正常需求不受影响的前提是：它只在那两个
+     * 弹层开着的时候生效。
+     *
+     * 开关本身的语义见 [com.example.ui.security.SecureWindowEffect]。
+     */
+    secure: Boolean = false,
 ) {
+    // 标志加在**这个弹层所在的窗口**上：同窗口 overlay 就是 Activity 窗口，
+    // 独立 Dialog 窗口则是它自己那个（由 SecureWindowEffect 内部判断）。
+    SecureWindowEffect(enabled = secure)
+
     val coroutineScope = rememberCoroutineScope()
     var isDismissing by remember { mutableStateOf(false) }
     val enterAnimatable = remember { Animatable(0f) }

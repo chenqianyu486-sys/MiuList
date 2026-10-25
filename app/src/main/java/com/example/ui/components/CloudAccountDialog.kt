@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -46,6 +47,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -110,6 +113,8 @@ fun CloudAccountDialog(
 
     GlassOverlayHost(
         onDismissRequest = onDismiss,
+        // 弹层里有密码框：挂着期间整个窗口禁止截屏/录屏。
+        secure = true,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -316,6 +321,13 @@ fun CloudAccountDialog(
                         label = { Text("学号", fontSize = 12.sp) },
                         singleLine = true,
                         enabled = !isSyncing,
+                        // 学号是纯数字：关掉自动更正与首字母大写，
+                        // 否则输入法可能把相似字符悄悄替换而用户看不出来。
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            autoCorrectEnabled = false,
+                            capitalization = KeyboardCapitalization.None
+                        ),
                         modifier = Modifier.fillMaxWidth().testTag("cloud_student_id_input"),
                         shape = RoundedCornerShape(12.dp)
                     )
@@ -327,6 +339,12 @@ fun CloudAccountDialog(
                         singleLine = true,
                         enabled = !isSyncing,
                         visualTransformation = PasswordVisualTransformation(),
+                        // 密码不参与自动更正：不纠错就不会把密码存进输入法的学习词库。
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            autoCorrectEnabled = false,
+                            capitalization = KeyboardCapitalization.None
+                        ),
                         modifier = Modifier.fillMaxWidth().testTag("cloud_password_input"),
                         shape = RoundedCornerShape(12.dp)
                     )

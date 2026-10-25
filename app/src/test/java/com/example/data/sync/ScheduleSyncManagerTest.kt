@@ -46,7 +46,11 @@ class ScheduleSyncManagerTest {
     fun setup() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         container = AppContainer(context)
-        storage = SecureAccountStorage(context, prefName = "test_sync_manager_prefs")
+        storage = SecureAccountStorage(
+            context,
+            prefName = "test_sync_manager_prefs",
+            masterKeyProvider = SecureAccountStorage.softwareKeyProvider()
+        )
         storage.clearCredentials()
         container.courseRepository.clearAllCourses()
         // clearAllCourses 只清课表、不动待办（导入不再吞待办），待办得显式清。
@@ -394,7 +398,8 @@ class ScheduleSyncManagerTest {
         // 用一个「保存凭据就炸」的存储替身，把异常挤到 commit 之后。
         val explodingStorage = object : SecureAccountStorage(
             ApplicationProvider.getApplicationContext(),
-            "test_post_commit_prefs"
+            "test_post_commit_prefs",
+            SecureAccountStorage.softwareKeyProvider()
         ) {
             override fun saveCredentials(studentId: String, password: String, remember: Boolean) {
                 throw IllegalStateException("KeyStore 不可用")

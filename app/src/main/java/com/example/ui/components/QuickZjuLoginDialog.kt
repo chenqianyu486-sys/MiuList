@@ -23,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -44,6 +45,9 @@ fun QuickZjuLoginDialog(
 
     GlassOverlayHost(
         onDismissRequest = onDismiss,
+        // 弹层里有密码框：挂着期间整个窗口禁止截屏/录屏，
+        // 免得密码明文进到截图、相册或最近任务缩略图里。
+        secure = true,
         shape = RoundedCornerShape(22.dp),
         title = {
             Text(
@@ -70,7 +74,13 @@ fun QuickZjuLoginDialog(
                         Icon(imageVector = Icons.Outlined.Person, contentDescription = null)
                     },
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Number,
+                        // 学号是纯数字：关掉自动更正与首字母大写，
+                        // 否则输入法可能把「3l90l234」悄悄改成「31901234」而用户看不出来。
+                        autoCorrectEnabled = false,
+                        capitalization = KeyboardCapitalization.None
+                    ),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -86,7 +96,13 @@ fun QuickZjuLoginDialog(
                     },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        // 密码不参与自动更正：不纠错就不会把「A」改成别的，
+                        // 也不会把密码存进输入法的学习词库。
+                        autoCorrectEnabled = false,
+                        capitalization = KeyboardCapitalization.None
+                    ),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
