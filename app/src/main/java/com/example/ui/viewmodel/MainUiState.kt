@@ -292,13 +292,27 @@ data class MainUiState(
     val isOnboardingGuideOpen: Boolean = false,
 
     /**
-     * 引导当前第几步（0 起）。
+     * 引导当前停在**哪一步**。
+     *
+     * 记的是**目标**而不是序号：引导的步骤数会随「一键生成待办」这个开关变
+     * （关着时四步、开着时六步），序号在两套清单里指的不是同一步。
      *
      * 放在 state 里而不是引导组件的局部变量：组件可能被整体重建（配置变化、
      * 进程恢复），而「用户读到第几步」是这次引导的进度，不该在重建后从头再来。
      */
-    val onboardingStep: Int = 0,
+    val onboardingTarget: GuideTarget = GuideTarget.ZJU_SYNC,
 
+    /**
+     * 「一键生成待办」开没开。
+     *
+     * **默认关闭**：有些人更想要一个轻量的清单 —— 手动加待办，不碰任何规则。
+     * 关着时顶栏不摆 ✨，引导也不推他去配类别与规则。
+     *
+     * 它是一个**偏好**（落在 SharedPreferences 里），不是数据库派生的字段，
+     * 所以它不进 combine 那条流，只跟着 [_uiState] 走 —— 见
+     * `QuickGeneratePreference`。
+     */
+    val isQuickGenerateEnabled: Boolean = false,
     /**
      * 引导被送去某个功能了，正在等那个功能做完。
      *

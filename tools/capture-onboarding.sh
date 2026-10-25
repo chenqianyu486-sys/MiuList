@@ -16,11 +16,15 @@
 #
 # ## 每张抓什么
 #
+# 引导**走几步取决于「一键生成待办」开没开**，脚本从面板上读步数再决定怎么走：
+#
 # | 文件 | 内容 |
 # |------|------|
-# | 01_step1_sync … 07_step6_flip | 引导的六步，每步一张 |
+# | 01_step1_sync … 07_step6_flip | 引导的六步（这个功能**开着**时走的那套） |
 # | 05_step4_preview | 第 4 步点「预览待办」弹出的预览弹层 |
 # | 08_flip_result | 最后一步点「翻到背面」之后总览页那张卡翻到背面 |
+# | 01_step1_sync … 04_step4_flip | 引导的**四步**（这个功能**关着**时走的那套） |
+# | 05_flip_result | 同上，翻到背面之后 |
 #
 # ## 收尾
 #
@@ -193,6 +197,21 @@ open_guide() {
   sleep 2
 }
 
+# 引导一共几步。
+#
+# **取决于「一键生成待办」开没开**：关着是轻量四步
+# （同步课表 → 一键生成开关 → 壁纸 → 翻面），开着是完整六步。
+# 步数从面板上读（标题下面那行「第 N 步 / 共 M 步」），别写死 ——
+# 写死的话开关一改，这个脚本就拍错步数，还会在找不到「预览待办」时报一堆错。
+guide_total_steps() {
+  local tmp="$OUT_ROOT/.tmp_dump.xml"
+  dump_to "$tmp" || { echo 0; return 1; }
+  local n
+  n="$(grep -o '共 [0-9]* 步' "$tmp" 2>/dev/null | head -1 | sed -n 's/共 \([0-9]*\) 步/\1/p')"
+  rm -f "$tmp"
+  echo "${n:-0}"
+}
+
 capture_one() {
   local label=$1 size=$2 density=$3 font=$4
   OUT="$OUT_ROOT/$label"
@@ -210,33 +229,50 @@ capture_one() {
 
   # 引导的进度是**记在设备上**的（停在哪一步）。
   # 上一轮要是停在中途，这一轮打开的就不是第 1 步 —— 所以先打开一次再「跳过」
-  # （跳过会把步数归零），然后重新打开。
+  # （跳过会把进度清掉），然后重新打开。
   relaunch
   open_guide
   tap_label "跳过" >/dev/null 2>&1
   sleep 1
   open_guide
 
-  # 六步
-  shot 01_step1_sync
-  tap_label "下一步" >/dev/null 2>&1; shot 02_step2_category
-  tap_label "下一步" >/dev/null 2>&1; shot 03_step3_rules
-  tap_label "下一步" >/dev/null 2>&1; shot 04_step4_generate
+  # 几步取决于「一键生成待办」开没开：关着四步、开着六步。
+  local total
+  total="$(guide_total_steps)"
+  echo "  引导步数：$total"
 
-  # 第 4 步的「预览待办」→ 预览弹层（关掉它引导会自己接回来）
-  tap_label "预览待办" >/dev/null 2>&1
-  sleep 1
-  shot 05_step4_preview
-  tap_label "取消" >/dev/null 2>&1
-  sleep 1
+  if [ "$total" = "6" ]; then
+    # 完整六步（这个功能开着）
+    shot 01_step1_sync
+    tap_label "下一步" >/dev/null 2>&1; shot 02_step2_category
+    tap_label "下一步" >/dev/null 2>&1; shot 03_step3_rules
+    tap_label "下一步" >/dev/null 2>&1; shot 04_step4_generate
 
-  tap_label "下一步" >/dev/null 2>&1; shot 06_step5_wallpaper
-  tap_label "下一步" >/dev/null 2>&1; shot 07_step6_flip
+    # 第 4 步的「预览待办」→ 预览弹层（关掉它引导会自己接回来）
+    tap_label "预览待办" >/dev/null 2>&1
+    sleep 1
+    shot 05_step4_preview
+    tap_label "取消" >/dev/null 2>&1
+    sleep 1
+
+    tap_label "下一步" >/dev/null 2>&1; shot 06_step5_wallpaper
+    tap_label "下一步" >/dev/null 2>&1; shot 07_step6_flip
+  else
+    # 轻量四步（这个功能关着）：课程分类 / 联动规则 / 生成本周待办 三步不出现
+    shot 01_step1_sync
+    tap_label "下一步" >/dev/null 2>&1; shot 02_step2_toggle
+    tap_label "下一步" >/dev/null 2>&1; shot 03_step3_wallpaper
+    tap_label "下一步" >/dev/null 2>&1; shot 04_step4_flip
+  fi
 
   # 最后一步的「翻到背面」→ 总览页那张卡翻到背面
   tap_label "翻到背面" >/dev/null 2>&1
   sleep 3
-  shot 08_flip_result
+  if [ "$total" = "6" ]; then
+    shot 08_flip_result
+  else
+    shot 05_flip_result
+  fi
 
   echo "  抓到 $(ls "$OUT"/*.png 2>/dev/null | wc -l) 张"
 }

@@ -42,14 +42,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.ui.theme.TextSecondary
 import com.example.ui.viewmodel.GuideTarget
+import com.example.ui.viewmodel.resolveVisibleGuideTarget
+import com.example.ui.viewmodel.visibleGuideTargets
 
 /**
- * 引导的一步。
+ * 引导的每一步。
  *
  * [target] 是**行为契约**（见 [GuideTarget]），其余都是给人看的：
  * 图标、标题、按钮上那句话，以及可选的 [description]。
  *
- * ## [description]：多数步骤没有，两步有
+ * ## [description]：多数步骤没有，三步有
  *
  * 原来每一步下面还有一段解释（「用学号和密码登录浙大教务…」），全删了 ——
  * 标题已经把这一步要做什么说完了，那段解释讲的是**同一个事实**的另一种说法，
@@ -58,15 +60,17 @@ import com.example.ui.viewmodel.GuideTarget
  * 那边一改，这边就成了一句错的说明。
  * 真要说清楚什么，位置在**那个功能自己那一页**，不在引导里。
  *
- * 但有**两个例外**，它们是整个 App 里两个**看不见**的功能：
+ * 但有**三个例外**，它们是整个 App 里三个**看不见**的功能：
  *
  * - [GuideTarget.WEEK_TASK_GENERATION]：入口是顶栏一颗**没有文字标签**的图标；
- * - [GuideTarget.HERO_FLIP_CARD]：学在浙大那一面**藏在主卡背面**，不翻就看不见。
+ * - [GuideTarget.HERO_FLIP_CARD]：学在浙大那一面**藏在主卡背面**，不翻就看不见；
+ * - [GuideTarget.QUICK_GENERATE_TOGGLE]：一键生成默认**关着**，用户根本不知道
+ *   App 里有这个功能，更不知道「不配规则也能用」—— 这一步是唯一能告诉他这件事的地方。
  *
- * 对这两个，引导是**唯一**能说清它们是什么的地方 —— 功能自己那一页上也没有这句话，
- * 而用户找不到的入口，写在别处也没用。所以这两步带说明。
+ * 对这三个，引导是**唯一**能说清它们是什么的地方 —— 功能自己那一页上也没有这句话，
+ * 而用户找不到的入口，写在别处也没用。所以这三步带说明。
  *
- * 其余四步一律 null：给它们加说明，等于把那个功能自己页面上的话抄一份，
+ * 其余步骤一律 null：给它们加说明，等于把那个功能自己页面上的话抄一份，
  * 而抄本会先过期。这个约束由 `OnboardingGuideStepsTest` 钉住 ——
  * 哪天真要给别的步骤加说明，先想清楚「这句话在功能自己那一页上是不是已经有了」。
  */
@@ -81,28 +85,29 @@ data class GuideStep(
 )
 
 /**
- * 引导的六步。
- *
- * ## 为什么是这六件事
- *
- * 前三步是「一个课表 App 从空到能用」真正要走的那几步：**先把课表弄进来**（否则
- * 后面全是空的）、**知道课分门别类**（类别决定它归联动规则里的哪一组）、
- * **会配联动规则**（不然待办生成得不对）。
- *
- * 后三步是另外三件事：**生成本周待办**（前面三步攒下来的规则到这里才用得上）、
- * **设置壁纸**（把界面调成自己的）、**学在浙大那一面**（藏在总览页主卡的背面）。
- *
- * 最后两个是整个 App 里**看不见**的功能 —— 一个按钮没名字，一张卡有一面看不见 ——
- * 用户自己不会发现，所以引导要替 App 说一次。
+ * 引导的**完整**清单：一步一个目标。
  *
  * ## 顺序不是随手的
  *
  * 「同步课表」排第一是因为它是**前置**：没有课表，后面几步说的东西都无从谈起。
+ * 「一键生成待办」这个开关排在「课程分类」前面，是因为**决定在前**：
+ * 不想用这个功能的人，先被推去配一遍类别与规则，那就正好是「折腾设置」，
+ * 也就是这个开关本身要避免的那件事。
  * 「课程类别」排在「联动规则」前面，因为规则是**按类别**配的 ——
  * 先知道有类别这回事，才谈得上「按类别配」。
- * 「一键生成」排在联动规则**之后**，因为它就是**按规则生成**：规则没配，它没什么可生成。
+ * 「生成本周待办」排在联动规则**之后**，因为它就是**按规则生成**：规则没配，它没什么可生成。
  * 「学在浙大翻面」排在最后，因为它是这一趟的**终点** ——
  * 「去看看」把人送到总览页并替他把卡翻过去，这一趟引导就在那儿收尾。
+ *
+ * ## 这份清单**不是**用户要走的那一份
+ *
+ * 用户实际走几步取决于「一键生成待办」开没开：
+ *
+ * - 关着：四步（同步课表 → **开关** → 壁纸 → 翻面）—— 轻量路线；
+ * - 开着：六步（同步课表 → 课程分类 → 联动规则 → 生成本周待办 → 壁纸 → 翻面），
+ *   与加这个开关之前完全一样。
+ *
+ * 可见的那一份由 [visibleGuideSteps] 按开关状态算出来。
  *
  * ## 图标与入口用同一枚
  *
@@ -130,6 +135,20 @@ val GuideSteps: List<GuideStep> = listOf(
         // 而且登录课表那一步根本不拉它（它走的是 App 打开时按已存凭据刷新那条路）。
         // 这条事实留在这儿，免得以后又有人往引导里写它。
         actionLabel = "去同步"
+    ),
+    GuideStep(
+        target = GuideTarget.QUICK_GENERATE_TOGGLE,
+        // 与顶栏那颗按钮同一枚图标（AutoAwesome）：那颗按钮没有文字标签，
+        // 全靠图标认，而这一枚正是它。
+        icon = Icons.Outlined.AutoAwesome,
+        title = "一键生成待办",
+        // 这一步的动作是**打开这个功能**，不是去某个地方 ——
+        // 所以按钮写「开启」而不是「去看看」。
+        actionLabel = "开启",
+        // 这一步**带说明**，因为一键生成默认**关着**：不告诉用户它存在，
+        // 他就以为这个 App 只能手动加待办。说的两件事都对着真的行为：
+        // 开启之后能生成哪三类、以及不开也能用（手动添加）。
+        description = "按课程规则把本周的作业、实验报告与预习排进清单；不想配规则就跳过，待办可以手动添加。"
     ),
     GuideStep(
         target = GuideTarget.COURSE_CATEGORY,
@@ -183,24 +202,50 @@ val GuideSteps: List<GuideStep> = listOf(
 )
 
 /**
+ * 当前状态下，用户**实际要走**的那些步骤（按顺序）。
+ *
+ * 「一键生成待办」关着时，课程分类 / 课程联动规则 / 生成本周待办这三步
+ * **不出现**（它们只服务于那个功能），换成「要不要开启它」那一步；
+ * 开着时这三步照旧，整份清单与加这个开关之前一模一样。
+ *
+ * 算的是**看得见**的清单，不是完整清单 —— 界面上的「第 N 步 / 共 M 步」、
+ * 进度点、以及 ViewModel 算「下一步」都以它为准。
+ */
+internal fun visibleGuideSteps(quickGenerateEnabled: Boolean): List<GuideStep> {
+    val visible = visibleGuideTargets(quickGenerateEnabled).toSet()
+    return GuideSteps.filter { it.target in visible }
+}
+
+/**
  * 上手引导。
  *
  * ## 形态
  *
- * 玻璃面板 + 六步，每步一屏。底子用 [GlassOverlayHost]：
+ * 玻璃面板 + 一步一屏。底子用 [GlassOverlayHost]：
  * 遮罩、玻璃面、返回键、点外面关闭、进场动效都是现成的，
  * 引导只管往里放内容 —— 弹层那套视觉与交互不用再写一遍。
  *
+ * ## 走几步取决于「一键生成待办」开没开
+ *
+ * 关着时是轻量四步（同步课表 → 开关 → 壁纸 → 翻面），
+ * 开着时是完整六步（与加这个开关之前一样）。走哪一套由
+ * [visibleGuideSteps] 算，「第 N 步 / 共 M 步」与进度点都按**看得见的那一套**算。
+ *
+ * **当前这一步可能已经不在清单里**：用户在「开关」那一步按下「开启」，
+ * 功能一开，那一步就随之消失 —— 引导落到它后面第一个看得见的步骤
+ * （「课程分类」），由 [resolveVisibleGuideTarget] 决定。
+ *
  * ## 三个按钮各管一件事
  *
- * - **动作按钮**（每步各一个：「去同步」「去设置」「去配置」「预览待办」「去更换」「翻到背面」）：
+ * - **动作按钮**（每步各一个：「去同步」「开启」「去设置」「去配置」「预览待办」「去更换」「翻到背面」）：
  *   把引导**暂停**在这里，去那个功能。目标功能做完、
  *   弹层关掉之后引导会自己接回来（见 `MainViewModel.openOnboardingTarget`）——
  *   用户还欠着几页没看，收掉就等于让他自己记着看到第几步了。
  *   但**不叠在上面**：叠着的话两层玻璃面会糊在一起（弹层的遮罩叠着引导的遮罩，
  *   背后被压两遍），面板也会和面板重叠成一堆。
- *   （最后一步「翻到背面」是唯一的例外：它没有弹层可等，
- *   点下去就是把人送到总览页把卡翻过去，这一趟就此走完。）
+ *   （最后一步「翻到背面」与「开启」那一步是例外：前者没有弹层可等，
+ *   点下去就是把人送到总览页把卡翻过去，这一趟就此走完；
+ *   后者按下去是**打开这个功能**，引导不暂停也不等谁。）
  * - **「下一步」**：翻到下一步，最后一步是「完成」。
  * - **「跳过」**：直接收掉（这一趟到此为止）。
  *
@@ -210,16 +255,20 @@ val GuideSteps: List<GuideStep> = listOf(
  */
 @Composable
 fun OnboardingGuide(
-    stepIndex: Int,
+    step: GuideTarget,
+    quickGenerateEnabled: Boolean,
     onDismiss: () -> Unit,
     onNext: () -> Unit,
     onOpenTarget: (GuideTarget) -> Unit,
     resumed: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val safeIndex = stepIndex.coerceIn(0, GuideSteps.lastIndex)
-    val step = GuideSteps[safeIndex]
-    val isLast = safeIndex == GuideSteps.lastIndex
+    val visibleSteps = visibleGuideSteps(quickGenerateEnabled)
+    // 当前这一步**可能已经不在清单里**了（一键生成刚被开启，
+    // 「开关」那一步随之消失）：落到它后面第一个看得见的步骤上。
+    val current = resolveVisibleGuideTarget(step, quickGenerateEnabled)
+    val safeIndex = visibleSteps.indexOfFirst { it.target == current }.coerceAtLeast(0)
+    val isLast = safeIndex == visibleSteps.lastIndex
 
     GlassOverlayHost(
         onDismissRequest = onDismiss,
@@ -229,8 +278,25 @@ fun OnboardingGuide(
         // 分成两个槽会变成「标题先换、说明后换」的两次动作。
         title = null,
         text = {
-            Crossfade(targetState = safeIndex, label = "onboarding_guide_step") { index ->
-                val s = GuideSteps[index]
+            Crossfade(targetState = current, label = "onboarding_guide_step") { target ->
+                // 内容从**完整清单**里取，不从「当前看得见的那一套」里取：
+                // 淡出中的那一帧持有的是**旧**的目标，而那时候的可见清单
+                // 已经不是现在这一套了 —— 在新清单里找旧目标会**找不到**，
+                // 直接崩在 `first {}` 上（用户在引导里按下「开启」就会撞到：
+                // 「开关」那一步随之从清单里消失）。
+                val s = GuideSteps.first { it.target == target }
+                // 这一帧用**哪一套清单**来算「第几步 / 共几步」：
+                //
+                // - 开关那一步只在「关」时出现 → 用关着时那套；
+                // - 其余步骤用**当前**这套（开着时六步、关着时四步）。
+                //
+                // 于是按下「开启」时：淡出的那一帧显示的还是「第 2 步 / 共 4 步」，
+                // 淡入的那一帧已经是「第 2 步 / 共 6 步」—— 两帧各自都是对的。
+                val ownSteps = visibleGuideSteps(
+                    quickGenerateEnabled = quickGenerateEnabled &&
+                        target != GuideTarget.QUICK_GENERATE_TOGGLE
+                )
+                val stepIndex = ownSteps.indexOfFirst { it.target == target }.coerceAtLeast(0)
                 // 内容区**可滚动**（GlassOverlayHost 的约定：内容长时由内层滚动，
                 // 按钮行始终留在面板底部可见）。
                 //
@@ -267,7 +333,7 @@ fun OnboardingGuide(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "第 ${index + 1} 步 / 共 ${GuideSteps.size} 步",
+                                text = "第 ${stepIndex + 1} 步 / 共 ${ownSteps.size} 步",
                                 style = MaterialTheme.typography.labelSmall,
                                 // 用 TextSecondary 而不是全局的 onSurfaceVariant（= TextMuted
                                 // #78827B）：这一行是 11sp 小字，压在玻璃面板上实测只有
@@ -276,7 +342,7 @@ fun OnboardingGuide(
                                 color = TextSecondary
                             )
                         }
-                        GuideProgressDots(total = GuideSteps.size, current = index)
+                        GuideProgressDots(total = ownSteps.size, current = stepIndex)
                     }
                     Spacer(modifier = Modifier.height(16.dp))
                     // 这一步要说明的话。

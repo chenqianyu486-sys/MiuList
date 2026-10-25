@@ -83,6 +83,14 @@ class TaskRepository(private val taskDao: TaskDao) {
     suspend fun hasWeekTask(courseId: Long, taskTypeName: String, week: Int, dayOfWeek: Int): Boolean =
         taskDao.findExistingWeekTask(courseId, taskTypeName, week, dayOfWeek) != null
 
+    /**
+     * 这台设备上**有没有用过一键生成**（库里有没有带周次的待办）。
+     *
+     * 用来给升级上来的老用户定「一键生成待办」的默认值：
+     * 一直在用的人不该因为加了开关就突然失去那个入口。
+     */
+    suspend fun hasGeneratedWeekTasks(): Boolean = taskDao.hasGeneratedWeekTasks()
+
     suspend fun deleteTasksByType(taskType: String): Int = taskDao.deleteTasksByType(taskType)
 
     suspend fun countTasksByType(taskType: String): Int = taskDao.countTasksByType(taskType)

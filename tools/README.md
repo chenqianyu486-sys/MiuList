@@ -20,6 +20,7 @@
 | `compare_baseline.py` | 与基线目录逐张做像素比对，报告差异率并写出差异图 |
 | `capture-dialogs.sh` | **弹层**矩阵：逐个打开各弹层并截图（页面矩阵只抓四个页面，弹层要另跑） |
 | `capture-onboarding.sh` | **上手引导**矩阵：逐张抓引导的每一步 + 翻面后的总览页 |
+| `capture-quickgenerate.sh` | **「一键生成待办」开关**矩阵：开关开 / 关两态下的顶栏、抽屉、引导 |
 | `emulator.sh` | **模拟器启停**：按需起（两种渲染模式）、按需停（回收 ~2 GB 内存） |
 | `contact_sheet.py` / `make_sheets.py` | 把一批截图拼成联络表（一断点一张） |
 | `compare_sheet.py` | 把「改动前 / 改动后」并排拼成对照表 |
@@ -91,6 +92,29 @@ tools/capture-onboarding.sh R332f116 C411   # 只跑指定断点
 ```
 
 每断点八张：引导六步各一张、第 4 步的预览弹层一张、点完「翻到背面」之后的总览页一张。
+
+**引导走几步取决于「一键生成待办」开没开**：关着是轻量四步
+（同步课表 → 一键生成开关 → 壁纸 → 翻面），开着是完整六步。
+脚本从面板上读步数（「共 N 步」）再决定怎么走 —— 写死的话开关一改就拍错。
+
+## 开关矩阵（`capture-quickgenerate.sh`）
+
+「一键生成待办」这个开关改的是**界面上有没有东西**：顶栏那颗 ✨、
+「更多」抽屉里那两行规则、以及新手引导走几步。所以要在一档屏幕尺寸下
+把两态都看一遍。
+
+```bash
+tools/capture-quickgenerate.sh                # 跑默认断点
+tools/capture-quickgenerate.sh C411           # 只跑指定断点
+tools/capture-quickgenerate.sh --guide-only   # 只抓引导（少一半图，跑得快）
+```
+
+每断点 17 张：顶栏（开 / 关各一张）、抽屉（开 / 关各一张）、
+引导的轻量四步、按下「开启」之后落到「课程分类」那一张、引导的完整六步。
+
+**开关是点出来的**：脚本在抽屉里找那个 `checkable="true"` 的节点
+（Compose 把它暴露成一个 checkable 的 View，class 不是 `Switch`），
+读它的 `checked` 属性决定要不要拨 —— 所以这一轮同时也是「开关真的能用」的验证。
 
 ## 前提
 

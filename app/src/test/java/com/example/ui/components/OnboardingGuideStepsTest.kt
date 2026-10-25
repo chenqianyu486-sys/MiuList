@@ -7,9 +7,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 引导的六步与六个目标必须一一对应。
+ * 引导的七步与七个目标必须一一对应。
  *
- * ViewModel 用 [GuideTarget] 的枚举个数判断「是不是最后一步」，
+ * ViewModel 用 [GuideTarget] 的枚举顺序决定「这一步在清单里的位置」，
  * 界面用 [GuideSteps] 决定显示什么。两边一旦对不上，
  * 表现是「最后一步按了没反应」或者「某一步跳过去了一页」——
  * 都不是编译期能发现的错，所以在这里钉住。
@@ -22,9 +22,14 @@ import org.junit.Test
  * 再加一段解释只是把**那个功能自己页面上的话**抄一份，而抄本会先过期
  * （「八张预设」「五个类别」这类数字，别的页面改了就轮到引导说错）。
  *
- * 现在有**两步带说明**：「生成本周待办」（入口是顶栏一颗没有文字标签的图标）
- * 与「学在浙大翻面」（那一面藏在主卡背面）。这两个是 App 里**唯二看不见**的功能，
- * 功能自己那一页上也没有一句话在介绍它们 —— 引导是唯一能说清的地方。
+ * 现在有**三步带说明**：
+ * - 「生成本周待办」（入口是顶栏一颗没有文字标签的图标）；
+ * - 「学在浙大翻面」（那一面藏在主卡背面）；
+ * - 「一键生成待办」（这个功能**默认关着**，不告诉用户它存在，
+ *   他就以为这个 App 只能手动加待办）。
+ *
+ * 这三个是 App 里**唯三看不见**的功能，功能自己那一页上也没有一句话
+ * 在介绍它们 —— 引导是唯一能说清的地方。
  *
  * 所以这条断言的作用是：**别顺手给别的步骤也加一段说明**。
  * 真要加，先想清楚「这句话在功能自己那一页上是不是已经有了」。
@@ -70,19 +75,44 @@ class OnboardingGuideStepsTest {
     }
 
     @Test
-    fun `只有那两个看不见的功能带说明`() {
+    fun `只有那三个看不见的功能带说明`() {
         val withDescription = GuideSteps.filter { it.description != null }.map { it.target }.toSet()
 
         assertEquals(
-            "只有「生成本周待办」和「总览页主卡可翻面」该带说明：它们是 App 里唯二看不见的功能。" +
+            "只有「生成本周待办」「总览页主卡可翻面」「一键生成待办」该带说明：" +
+                "它们是 App 里唯三看不见的功能。" +
                 "给别的步骤加说明，等于把那个功能自己页面上的话抄一份，抄本会先过期。",
-            setOf(GuideTarget.WEEK_TASK_GENERATION, GuideTarget.HERO_FLIP_CARD),
+            setOf(
+                GuideTarget.WEEK_TASK_GENERATION,
+                GuideTarget.HERO_FLIP_CARD,
+                GuideTarget.QUICK_GENERATE_TOGGLE
+            ),
             withDescription
         )
     }
 
     @Test
-    fun `带说明的那两步都要有内容`() {
+    fun `开关那一步的动作是开启，不是去看看`() {
+        // 这一步按下去是**打开这个功能**，不是去某个地方看它。
+        // 写成「去看看」的话，用户会以为那儿有个弹层等着他，
+        // 按完发现什么也没发生。
+        val step = GuideSteps.first { it.target == GuideTarget.QUICK_GENERATE_TOGGLE }
+        assertEquals("开启", step.actionLabel)
+    }
+
+    @Test
+    fun `开关那一步要说清楚不开也能用`() {
+        // 「一键生成待办」默认**关着**。引导是唯一能告诉用户
+        // 「不配规则也能用、手动加就行」的地方 —— 少了这句，
+        // 用户会以为这个 App 少了点什么，或者以为关掉是出错了。
+        val desc = GuideSteps.first { it.target == GuideTarget.QUICK_GENERATE_TOGGLE }
+            .description.orEmpty()
+
+        assertTrue("该说到可以手动添加待办", desc.contains("手动"))
+    }
+
+    @Test
+    fun `带说明的那几步都要有内容`() {
         GuideSteps.forEach { step ->
             step.description?.let { desc ->
                 assertTrue("${step.target} 的说明不能是空白", desc.isNotBlank())

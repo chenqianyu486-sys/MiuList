@@ -67,6 +67,7 @@ class MainViewModel(
     private val weatherService = container.weatherService
     private val wallpaperRepo = container.wallpaperRepository
     private val onboardingRepo = container.onboardingRepository
+    private val quickGeneratePref = container.quickGeneratePreference
     private val zjuCoursesClient = container.zjuCoursesClient
     private val coursesTodoCache = container.coursesTodoCache
 
@@ -196,6 +197,13 @@ private val ruleFlow = combine(
     init {
         viewModelScope.launch { loadWeather() }
 
+        // 「一键生成待办」：**已经决定过**的值同步读出来。
+        //
+        // SharedPreferences 是同步的，所以第一帧就知道顶栏那颗 ✨ 该不该摆 ——
+        // 不能等一个协程查完库才决定，否则老用户会看到按钮先在、又不在。
+        // 还没决定过的（升级上来的老用户）留到下面那个协程里一次性判定。
+        _uiState.update { it.copy(isQuickGenerateEnabled = quickGeneratePref.isEnabled) }
+
         // 瞬间加载学在浙大待办的本地只读缓存（离线优先，零延迟呈现）
         val (cachedTodos, cachedTime) = coursesTodoCache.load()
         _uiState.update {
@@ -226,6 +234,20 @@ private val ruleFlow = combine(
             calendarRepo.sanitizeMakeupDays()
             // 给迁移后还没有同步身份的旧待办补上。
             taskRepo.ensureSyncUids()
+
+            // 「一键生成待办」的默认值是**关**，除非这台设备**用过**。
+            //
+            // 升级上来的老用户如果一直在用一键生成，不该因为加了这个开关
+            // 就突然失去那个入口 —— 所以用过的人保持开启，没用过的（包括
+            // 全新安装）走轻量体验。判据是库里有没有带周次的待办：
+            // 只有生成引擎排出来的才带周次，手工加的是 0。
+            //
+            // **只判一次**：判定完写进偏好，从此那个键一直都在，
+            // 以后用户自己在引导或「更多」里拨。
+            if (!quickGeneratePref.hasDecision) {
+                quickGeneratePref.isEnabled = taskRepo.hasGeneratedWeekTasks()
+            }
+            _uiState.update { it.copy(isQuickGenerateEnabled = quickGeneratePref.isEnabled) }
 
             // 旧版本会自动播种一份示例课表，2026-10-20 起这个功能已整项取消。
             // 存量安装里那份示例数据还在，而界面上已经没有任何东西说明它是假的 ——
@@ -283,8 +305,8 @@ private val ruleFlow = combine(
             if (courseRepo.getAllCoursesOnce().isEmpty() && !onboardingRepo.hasSeenOnboarding) {
                 // 从上次停住的那一步接着讲：引导是可以暂停的
                 // （去看看某个功能，做完接回来），冷启动不该从头再推一遍。
-                val step = onboardingRepo.currentStep.coerceIn(0, GuideTarget.entries.size - 1)
-                _uiState.update { it.copy(isOnboardingGuideOpen = true, onboardingStep = step) }
+                val target = resolveOnboardingResumeTarget()
+                _uiState.update { it.copy(isOnboardingGuideOpen = true, onboardingTarget = target) }
             }
         }
     }
@@ -822,6 +844,19 @@ private val ruleFlow = combine(
     }
 
     /**
+     * 「一键生成待办」关着时不给生成。
+     *
+     * 入口本身（顶栏那颗 ✨）在关着时是**不摆**的，所以这条是对外的兜底：
+     * 万一还有别的路径调到生成（导入后的补生成、将来的快捷方式），
+     * 要有一句能指路的提示，而不是安安静静地什么都不发生。
+     */
+    private fun requireQuickGenerateEnabled(): Boolean {
+        if (quickGeneratePref.isEnabled) return true
+        _uiState.update { it.copy(userMessage = "一键生成待办已关闭，可在「更多」里开启") }
+        return false
+    }
+
+    /**
      * 打开「生成本周待办」的预览弹层。
      *
      * @return 弹层**真的开起来**了吗。false = 没配校历或今天不在学期内 ——
@@ -836,6 +871,7 @@ private val ruleFlow = combine(
      * 引导第 4 步打开，所以只留这一个私有的。
      */
     private suspend fun openQuickGenerateWeekDialogNow(): Boolean {
+        if (!requireQuickGenerateEnabled()) return false
         if (!requireSemester()) return false
         val week = resolveRealGenerationWeek() ?: return false
         val batch = buildCandidatesForWeek(week)
@@ -878,6 +914,7 @@ private val ruleFlow = combine(
     }
 
     fun generateTasksDirectlyForWeek() = viewModelScope.launch {
+        if (!requireQuickGenerateEnabled()) return@launch
         if (!requireSemester()) return@launch
         val week = resolveRealGenerationWeek() ?: return@launch
         val batch = buildCandidatesForWeek(week)
@@ -1567,21 +1604,61 @@ private val ruleFlow = combine(
     // ------------------------------------------------------------ 上手引导
 
     /**
+     * 「一键生成待办」开没开。
+     *
+     * 两处入口（引导里那一步、「更多」抽屉里那个开关）都走这一条路，
+     * 写进偏好、也立刻反映到界面上（顶栏那颗 ✨、抽屉里那两行规则、
+     * 引导走哪套清单）。
+     *
+     * **关掉不会删掉已经生成的待办**：那些是用户自己的数据，
+     * 开关只管「要不要有这个功能」。
+     */
+    fun setQuickGenerateEnabled(enabled: Boolean) {
+        quickGeneratePref.isEnabled = enabled
+        _uiState.update { it.copy(isQuickGenerateEnabled = enabled) }
+    }
+
+    /**
+     * 引导从**上次停住的那一步**接着看，停在哪一步。
+     *
+     * 存的是目标的**名字**（见 [OnboardingRepository.currentTarget]）：
+     * 引导的步骤数会随「一键生成待办」这个开关变，序号认不准。
+     *
+     * 老版本存的是序号 —— 那时引导固定六步、顺序不变，
+     * 按 [GuideTarget.legacyOrderBeforeToggle] 换算成目标名。
+     */
+    private fun resolveOnboardingResumeTarget(): GuideTarget {
+        onboardingRepo.currentTarget?.let { name ->
+            GuideTarget.entries.firstOrNull { it.name == name }?.let { return it }
+        }
+        // 进度**从没按新格式记过** = 这个键还没被写过 = 这台设备上的进度
+        // 还是老版本那个序号（那时引导固定六步、顺序不变）→ 按老顺序换算。
+        //
+        // 但如果新格式记过了、记的是「从头看」（走完 / 跳过），
+        // 那就是从头看：不能又回落到那个早就过期的老序号。
+        if (!onboardingRepo.hasTargetProgress) {
+            val legacy = onboardingRepo.legacyCurrentStep
+            return GuideTarget.legacyOrderBeforeToggle.getOrNull(legacy) ?: GuideTarget.ZJU_SYNC
+        }
+        return GuideTarget.ZJU_SYNC
+    }
+
+    /**
      * 打开引导。
      *
      * 从**上次停住的那一步**接着看，而不是每次都从头开始：
      * 引导现在是可以暂停的（去看看某个功能，做完再回来接着讲），
      * 停在哪就是停在哪 —— 从头再推一遍，等于把用户刚看过的东西又推一次。
      *
-     * 走完或跳过的那一趟会把步数归零，所以「重看一遍」和「接着看」
-     * 用的是同一个数：没走完就接着看，走完了就从头看。
+     * 走完或跳过的那一趟会把进度清掉，所以「重看一遍」和「接着看」
+     * 用的是同一个位置：没走完就接着看，走完了就从头看。
      */
     fun openOnboardingGuide() {
-        val step = onboardingRepo.currentStep.coerceIn(0, GuideTarget.entries.size - 1)
+        val target = resolveOnboardingResumeTarget()
         _uiState.update {
             it.copy(
                 isOnboardingGuideOpen = true,
-                onboardingStep = step,
+                onboardingTarget = target,
                 onboardingAwaitingTarget = null,
                 onboardingResumed = false
             )
@@ -1592,12 +1669,12 @@ private val ruleFlow = combine(
      * 关掉引导。
      *
      * **跳过**（以及返回键、点外面）算「这一趟到此为止」：记下「看过」，
-     * 下次冷启动不该再弹一次打断他。步数归零 —— 这一趟没走完，
+     * 下次冷启动不该再弹一次打断他。进度清掉 —— 这一趟没走完，
      * 下次从设置页进来是「重看一遍」，从头开始。
      */
     fun closeOnboardingGuide() {
         onboardingRepo.hasSeenOnboarding = true
-        onboardingRepo.currentStep = 0
+        onboardingRepo.currentTarget = null
         _uiState.update {
             it.copy(
                 isOnboardingGuideOpen = false,
@@ -1608,27 +1685,28 @@ private val ruleFlow = combine(
     }
 
     /**
-     * 下一步；已经是最后一步就走完这一趟（记「看过」并把步数归零）。
+     * 下一步；已经是最后一步就走完这一趟（记「看过」并把进度清掉）。
      *
-     * 步数取 [GuideTarget] 的枚举个数：引导一步对应一个目标，
-     * 两边是同一份清单（`GuideSteps` 一步一个目标，见那里的说明）。
+     * 走的是**当前看得见的那套清单**：一键生成关着时是四步，
+     * 从「开关」那一步按下会直接落到「壁纸」（那三步不出现）；
+     * 开着时是六步，与加这个开关之前完全一样。
      */
     fun advanceOnboardingStep() {
-        val next = _uiState.value.onboardingStep + 1
-        if (next >= GuideTarget.entries.size) {
+        val next = nextVisibleGuideTarget(_uiState.value.onboardingTarget, quickGeneratePref.isEnabled)
+        if (next == null) {
             onboardingRepo.hasSeenOnboarding = true
-            onboardingRepo.currentStep = 0
+            onboardingRepo.currentTarget = null
             _uiState.update {
                 it.copy(
                     isOnboardingGuideOpen = false,
-                    onboardingStep = 0,
+                    onboardingTarget = GuideTarget.ZJU_SYNC,
                     onboardingAwaitingTarget = null,
                     onboardingResumed = false
                 )
             }
         } else {
-            onboardingRepo.currentStep = next
-            _uiState.update { it.copy(onboardingStep = next, onboardingResumed = false) }
+            onboardingRepo.currentTarget = next.name
+            _uiState.update { it.copy(onboardingTarget = next, onboardingResumed = false) }
         }
     }
 
@@ -1677,7 +1755,7 @@ private val ruleFlow = combine(
             // ----------------------------------------------------------------
             GuideTarget.HERO_FLIP_CARD -> {
                 onboardingRepo.hasSeenOnboarding = true
-                onboardingRepo.currentStep = 0
+                onboardingRepo.currentTarget = null
                 _uiState.update {
                     it.copy(
                         isOnboardingGuideOpen = false,
@@ -1725,6 +1803,29 @@ private val ruleFlow = combine(
                 }
                 return
             }
+            // ----------------------------------------------------------------
+            // 「一键生成待办」这个开关：按下去是**打开这个功能**，不是去某个地方。
+            //
+            // 所以这里既不收引导（那是「去看看」的收法），也不记「在等谁」
+            // （没有弹层可等）。功能一开，可见步骤就从四步变成六步，
+            // 而引导正停在的那一步（开关那一步）随之不在清单里了 ——
+            // 它会落到**它后面第一个看得见的**步骤上，也就是「课程分类」。
+            // 引导不暂停、也不跳步，只是把用户领到该配规则的地方。
+            // ----------------------------------------------------------------
+            GuideTarget.QUICK_GENERATE_TOGGLE -> {
+                setQuickGenerateEnabled(true)
+                // 开启之后引导落在**课程分类**（那一组规则步骤的第一步）。
+                // 显式写下来，而不是靠「开关那一步不见了 → 往后找一步」那条回退规则
+                // 现算：这样这一趟的进度在进程被杀之后也接得上。
+                onboardingRepo.currentTarget = GuideTarget.COURSE_CATEGORY.name
+                _uiState.update {
+                    it.copy(
+                        onboardingTarget = GuideTarget.COURSE_CATEGORY,
+                        onboardingResumed = false
+                    )
+                }
+                return
+            }
             else -> {
                 _uiState.update { state ->
                     val opened = when (target) {
@@ -1732,8 +1833,9 @@ private val ruleFlow = combine(
                         GuideTarget.COURSE_CATEGORY -> state.withCourseCategoryOpen()
                         GuideTarget.LINKAGE_RULES -> state.withCategoryRulesOpen()
                         GuideTarget.WALLPAPER -> state.withWallpaperOpen()
-                        // 上面两个已经各自 return 了，走不到这里。
+                        // 上面三个已经各自 return 了，走不到这里。
                         GuideTarget.WEEK_TASK_GENERATION -> state
+                        GuideTarget.QUICK_GENERATE_TOGGLE -> state
                         GuideTarget.HERO_FLIP_CARD -> state
                     }
                     opened.copy(

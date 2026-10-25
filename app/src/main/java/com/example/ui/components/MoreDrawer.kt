@@ -40,6 +40,7 @@ import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.StickyNote2
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Assignment
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.CloudSync
@@ -52,6 +53,8 @@ import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -73,6 +76,8 @@ import androidx.compose.ui.unit.sp
 import com.example.data.calendar.EpochDays
 import com.example.data.local.CourseWithSlots
 import com.example.ui.theme.CardBlockGap
+import com.example.ui.theme.LimeGreenOnPrimary
+import com.example.ui.theme.LimeGreenPrimary
 import com.example.ui.theme.PageHInset
 import com.example.ui.theme.TextTertiary
 import com.example.ui.theme.TextSecondary
@@ -121,6 +126,8 @@ fun MoreDrawer(
     onOpenCourseCategory: () -> Unit,
     onOpenCategoryRules: () -> Unit,
     onOpenTaskRules: () -> Unit,
+    /** 拨「一键生成待办」这个开关。 */
+    onSetQuickGenerateEnabled: (Boolean) -> Unit,
     onOpenAddCourse: () -> Unit,
     onEditCourse: (CourseWithSlots) -> Unit,
     onDeleteCourse: (CourseWithSlots) -> Unit,
@@ -270,6 +277,26 @@ fun MoreDrawer(
                         Spacer(modifier = Modifier.height(CardBlockGap))
                         DrawerSectionLabel("生成规则")
 
+                        // 「一键生成待办」：这一节的**主开关**，排在最前。
+                        //
+                        // 它排第一，是因为下面那两行**只在它开着时才有意义** ——
+                        // 关着的时候，联动规则与生成规则配了也没有谁去读
+                        // （没有一键生成，就没有「按规则排」这件事）。
+                        DrawerToggleRow(
+                            icon = Icons.Outlined.AutoAwesome,
+                            title = "一键生成待办",
+                            checked = state.isQuickGenerateEnabled,
+                            onCheckedChange = onSetQuickGenerateEnabled,
+                            footnote = if (state.isQuickGenerateEnabled) {
+                                "顶栏的 ✨ 按课程规则排入本周待办"
+                            } else {
+                                "关着时待办只能手动添加"
+                            },
+                            testTag = "drawer_quick_generate_row"
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
                         // 分类排在规则前面：规则是**按类别**配的，
                         // 类别还没定下来，规则那一层就没有可配的对象。
                         //
@@ -279,6 +306,9 @@ fun MoreDrawer(
                         // **标题本身**的意思——标题已经叫「课程分类」了，
                         // 再补「给每门课定类别」是同一件事说了两遍。
                         // 解释真正有用的地方是弹层里那一页，不在这一行。
+                        // **这一行不跟着开关藏**：课程类别是课程卡片上的标签、
+                        // 也是按课程分组时的依据，好几处都显示它 ——
+                        // 藏掉会让那些地方空着，而不是变轻。
                         DrawerRow(
                             icon = Icons.Outlined.Assignment,
                             title = "课程分类",
@@ -286,27 +316,34 @@ fun MoreDrawer(
                             onClick = onOpenCourseCategory
                         )
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                        // 规则那两行**只在一键生成开着时出现**。
+                        //
+                        // 它们**只服务于一键生成**：关着的时候配了也没人读，
+                        // 摆在面前就是一屏看不懂的设置 ——
+                        // 而「不折腾设置」正是这个开关要替用户挡掉的东西。
+                        if (state.isQuickGenerateEnabled) {
+                            Spacer(modifier = Modifier.height(10.dp))
 
-                        // **两个入口而不是合成一个**：它们是两个各自独立的弹层
-                        // （按类别设默认值 / 按课程设节奏与截止），合成一行就得
-                        // 再套一层二级选择才能选到其中之一——为了少一行而多一次点击，
-                        // 不划算。原来它们在设置页里也是并排的两张卡。
-                        DrawerRow(
-                            icon = Icons.Outlined.Tune,
-                            title = "课程联动规则",
-                            testTag = "drawer_category_rules_row",
-                            onClick = onOpenCategoryRules
-                        )
+                            // **两个入口而不是合成一个**：它们是两个各自独立的弹层
+                            // （按类别设默认值 / 按课程设节奏与截止），合成一行就得
+                            // 再套一层二级选择才能选到其中之一——为了少一行而多一次点击，
+                            // 不划算。原来它们在设置页里也是并排的两张卡。
+                            DrawerRow(
+                                icon = Icons.Outlined.Tune,
+                                title = "课程联动规则",
+                                testTag = "drawer_category_rules_row",
+                                onClick = onOpenCategoryRules
+                            )
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
 
-                        DrawerRow(
-                            icon = Icons.Outlined.Rule,
-                            title = "待办生成规则",
-                            testTag = "drawer_task_rules_row",
-                            onClick = onOpenTaskRules
-                        )
+                            DrawerRow(
+                                icon = Icons.Outlined.Rule,
+                                title = "待办生成规则",
+                                testTag = "drawer_task_rules_row",
+                                onClick = onOpenTaskRules
+                            )
+                        }
 
                         Spacer(modifier = Modifier.height(CardBlockGap))
                         DrawerSectionLabel(
@@ -615,6 +652,82 @@ private fun DrawerRow(
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(16.dp)
+        )
+    }
+}
+
+/**
+ * 抽屉里的一个**开关行**：左侧图标 + 标题 + 一句说明 + 右侧开关。
+ *
+ * 与 [DrawerRow] 的差别只有两处：**行尾不是箭头而是开关**，而且**整行不可点** ——
+ * 改状态只有那颗开关一个落点。把整行也做成可点会多出第二个落点
+ * （按标题算「改了」，按空白处又像没反应），与「一行只留一个落点」的约定冲突。
+ *
+ * 标题按**主文本**呈现（14.sp 粗体）：它是这一行的名字，不是「标题 + 值」
+ * 那种两行结构的上层标签。状态由开关自己说（开 / 关），不另写一遍「已开启」。
+ */
+@Composable
+private fun DrawerToggleRow(
+    icon: ImageVector,
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    footnote: String? = null,
+    testTag: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .padding(horizontal = 8.dp, vertical = 10.dp)
+            .testTag(testTag),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(21.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (footnote != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = footnote,
+                    fontSize = 10.5.sp,
+                    color = TextTertiary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            // 与「待办生成规则」弹层里那些开关同一套配色（见 TaskRulesDialog）。
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = LimeGreenOnPrimary,
+                checkedTrackColor = LimeGreenPrimary
+            ),
+            modifier = Modifier.testTag("${testTag}_switch")
         )
     }
 }

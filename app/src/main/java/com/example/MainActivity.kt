@@ -240,6 +240,7 @@ private fun TopBarStrip(
     termConfigured: Boolean,
     onOpenMoreMenu: () -> Unit,
     onGenerateWeekTasks: () -> Unit,
+    showGenerateAction: Boolean,
     searchActive: Boolean = false,
     searchQuery: String = "",
     onSearchQueryChange: (String) -> Unit = {},
@@ -325,18 +326,25 @@ private fun TopBarStrip(
         // 两个色块一深一浅：生成是写操作，用主题绿平涂（绿只做填充、上面配深墨字，
         // 见 Color.kt 的全局约定），搜索是纯读操作，走中性 chip。这是原版的分工，
         // 也是壁纸上的第一眼重心。
-        TopBarAction(
-            icon = Icons.Outlined.AutoAwesome,
-            contentDescription = "生成本周待办",
-            onClick = onGenerateWeekTasks,
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary,
-            iconSize = 18.dp.scaledWithText(),
-            testTag = "topbar_generate_tasks_button",
-            accent = true
-        )
+        //
+        // **一键生成关着时，那颗 ✨ 根本不摆**：
+        // 这个功能默认关闭，而一颗点不动的按钮留在那儿只会让人反复去试它
+        // ——它又没有「为什么点不动」的提示（画灰也只是让人猜）。
+        // 想用这个功能的人去「更多」里打开开关，那儿有完整的说明。
+        if (showGenerateAction) {
+            TopBarAction(
+                icon = Icons.Outlined.AutoAwesome,
+                contentDescription = "生成本周待办",
+                onClick = onGenerateWeekTasks,
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                iconSize = 18.dp.scaledWithText(),
+                testTag = "topbar_generate_tasks_button",
+                accent = true
+            )
 
-        Spacer(modifier = Modifier.width(4.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+        }
 
         // 搜索入口：常驻，点它会先跳到清单页再展开搜索（见 MainApp 的 onOpenSearch）。
         // 标题组占满剩余宽度，两个图标就永远贴在最右边。
@@ -660,6 +668,8 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                 termConfigured = termConfigured,
                 onOpenMoreMenu = { moreDrawerVisible = true },
                 onGenerateWeekTasks = { viewModel.generateTasksDirectlyForWeek() },
+                // 一键生成关着时，顶栏那颗 ✨ **不摆**（见 TopBarStrip 里的说明）。
+                showGenerateAction = state.isQuickGenerateEnabled,
                 searchActive = searchVisible,
                 searchQuery = state.searchQuery,
                 onSearchQueryChange = { viewModel.setSearchQuery(it) },
@@ -879,6 +889,8 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
             onOpenCourseCategory = { viewModel.openCourseCategoryDialog() },
             onOpenCategoryRules = { viewModel.openCategoryRulesDialog() },
             onOpenTaskRules = { viewModel.openTaskRulesDialog() },
+            // 「一键生成待办」的开关。抽屉里那两行规则随它显隐。
+            onSetQuickGenerateEnabled = { viewModel.setQuickGenerateEnabled(it) },
             onOpenAddCourse = { viewModel.openAddCourseDialog() },
             onEditCourse = { viewModel.openEditCourseDialog(it) },
             onDeleteCourse = { viewModel.confirmDeleteCourse(it) },
@@ -916,7 +928,9 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
         // （同时在场的话遮罩压两遍、面板也糊成一堆）。
         if (state.isOnboardingGuideOpen) {
             OnboardingGuide(
-                stepIndex = state.onboardingStep,
+                step = state.onboardingTarget,
+                // 引导走几步取决于这个开关：关着是轻量四步，开着是完整六步。
+                quickGenerateEnabled = state.isQuickGenerateEnabled,
                 resumed = state.onboardingResumed,
                 onDismiss = { viewModel.closeOnboardingGuide() },
                 onNext = { viewModel.advanceOnboardingStep() },

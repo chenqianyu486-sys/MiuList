@@ -11,6 +11,7 @@ import com.example.data.repository.AcademicCalendarRepository
 import com.example.data.repository.CourseRepository
 import com.example.data.repository.ExamRepository
 import com.example.data.repository.OnboardingRepository
+import com.example.data.repository.QuickGeneratePreference
 import com.example.data.repository.ScheduleSettingsRepository
 import com.example.data.repository.TaskRepository
 import com.example.data.repository.TaskTypeRepository
@@ -104,6 +105,16 @@ class AppContainer(context: Context) {
      */
     val onboardingRepository: OnboardingRepository by lazy {
         OnboardingRepository(appContext)
+    }
+
+    /**
+     * 「一键生成待办」这个开关（默认关）。
+     *
+     * 也是**界面状态**那一类：它不是数据，是一个偏好。与引导的标记一样
+     * 单独一个仓储，别塞进规则仓储（那里是「这个功能怎么排」，不是「要不要有」）。
+     */
+    val quickGeneratePreference: QuickGeneratePreference by lazy {
+        QuickGeneratePreference(appContext)
     }
 
     val codec: ScheduleCodec by lazy { JsonScheduleCodec() }
