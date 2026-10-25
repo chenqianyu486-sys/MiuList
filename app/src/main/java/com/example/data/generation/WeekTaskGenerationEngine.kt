@@ -53,10 +53,10 @@ data class WeekScope(
  * 「一键生成本周待办」的引擎。
  *
  * 改造前这里只处理**某一天**（`generateTasksForDay`），标题是「【作业】高数 习题」，
- * 去重靠 `generatedDate`。现在按**一整周**产出，标题是「高数 第3周作业」，
+ * 去重靠 `generatedDate`。现在按**一整周**产出，标题是「【高数】第3周作业」，
  * 去重靠「同课程 + 同类型 + 同周次 + 同周几」四元组。
  *
- * 五条关键决定：
+ * 六条关键决定：
  * 1. **时段由调用方先按周过滤好再传进来**（`ScheduleResolver.slotsInWeek`），
  *    所以这里不关心星期几、单双周、停课补课；它只做「这些课要产出哪些待办」。
  * 2. **范围按类型分**（[WeekScope]）：作业与实验报告取本周，预习取今天起至下周结束。
@@ -66,6 +66,8 @@ data class WeekScope(
  * 4. 「每周一次」也照常记下锚点那天的周几进 `dayOfWeek`，于是四元组判据天然唯一，
  *    不需要为它另开一个特例。
  * 5. **不预置星标**：`priority` 恒为 `STAR_UNMARKED`。星标留给用户手动标。
+ * 6. **不预置备注**：`description` 恒为空。备注是用户自己写的那部分，
+ *    引擎替用户写的那句谁都能写出来，写出来却让人以为那是有用的信息。
  *
  * 无 Android / Room 依赖，可在普通 JUnit 里直接测。
  */
@@ -203,7 +205,13 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
             courseCategory = course.category,
             courseColorHex = course.colorHex,
             title = buildTitle(course, week, type, anchor, rule),
-            description = describe(type, week),
+            // **不自带备注**。备注是用户自己写的那部分（老师改了什么要求、
+            // 作业交到哪、书留在哪），引擎替用户写一句「整理第N周课堂重点并完成
+            // 课后作业」——它谁都能写出来，写出来却让人以为那是有用的信息。
+            //
+            // 空着更好：空备注在编辑弹层里有一句「点击编辑备注」的小字提示，
+            // 是一条**邀请**；塞一句模板话则是一段没人读的正文。
+            description = "",
             taskType = type.name,
             startTimeTimestamp = startTimestamp,
             startTimeString = "${getDayName(anchor.dayOfWeek)} $startTimeText " +
@@ -249,36 +257,6 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
         }
         val weekday = if (rule.perClass) "（${getDayName(anchor.dayOfWeek)}）" else ""
         return "【${course.name}】第${week}周${weekday}${typeWord}"
-    }
-
-    /**
-     * 自动生成待办的**备注**：这一条待办要做什么。
-     *
-     * **只说「做什么」，不重复课程自己的信息。**
-     *
-     * 原来的写法有三处毛病：
-     * 1. 句子太长（作业那条 30 个字），而备注是弹层里唯一的正文，16.sp 摆着，
-     *    一屏就一句话；
-     * 2. 尾上挂着「（教师 / 教室）」——那是**这门课自己的事实**，课程那一行
-     *    已经写着课程名，用户也知道自己是谁的课；把它塞进「做什么」那句话里，
-     *    读起来像一句没头没尾的事实清单；
-     * 3. 实验报告那条写成「根据〈教室〉实验操作记录」——教室不是实验记录的来源，
-     *    这句话本身就不通。
-     *
-     * 现在三条同形：**动词 + 这件事的内容 +（哪一周）**。
-     */
-    private fun describe(
-        type: TaskType,
-        week: Int
-    ): String = when (type) {
-        TaskType.PRE_STUDY ->
-            "完成第${week}周教材对应小节与预习思考题"
-
-        TaskType.LAB_REPORT ->
-            "根据实验记录整理测试用例与分析报告"
-
-        else ->
-            "整理第${week}周课堂重点并完成课后作业"
     }
 
     private companion object {

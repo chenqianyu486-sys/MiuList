@@ -262,6 +262,15 @@ class WeekTaskGenerationEngineTest {
         )
     }
 
+    @Test
+    fun `the generated task carries no note`() = runTest {
+        val out = build(slots = listOf(slot(1, 1L, 1, 1)), week = 3)
+        // 备注是**用户自己写**的那部分（老师改了什么要求、作业交到哪、书留在哪）。
+        // 引擎替用户写一句模板话，写出来却让人以为那是有用的信息；
+        // 空着反而在编辑弹层里有一句「点击编辑备注」的邀请。
+        assertTrue("生成的待办不该自带备注", out.all { it.description.isEmpty() })
+    }
+
     // ---------------------------------------------------------------- 开关与兜底
 
     @Test

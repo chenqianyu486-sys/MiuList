@@ -346,11 +346,23 @@ fun TaskEditorSheet(
                 PlainTextInput(
                     value = description,
                     onValueChange = { description = it },
-                    placeholder = "添加备注…",
+                    placeholder = "点击编辑备注",
                     textStyle = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 14.sp,
                         lineHeight = 21.sp,
                         color = MaterialTheme.colorScheme.onSurface
+                    ),
+                    // 提示用**小号灰字**。
+                    //
+                    // 这条备注区是**无边框**的（静止时连底线都不留），平时读起来
+                    // 就是一段正文 —— 用户未必看得出这里能点。所以空着的时候得有一句
+                    // 明说「这儿可以写」。
+                    //
+                    // 字号必须比正文**小**：跟正文一样大会被当成一条真的备注读进去，
+                    // 于是「点击编辑备注」自己变成了一条备注。
+                    placeholderTextStyle = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     ),
                     singleLine = false,
                     maxLines = 6,
@@ -738,6 +750,8 @@ fun TaskEditorSheet(
  * @param restingUnderline 静止时（没聚焦）要不要留那条底线。
  *   标题留（它需要一条「标题线」把自己框住），备注不留 ——
  *   备注平时就该像一段正文，而不是一条等着被填的表格行。
+ * @param placeholderTextStyle 占位文字的样式；null = 跟正文同字号，只压暗。
+ *   要「小号灰字」时传进来 —— 提示跟正文一样大会被读成一条真的内容。
  */
 @Composable
 private fun PlainTextInput(
@@ -749,6 +763,7 @@ private fun PlainTextInput(
     modifier: Modifier = Modifier,
     maxLines: Int = Int.MAX_VALUE,
     restingUnderline: Boolean = true,
+    placeholderTextStyle: TextStyle? = null,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     testTag: String? = null
@@ -773,8 +788,9 @@ private fun PlainTextInput(
                     if (value.isEmpty()) {
                         Text(
                             text = placeholder,
-                            style = textStyle,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                            style = placeholderTextStyle ?: textStyle,
+                            color = placeholderTextStyle?.color
+                                ?: MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
                         )
                     }
                     inner()
