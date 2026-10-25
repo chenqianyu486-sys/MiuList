@@ -131,7 +131,7 @@ class OnboardingFlowTest {
 
     @Test
     fun `预览弹层关掉了引导要接回来`() {
-        // 「一键生成本周待办」的「去看看」开到的是预览弹层：
+        // 「生成本周待办」这一步的动作按钮开到的是预览弹层：
         // 用户在里面挑完（或按取消）关掉它，就是这一步做完了的信号。
         val state = MainUiState(
             isQuickGenerateDialogOpen = true,

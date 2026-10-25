@@ -725,7 +725,7 @@ fun DashboardScreen(
             // 并替他把卡翻到**背面**（学在浙大待交作业那一面）。
             //
             // 用**序号**而不是布尔开关：布尔只能表达「翻过一次」，
-            // 第二次点「翻给我看」时值没变，这边就收不到新的一次请求。
+            // 第二次点「翻到背面」时值没变，这边就收不到新的一次请求。
             // 序号 +1 就是「又来一次」的信号。
             LaunchedEffect(state.heroFlipRequest) {
                 if (state.heroFlipRequest > 0) isHeroFlipped = true

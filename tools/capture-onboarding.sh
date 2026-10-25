@@ -19,8 +19,8 @@
 # | 文件 | 内容 |
 # |------|------|
 # | 01_step1_sync … 07_step6_flip | 引导的六步，每步一张 |
-# | 05_step4_preview | 第 4 步点「看看它会排什么」弹出的预览弹层 |
-# | 08_flip_result | 最后一步点「翻给我看」之后总览页那张卡翻到背面 |
+# | 05_step4_preview | 第 4 步点「预览待办」弹出的预览弹层 |
+# | 08_flip_result | 最后一步点「翻到背面」之后总览页那张卡翻到背面 |
 #
 # ## 收尾
 #
@@ -223,8 +223,8 @@ capture_one() {
   tap_label "下一步" >/dev/null 2>&1; shot 03_step3_rules
   tap_label "下一步" >/dev/null 2>&1; shot 04_step4_generate
 
-  # 第 4 步的「看看它会排什么」→ 预览弹层（关掉它引导会自己接回来）
-  tap_label "看看它会排什么" >/dev/null 2>&1
+  # 第 4 步的「预览待办」→ 预览弹层（关掉它引导会自己接回来）
+  tap_label "预览待办" >/dev/null 2>&1
   sleep 1
   shot 05_step4_preview
   tap_label "取消" >/dev/null 2>&1
@@ -233,8 +233,8 @@ capture_one() {
   tap_label "下一步" >/dev/null 2>&1; shot 06_step5_wallpaper
   tap_label "下一步" >/dev/null 2>&1; shot 07_step6_flip
 
-  # 最后一步的「翻给我看」→ 总览页那张卡翻到背面
-  tap_label "翻给我看" >/dev/null 2>&1
+  # 最后一步的「翻到背面」→ 总览页那张卡翻到背面
+  tap_label "翻到背面" >/dev/null 2>&1
   sleep 3
   shot 08_flip_result
 

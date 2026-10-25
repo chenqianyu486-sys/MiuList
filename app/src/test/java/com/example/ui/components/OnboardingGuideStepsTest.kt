@@ -22,7 +22,7 @@ import org.junit.Test
  * 再加一段解释只是把**那个功能自己页面上的话**抄一份，而抄本会先过期
  * （「八张预设」「五个类别」这类数字，别的页面改了就轮到引导说错）。
  *
- * 现在有**两步带说明**：「一键生成本周待办」（入口是顶栏一颗没有文字标签的图标）
+ * 现在有**两步带说明**：「生成本周待办」（入口是顶栏一颗没有文字标签的图标）
  * 与「学在浙大翻面」（那一面藏在主卡背面）。这两个是 App 里**唯二看不见**的功能，
  * 功能自己那一页上也没有一句话在介绍它们 —— 引导是唯一能说清的地方。
  *
@@ -74,7 +74,7 @@ class OnboardingGuideStepsTest {
         val withDescription = GuideSteps.filter { it.description != null }.map { it.target }.toSet()
 
         assertEquals(
-            "只有「一键生成本周待办」和「学在浙大翻面」该带说明：它们是 App 里唯二看不见的功能。" +
+            "只有「生成本周待办」和「总览页主卡可翻面」该带说明：它们是 App 里唯二看不见的功能。" +
                 "给别的步骤加说明，等于把那个功能自己页面上的话抄一份，抄本会先过期。",
             setOf(GuideTarget.WEEK_TASK_GENERATION, GuideTarget.HERO_FLIP_CARD),
             withDescription
@@ -126,5 +126,53 @@ class OnboardingGuideStepsTest {
 
         assertTrue("说明里该说到学在浙大", desc.contains("学在浙大"))
         assertTrue("说明里该说到翻面", desc.contains("翻"))
+    }
+
+    @Test
+    fun `文案不许写长`() {
+        // 「专业、清晰、简洁」最后要落到**字数**上：标题一行放不下太长的话，
+        // 说明一长，窄屏 + 大字号就得多滚一屏 —— 引导一共六步，每步多一行都是负担。
+        //
+        // 上限按当前文案留了余量（标题最长 8 字、按钮最长 4 字、说明最长 43 字）：
+        // 写长了先**删字**，别加句子。
+        GuideSteps.forEach { step ->
+            assertTrue(
+                "「${step.title}」的标题太长（上限 $MAX_TITLE_CHARS 字）：写长了先删字",
+                step.title.length <= MAX_TITLE_CHARS
+            )
+            assertTrue(
+                "「${step.title}」的按钮文案太长（上限 $MAX_ACTION_CHARS 字）：按钮只写动作",
+                step.actionLabel.length <= MAX_ACTION_CHARS
+            )
+            step.description?.let { desc ->
+                assertTrue(
+                    "「${step.title}」的说明太长（上限 $MAX_DESC_CHARS 字）：",
+                    desc.length <= MAX_DESC_CHARS
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `每一步的按钮文案都不一样`() {
+        // 两步的按钮写着同一句话，用户在第二步按下去发现又是同一个动作，
+        // 会以为引导卡住了 —— 按钮是**这一步要去哪**的唯一线索。
+        val labels = GuideSteps.map { it.actionLabel }
+        assertEquals(
+            "按钮文案不能重复",
+            labels.size,
+            labels.toSet().size
+        )
+    }
+
+    private companion object {
+        /** 标题上限（含标点）。 */
+        const val MAX_TITLE_CHARS = 12
+
+        /** 动作按钮文案上限。 */
+        const val MAX_ACTION_CHARS = 6
+
+        /** 说明文字上限。 */
+        const val MAX_DESC_CHARS = 60
     }
 }
