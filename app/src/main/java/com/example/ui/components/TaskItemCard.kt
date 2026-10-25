@@ -320,15 +320,32 @@ internal fun MetaDot() {
 }
 
 /**
- * 只改显示：课程联动生成的标题通常是「课程名 + 空格 + 任务名」，
- * 而课程名已经在 meta 行里。裁掉前缀之后，卡片上只剩真正的任务名，
- * 标题不必为了重复的课程名折成两行。
+ * 只改显示：课程名已经在 meta 行里，标题再带一遍是同一句话说两遍。
+ * 于是把标题开头的课程名裁掉，卡片上只剩真正的任务名。
+ *
+ * 认得两种形状：
+ * - `【课程名】第3周（周三）预习` —— 一键生成的待办（现行格式）
+ * - `课程名 第3周预习` —— 一键生成早先用的格式，库里还留着这些老数据
+ *
+ * 裁不掉就原样返回（比如用户自己写的标题、或未关联课程的待办）。
  *
  * 数据层不动：搜索、导出、详情页仍使用完整标题。
+ *
+ * 不是 private —— 课程详情弹层与生成预览也要用同一个「显示名称」：
+ * 三处都是「课程名已经写在别处」，各裁各的就会出现三种读法。
  */
-private fun taskDisplayTitle(task: TaskEntity): String {
+internal fun taskDisplayTitle(task: TaskEntity): String {
     val courseName = task.courseName.trim()
     if (courseName.isEmpty() || TaskEntity.isUnlinked(task)) return task.title
+
+    // 新格式：课程名在【】里。
+    val bracketed = "【$courseName】"
+    if (task.title.startsWith(bracketed)) {
+        val rest = task.title.removePrefix(bracketed).trim()
+        if (rest.isNotEmpty()) return rest
+    }
+
+    // 旧格式：课程名 + 一个空格。
     val prefix = "$courseName "
     if (task.title.startsWith(prefix)) {
         val rest = task.title.removePrefix(prefix).trim()

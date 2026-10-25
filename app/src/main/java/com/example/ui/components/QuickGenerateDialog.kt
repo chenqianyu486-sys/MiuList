@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.local.TaskEntity
@@ -171,6 +172,14 @@ fun QuickGenerateDialog(
                                     ) {
                                         Box(
                                             modifier = Modifier
+                                                // 课程名长的时候**让课程名让位**：
+                                                // 它可以被省略号截短，但类别徽标
+                                                // （「课后作业」）不能被挤 —— 挤成竖排之后
+                                                // 四个字只剩一条竖线，谁都认不出是哪一类。
+                                                //
+                                                // weight(1f, fill = false)：不 weight 的兄弟节点
+                                                // （徽标）先按自己的固有宽度量，课程名拿剩下的。
+                                                .weight(1f, fill = false)
                                                 .background(if (isGreen) TeaColor else MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(6.dp))
                                                 .border(0.5.dp, if (isGreen) TeaColorBorder else courseColor.copy(alpha = 0.45f), RoundedCornerShape(6.dp))
                                                 .padding(horizontal = 7.dp, vertical = 2.dp)
@@ -180,7 +189,9 @@ fun QuickGenerateDialog(
                                                 // 同 TaskItemCard：课程名徽标字压暗，否则粉彩紫/黄在近白底上基本看不见
                                                 color = if (isGreen) TeaOnColor else readableOn(courseColor),
                                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                                fontSize = 11.sp
+                                                fontSize = 11.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
                                             )
                                         }
 
@@ -190,7 +201,9 @@ fun QuickGenerateDialog(
                                     Spacer(modifier = Modifier.height(4.dp))
 
                                     Text(
-                                        text = task.title,
+                                        // 用**显示名称**：这一行的上方就是课程名徽标，
+                                        // 标题再带一遍课程名是同一句话说两遍。
+                                        text = taskDisplayTitle(task),
                                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                         fontSize = 13.5.sp,
                                         color = MaterialTheme.colorScheme.onSurface

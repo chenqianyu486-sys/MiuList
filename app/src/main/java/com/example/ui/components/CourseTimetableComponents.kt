@@ -984,7 +984,9 @@ fun CourseLinkageSheet(
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = task.title,
+                                        // 用**显示名称**，跟清单页同一套：课程名已经写在
+                                        // 这个弹层的抬头上了，标题再带一遍是同一句话说两遍。
+                                        text = taskDisplayTitle(task),
                                         style = MaterialTheme.typography.bodyMedium.copy(
                                             fontWeight = if (task.isCompleted) FontWeight.Normal else FontWeight.SemiBold,
                                             textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None

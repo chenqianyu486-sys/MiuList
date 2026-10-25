@@ -193,12 +193,6 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
         val dueDate = java.time.Instant.ofEpochMilli(dueTimestamp)
             .atZone(zone).toLocalDate()
 
-        val typeWord = when (type) {
-            TaskType.PRE_STUDY -> "预习"
-            TaskType.LAB_REPORT -> "实验报告"
-            else -> "作业"
-        }
-
         // 自动生成的待办**一律不标星**。星标语义见 `TaskStar`：它是「我挑出来的」，
         // 只有手动勾的才算数。按类型预置星标（曾是预习 + 实验报告）会让整屏凭空多出
         // 一片星，而用户从没挑过它们，于是「标星」恰好不再表示「我挑的」。
@@ -208,7 +202,7 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
             courseName = course.name,
             courseCategory = course.category,
             courseColorHex = course.colorHex,
-            title = "${course.name} 第${week}周${typeWord}",
+            title = buildTitle(course, week, type, anchor, rule),
             description = describe(type, week),
             taskType = type.name,
             startTimeTimestamp = startTimestamp,
@@ -225,6 +219,36 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
             week = week,
             dayOfWeek = anchor.dayOfWeek.coerceIn(1, 7)
         )
+    }
+
+    /**
+     * 自动生成待办的**名称**。
+     *
+     * 形状：`【课程名】第N周（周几）作业`。
+     *
+     * - **课程名放进【】**：名字里自带「哪门课」，于是这条待办被单独拎出来的时候
+     *   （搜索结果、待办详情、导出、通知）仍然说得清自己是谁的活儿。
+     * - **周几只在按节生成时才有**：「每次课」这条待办对应的就是某一节课，
+     *   落在周几是它的一部分；「每周一次」覆盖的是整周，写上某一天反而会误导
+     *   ——读起来像只有那天要交。
+     *
+     * 卡片上显示的名字会把 `【课程名】` 裁掉（见 `taskDisplayTitle`）：
+     * 卡片的 meta 行里本来就写着课程名，标题再带一遍是同一句话说两遍。
+     */
+    private fun buildTitle(
+        course: CourseEntity,
+        week: Int,
+        type: TaskType,
+        anchor: CourseSlotEntity,
+        rule: TaskGenerationRule
+    ): String {
+        val typeWord = when (type) {
+            TaskType.PRE_STUDY -> "预习"
+            TaskType.LAB_REPORT -> "实验报告"
+            else -> "作业"
+        }
+        val weekday = if (rule.perClass) "（${getDayName(anchor.dayOfWeek)}）" else ""
+        return "【${course.name}】第${week}周${weekday}${typeWord}"
     }
 
     /**
