@@ -300,9 +300,15 @@ fun TaskItemCard(
     }
 }
 
-/** meta 行里的小圆点分隔符：比一个「·」字符更轻，也不跟正文抢字宽。 */
+/**
+ * meta 行里的小圆点分隔符：比一个「·」字符更轻，也不跟正文抢字宽。
+ *
+ * 不是 private —— 课程详情弹层那条待办行的 meta 行（截止 + 类别徽标）
+ * 也要用同一颗点。两处都是「一行里并排放两样信息」，分隔符得是同一个，
+ * 否则同一条待办在清单页和弹层里读起来是两种排版。
+ */
 @Composable
-private fun MetaDot() {
+internal fun MetaDot() {
     Spacer(modifier = Modifier.width(5.dp))
     Box(
         modifier = Modifier

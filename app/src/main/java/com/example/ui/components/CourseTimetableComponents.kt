@@ -983,41 +983,57 @@ fun CourseLinkageSheet(
                                 }
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        // 留了空白的类型不画徽标，后面的 6dp 也跟着收掉——
-                                        // 否则标题左边会恒定多出一道没有来由的缩进。
-                                        TaskTypes.resolve(task.taskType, customTypes)?.let {
-                                            TaskTypeBadge(taskTypeStr = task.taskType, customTypes = customTypes)
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                        }
-                                        Text(
-                                            text = task.title,
-                                            style = MaterialTheme.typography.bodyMedium.copy(
-                                                fontWeight = if (task.isCompleted) FontWeight.Normal else FontWeight.SemiBold,
-                                                textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None
-                                            ),
-                                            // 名称**允许折行**（原来锁死一行 + 省略号）。
-                                            // 这一行是这条待办在弹层里唯一能读到名字的地方，
-                                            // 截成一行就只剩半个名字 —— 读不全就不算标题。
-                                            //
-                                            // weight(1f, fill = false)：拿到徽标右边剩下的宽，
-                                            // 文字才有个确定的折行宽度（不 weight 的话由
-                                            // Row 按剩余空间量，行为一样但不是显式的）。
-                                            modifier = Modifier.weight(1f, fill = false)
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.height(2.dp))
                                     Text(
-                                        // 没设截止时 dueDateString 是空串，直接拼会留下一个
-                                        // 光秃秃的「截止 」——那是在问用户一个答案不存在的问题。
-                                        text = if (TaskEntity.hasDue(task)) {
-                                            "截止 ${task.dueDateString}"
-                                        } else {
-                                            NO_DUE_TEXT
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        text = task.title,
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontWeight = if (task.isCompleted) FontWeight.Normal else FontWeight.SemiBold,
+                                            textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None
+                                        ),
+                                        // 名称**允许折行**（原来锁死一行 + 省略号）。
+                                        // 这一行是这条待办在弹层里唯一能读到名字的地方，
+                                        // 截成一行就只剩半个名字 —— 读不全就不算标题。
+                                        //
+                                        // 徽标挪走之后，标题独占一行、拿到整列的宽度：
+                                        // 之前它右边让着徽标的位置，折行点比现在早得多。
                                     )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    // meta 行：截止 · 待办类别。
+                                    //
+                                    // 类别徽标（「课前预习」「课后作业」）原来挂在标题**左边**，
+                                    // 跟标题抢同一行的宽度 —— 标题长一点就折行，
+                                    // 徽标和标题挤在一起也读不出谁是谁。
+                                    //
+                                    // 现在徽标挪到**标题下一行**，跟清单页（[TaskItemCard]）
+                                    // 同一套：名称独占第一行，类别跟在 meta 行的末尾。
+                                    // 同一条待办在两个地方是同一种读法。
+                                    //
+                                    // 这一行**至多一行**：放不下时先截截止日期，
+                                    // 徽标不能被挤扁 —— 类别是认这条待办的关键信息，
+                                    // 而截止日期在极端字号下截掉还能看出来是什么。
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            // 没设截止时 dueDateString 是空串，直接拼会留下一个
+                                            // 光秃秃的「截止 」——那是在问用户一个答案不存在的问题。
+                                            text = if (TaskEntity.hasDue(task)) {
+                                                "截止 ${task.dueDateString}"
+                                            } else {
+                                                NO_DUE_TEXT
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            // weight(1f, fill = false)：宽度不够时这一段先让，
+                                            // 徽标不能被挤掉。
+                                            modifier = Modifier.weight(1f, fill = false),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        // 留了空白的类型不画徽标，分隔点也跟着收掉——
+                                        // 否则 meta 行会恒定多出一道没有来由的缩进。
+                                        TaskTypes.resolve(task.taskType, customTypes)?.let {
+                                            MetaDot()
+                                            TaskTypeBadge(taskTypeStr = task.taskType, customTypes = customTypes)
+                                        }
+                                    }
                                 }
                                 Spacer(modifier = Modifier.width(10.dp))
                                 TaskStarToggle(
