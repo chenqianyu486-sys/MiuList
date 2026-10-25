@@ -107,6 +107,7 @@ import com.example.ui.theme.LimeGreenOnPrimary
 import com.example.ui.theme.LimeGreenPrimary
 import com.example.ui.theme.LocalGlassHazeState
 import com.example.ui.theme.LocalEffectiveFontScale
+import com.example.ui.theme.MiuType
 import com.example.ui.theme.TeaColor
 import com.example.ui.theme.TeaColorBorder
 import com.example.ui.theme.TextSecondary
@@ -1649,7 +1650,7 @@ private fun ScheduleCourseCard(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = course.name,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        style = MiuType.CardTitleRegular,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,

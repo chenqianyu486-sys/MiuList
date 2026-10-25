@@ -224,7 +224,7 @@ fun TaskItemCard(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = displayTitle,
-                    style = MiuType.TaskTitle,
+                    style = MiuType.CardTitleCompact,
                     color = if (task.isCompleted) {
                         TextSecondary
                     } else {

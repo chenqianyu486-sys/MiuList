@@ -87,10 +87,41 @@ object MiuType {
         fontWeight = FontWeight.SemiBold
     )
 
-    val CourseTitle = TextStyle(
-        fontSize = 15.sp,
-        lineHeight = 20.sp,
+    /**
+     * **卡片标题**：待办卡、课程卡、考试卡三种卡的标题是同一族东西 ——
+     * 「这张卡叫什么」。
+     *
+     * 之前三种卡各写各的字号（14.5 / 16 / 17），而它们在总览页里上下相邻：
+     * 同屏里标题的大小跟着**卡的种类**跳，扫读时读不出「这一行是标题」。
+     * 现在收成两档，按**标题在卡里占多少地方**分：
+     *
+     * - [CardTitleCompact] 紧凑档：标题与别的东西挤在同一行
+     *   （待办卡、总览「今日课程」列表卡 —— 那里课名与教室胶囊同行）；
+     * - [CardTitleRegular] 常规档：标题独占一行
+     *   （考试卡、课表页课程卡）。
+     *
+     * 加高卡（总览「下一节 / 下一场」）另有一档，见 DashboardScreen 的
+     * `CourseCardTitleFontSize`。
+     *
+     * ## 为什么两档都比改版前大 1.5sp
+     *
+     * 紧凑档 14.5 → 16，常规档 16 → 17.5 —— 也就是「加大一号」。
+     * 卡上的字本来就挤（课名、教室、节次、教师、徽标同屏），
+     * 标题不抬头，整张卡就只剩一块色板；标题抬起来之后，
+     * 与下面 11.5sp 那行 meta 的差距也从 3sp 拉到 4.5sp，
+     * 「哪一行是标题」不用靠颜色和加粗去说。
+     */
+    val CardTitleCompact = TextStyle(
+        fontSize = 16.sp,
+        lineHeight = 22.sp,
         fontWeight = FontWeight.SemiBold,
+        letterSpacing = (-0.1).sp
+    )
+
+    val CardTitleRegular = TextStyle(
+        fontSize = 17.5.sp,
+        lineHeight = 24.sp,
+        fontWeight = FontWeight.Bold,
         letterSpacing = (-0.1).sp
     )
 
@@ -98,13 +129,6 @@ object MiuType {
         fontSize = 11.5.sp,
         lineHeight = 16.sp,
         fontWeight = FontWeight.Normal
-    )
-
-    val TaskTitle = TextStyle(
-        fontSize = 14.5.sp,
-        lineHeight = 20.sp,
-        fontWeight = FontWeight.SemiBold,
-        letterSpacing = (-0.1).sp
     )
 
     val TaskMeta = TextStyle(

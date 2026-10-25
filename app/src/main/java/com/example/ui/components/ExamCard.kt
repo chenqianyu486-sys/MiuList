@@ -35,6 +35,7 @@ import com.example.ui.theme.CardBaseCoatAlpha
 import com.example.ui.theme.CourseTintAlpha
 import com.example.ui.theme.LocalEffectiveFontScale
 import com.example.ui.theme.MiuSurface
+import com.example.ui.theme.MiuType
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.accentBarColor
@@ -245,7 +246,7 @@ fun ExamCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = entry.courseName,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        style = MiuType.CardTitleRegular,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,

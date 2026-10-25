@@ -1181,7 +1181,7 @@ fun DashboardScreen(
                         Column {
                             Text(
                                 text = todayEmptyStateLabel(todayOffReason),
-                                style = MiuType.CourseTitle,
+                                style = MiuType.CardTitleCompact,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Spacer(modifier = Modifier.height(4.dp * LocalEffectiveFontScale))
@@ -1337,7 +1337,7 @@ fun DashboardScreen(
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 Text(
                                                     text = course.name,
-                                                    style = MiuType.CourseTitle.copy(fontSize = 14.5.sp),
+                                                    style = MiuType.CardTitleCompact,
                                                     color = MaterialTheme.colorScheme.onSurface,
                                                     modifier = Modifier.weight(1f, fill = false),
                                                     maxLines = 1,
@@ -1423,7 +1423,7 @@ fun DashboardScreen(
                         Column {
                             Text(
                                 text = "全部完成",
-                                style = MiuType.CourseTitle,
+                                style = MiuType.CardTitleCompact,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Spacer(modifier = Modifier.height(4.dp * LocalEffectiveFontScale))
@@ -2166,7 +2166,7 @@ private fun FeaturedStateChip(
  * ### 行高必须显式写
  *
  * Compose 的 `Text` 只改 `fontSize` 不改 `lineHeight` 时，会**继承默认主题的
- * lineHeight**（本项目是 24sp）——11sp 的小字和 17sp 的课名因此占着一样高的
+ * lineHeight**（本项目是 24sp）——11sp 的小字和 18.5sp 的课名因此占着一样高的
  * 行框，24dp 一行是白白浪费的。这张卡要同时塞下四行事实，就把这几行的
  * lineHeight 逐条写死，行高立刻省出 20dp 上下，教室这一行才塞得进去而
  * 不必把卡继续加高。
@@ -2177,8 +2177,16 @@ private fun FeaturedStateChip(
  * 这张卡的主角是课名 —— 教室、节次、进度都是配角。高度锚点跟着它走
  * （见 [cardHeightAnchor]），所以这个数改了，锚点也要跟着改：
  * 两处写的是同一个常量，不会对不上。
+ *
+ * **加高卡的课名比列表卡更大一档**：17 → 18.5（和其他卡片标题同一个「加一号」）。
+ * 加高卡本来就是这一屏的主角，标题再大一档，它与列表卡的层级差
+ * 才是被看见的，而不是被读出来的。
+ *
+ * ⚠️ 代价：课名越长越容易在这一行被截断（这一行的右边还有状态 chip）。
+ * 「体育训练与比赛（B类队-网球）」这类长名字本来就在临界点上，
+ * 放大之后会更早一点省略。这是已知的取舍 —— 要它就别缩字号。
  */
-private const val CourseCardTitleFontSize = 17f
+private const val CourseCardTitleFontSize = 18.5f
 
 @Composable
 private fun FeaturedCourseCard(
@@ -2301,7 +2309,7 @@ private fun FeaturedCourseCard(
                     Text(
                         text = course.name,
                         fontSize = CourseCardTitleFontSize.sp,
-                        lineHeight = 24.sp,
+                        lineHeight = 26.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
@@ -2550,7 +2558,7 @@ private fun FeaturedExamCard(
                     Text(
                         text = entry.courseName,
                         fontSize = CourseCardTitleFontSize.sp,
-                        lineHeight = 24.sp,
+                        lineHeight = 26.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
