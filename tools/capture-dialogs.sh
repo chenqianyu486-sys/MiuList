@@ -14,6 +14,10 @@
 #
 #   tools/capture-dialogs.sh                 # 跑默认断点
 #   tools/capture-dialogs.sh C411 G800       # 只跑指定断点
+#   RULES_ONLY=1 tools/capture-dialogs.sh    # 只重抓「课程联动规则」那一张
+#
+# RULES_ONLY 与 TASKS_ONLY 同理：改完某一个弹层后只想重验它时用，
+# 省得把整轮弹层（二十来张、二十来分钟）重跑一遍。
 #
 # ## 断点表
 #
@@ -339,7 +343,8 @@ capture_one() {
   OUT="$OUT_ROOT/$label"
   # TASKS_ONLY=1：只重抓「待办编辑弹层」那几张，**不清空**目录。
   # 改完待办编辑弹层后只想重验它时用，省得把整轮弹层重跑一遍。
-  if [ "${TASKS_ONLY:-0}" != "1" ]; then
+  # RULES_ONLY=1：同理，只重抓「课程联动规则」那一张。
+  if [ "${TASKS_ONLY:-0}" != "1" ] && [ "${RULES_ONLY:-0}" != "1" ]; then
     rm -rf "$OUT"
   fi
   mkdir -p "$OUT"
@@ -358,6 +363,14 @@ capture_one() {
 
   if [ "${TASKS_ONLY:-0}" = "1" ]; then
     capture_task_shots
+    echo "  抓到 $(ls "$OUT"/*.png 2>/dev/null | wc -l) 张"
+    return 0
+  fi
+
+  # RULES_ONLY=1：只抓「课程联动规则」这一张（抽屉 → 课程联动规则）。
+  if [ "${RULES_ONLY:-0}" = "1" ]; then
+    relaunch; open_drawer
+    capture_dialog 12_category_rules tap_label "课程联动规则"
     echo "  抓到 $(ls "$OUT"/*.png 2>/dev/null | wc -l) 张"
     return 0
   fi
