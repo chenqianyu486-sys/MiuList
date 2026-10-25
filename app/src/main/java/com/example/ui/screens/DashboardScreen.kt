@@ -578,8 +578,13 @@ fun DashboardScreen(
         state.coursesWithSlots.associateBy { it.course.id }
     }
 
+    // 总览那一串待办：未完成的，**标星的在前**（见 [dashboardPendingTodos]）。
+    //
+    // 这一层排序是决定性的 —— 下面只显示前 [DASHBOARD_TODO_LIMIT] 条，
+    // 截止时间靠后的待办按「截止排」根本挤不进这个窗口，哪怕用户给它标了星。
+    // 所以标星必须参与这里的排序，否则「标星」在总览里等于没用。
     val pendingTasks = remember(state.tasks) {
-        state.tasks.filter { !it.isCompleted }
+        dashboardPendingTodos(state.tasks)
     }
 
 
@@ -1438,7 +1443,7 @@ fun DashboardScreen(
             }
         } else {
             itemsIndexed(
-                pendingTasks.take(5),
+                pendingTasks.take(DASHBOARD_TODO_LIMIT),
                 key = { _, task -> "task_${task.id}" }
             ) { taskIndex, task ->
                 TaskItemCard(

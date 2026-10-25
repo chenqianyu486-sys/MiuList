@@ -245,34 +245,6 @@ private fun urgencyBucketOf(task: TaskEntity, now: Long): String {
 }
 
 /**
- * 组内排序：**标星的在前**，其余保持传入的顺序（那已经是「截止靠前」）。
- *
- * ## 为什么星标排在截止前面
- *
- * 星标是用户**手动挑出来**的那几条 —— `TaskStar` 的注释里写着它唯一真正好用的
- * 那档用法是「手动挑出几条重要的」，而且「那是列表排序给不了的（排序每天都在变）」。
- * 既然它存在的意义就是「这几条我要先看」，它就得排在最前面；
- * 截止时间退成**第二把键**：星标之内仍然按截止靠前的排。
- *
- * ## 为什么只在组内排
- *
- * 传进来的顺序是 DAO 的全局顺序（未完成 → 不设截止在后 → 截止升序 → 新建的在前），
- * 而分组用的是 `groupBy` —— 它**保留入参的先后顺序**。
- * 所以在组内排一次，四种分组方式（按课程 / 按截止 / 按分类 / 按星标）一起都对。
- *
- * 总览页那串**平铺**的待办列表没有「分类」这一层，不在这条规则里 ——
- * 它是「今天要做的事」的流水，星标优先是另一件事，不顺手带。
- *
- * ## 为什么用稳定排序
- *
- * `sortedBy` 是稳定排序：标星的那几条内部仍按原来的截止顺序排，没标星的也是。
- * 只把「标星」这一层提到前面，不重排别的 —— 于是「星标优先」是**唯一**的改动，
- * 截止时间的排法一个字都没动。
- */
-internal fun List<TaskEntity>.starredFirstWithinGroup(): List<TaskEntity> =
-    sortedByDescending { TaskStar.isMarked(it.priority) }
-
-/**
  * 把分组结果摊平成一串 [ChecklistRow]。
  *
  * 摊平而不是按组 `items` 的原因：`items` 拿不到「这一组折起来没有」，
@@ -295,8 +267,8 @@ private fun buildChecklistRows(
         val isCollapsed = group.id in collapsed
         rows += ChecklistRow.Header(group, isCollapsed)
         if (isCollapsed) return
-        // 组内：**标星的在前**，其余保持原来的截止顺序（见 [starredFirstWithinGroup]）。
-        groupTasks.starredFirstWithinGroup().forEach { rows += ChecklistRow.Item(it) }
+        // 组内：**标星的在前**，其余保持原来的截止顺序（见 [starredFirst]）。
+        groupTasks.starredFirst().forEach { rows += ChecklistRow.Item(it) }
     }
 
     when (mode) {
