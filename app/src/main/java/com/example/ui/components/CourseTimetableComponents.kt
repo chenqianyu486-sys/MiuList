@@ -996,8 +996,14 @@ fun CourseLinkageSheet(
                                                 fontWeight = if (task.isCompleted) FontWeight.Normal else FontWeight.SemiBold,
                                                 textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None
                                             ),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                                            // 名称**允许折行**（原来锁死一行 + 省略号）。
+                                            // 这一行是这条待办在弹层里唯一能读到名字的地方，
+                                            // 截成一行就只剩半个名字 —— 读不全就不算标题。
+                                            //
+                                            // weight(1f, fill = false)：拿到徽标右边剩下的宽，
+                                            // 文字才有个确定的折行宽度（不 weight 的话由
+                                            // Row 按剩余空间量，行为一样但不是显式的）。
+                                            modifier = Modifier.weight(1f, fill = false)
                                         )
                                     }
                                     Spacer(modifier = Modifier.height(2.dp))

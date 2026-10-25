@@ -308,12 +308,12 @@ fun TaskEditorSheet(
                                 TextDecoration.None
                             }
                         ),
-                        // 标题**允许折行**（最多两行）：单行输入框在极端字号下会把
+                        // 标题**允许折行**：单行输入框在极端字号下会把
                         // 「【作业】数据结构 第6周作业」截成「【作业】数据结构 第6周作」，
                         // 而那一行是用户唯一能一眼读到这条待办的地方 —— 读不全就不算标题。
+                        // 行数**不设上限**：名字再长也照原样折行，不截断（原来卡在两行）。
                         // 键盘动作仍是「下一项」，所以回车不会打出换行。
                         singleLine = false,
-                        maxLines = 2,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                         keyboardActions = KeyboardActions(
                             onNext = { focusManager.moveFocus(FocusDirection.Down) }

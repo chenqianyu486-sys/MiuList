@@ -220,6 +220,30 @@ private val HeroTodoRefreshSize = 30.dp
 /** 背面那排待办小卡的高度下限（跟着字放大）。 */
 private val HeroTodoMiniCardMinHeight = 64.dp
 
+/** 背面那排待办小卡的固定宽（跟着字放大）。 */
+private val HeroTodoMiniCardWidth = 156.dp
+
+/** 背面小卡的左右内边距（**固定**，不跟字缩放）。 */
+private val HeroTodoMiniCardPadH = 10.dp
+
+/** 背面小卡左侧那条课程色条的宽度（固定）。 */
+private val HeroTodoMiniCardBarWidth = 3.5.dp
+
+/** 背面小卡里色条与文字之间的间距（固定）。 */
+private val HeroTodoMiniCardBarGap = 8.dp
+
+/**
+ * 背面小卡主行（作业名）最多折几行。
+ *
+ * 两行是上限，不是「只准一行」：作业名普遍比一行长
+ * （实测「HW04 动态电路的时域分析」在 156dp 的卡里就要两行），
+ * 锁死一行的话名字总被省略号吃掉一半 —— 读不全就不算标题。
+ *
+ * 封顶两行是因为这是一张**小卡**：再往下它就比一条待办卡还高了，
+ * 主卡背面那一排小卡会被撑成一堵墙。
+ */
+private const val HeroTodoMiniCardTitleMaxLines = 2
+
 /** 背面小卡主行（作业名）的字号。 */
 private val HeroTodoMiniCardTitleSp = 12.5.sp
 
@@ -647,6 +671,15 @@ fun DashboardScreen(
     // 背面的小卡会被卡的下沿裁掉（用户真机 332dp + 1.16 倍字号：
     // 背面要 141.5dp、正面只要 124.8dp，差的 17dp 全从小卡身上裁）。
     // 翻转时两面同高，下面的列表才不跳 —— 所以只能取高的那个。
+    //
+    // 背面那排小卡的**统一高度**：作业名允许折行，所以它取决于**实际那些名字**
+    // 在**实际那个宽度**里折几行 —— 名字都短的时候不必给两行留位。
+    // 算主卡高与画小卡用的是同一个数（差的那一截会被主卡下沿裁掉）。
+    val heroTodoTitles = remember(state.coursesTodoList) {
+        state.coursesTodoList.map { it.title }
+    }
+    val heroMiniCardHeight = heroTodoMiniCardHeight(heroTodoTitles)
+
     val heroHeight = heroCardHeightFor(
         weekText = "第 ${state.currentWeek} 周",
         termText = state.semester?.name?.ifBlank { null } ?: "本学期",
@@ -658,7 +691,7 @@ fun DashboardScreen(
         stacked = heroStacked,
         compact = shortWindow,
         mainSp = dateFontSize.value,
-        backNeeded = heroBackFaceHeightFor()
+        backNeeded = heroBackFaceHeightFor(heroMiniCardHeight)
     )
 
     val cardRevealProgress = LocalCardRevealProgress.current
@@ -1098,6 +1131,7 @@ fun DashboardScreen(
                                     items(state.coursesTodoList, key = { it.id }) { item ->
                                         CoursesMiniCard(
                                             item = item,
+                                            cardHeight = heroMiniCardHeight,
                                             matchingCourse = courseMap.values.find {
                                                 it.course.name.trim() == item.courseName.trim() ||
                                                     it.course.name.contains(item.courseName) ||
@@ -1725,7 +1759,7 @@ internal fun heroCardHeight(
  * 所以这里算出来的高度就是背面实际要占的高度。
  */
 @Composable
-private fun heroBackFaceHeightFor(): Dp {
+private fun heroBackFaceHeightFor(miniCardHeight: Dp): Dp {
     val gap = LocalEffectiveFontScale
     val cardPaddingV = HeroCardPaddingV * gap
 
@@ -1743,31 +1777,20 @@ private fun heroBackFaceHeightFor(): Dp {
         badgeHeight
     )
 
-    // 内容行：横向待办小卡。下限 64dp，但内容本身可能更高（取两者的最大值）。
-    val miniCardHeight = maxOf(
-        HeroTodoMiniCardMinHeight * gap,
-        heroTodoMiniCardContentHeight()
-    )
-
+    // 内容行：横向待办小卡。高度由 [heroTodoMiniCardHeight] 量好传进来 ——
+    // 算卡高和画小卡必须是**同一个数**，否则差的那一截就从卡的下沿被裁掉。
     return cardPaddingV + titleRowHeight + miniCardHeight + cardPaddingV
 }
 
 /**
  * 背面那张小卡**内容**要占的高度（不含高度下限 64dp）。
  *
- * 小卡里是「作业名 + 截止时间 · 课程名」两行，所以高度 = 上下内边距 +
+ * 小卡里是「作业名 + 截止时间 · 课程名」两段，所以高度 = 上下内边距 +
  * 主行 + 间距 + 备注行。每一项都用**小卡里真正用的那个样式**去量。
  */
 @Composable
-private fun heroTodoMiniCardContentHeight(): Dp {
+private fun heroTodoMiniCardContentHeight(titleHeight: Dp): Dp {
     val gap = LocalEffectiveFontScale
-    val titleHeight = measureTextHeight(
-        text = "HW04 动态电路的时域分析",
-        style = MaterialTheme.typography.titleSmall.copy(
-            fontWeight = FontWeight.Bold,
-            fontSize = HeroTodoMiniCardTitleSp
-        )
-    )
     val remarkHeight = measureTextHeight(
         text = "12月3日 · 数字电路",
         style = MaterialTheme.typography.labelSmall.copy(fontSize = HeroTodoMiniCardRemarkSp)
@@ -1778,10 +1801,85 @@ private fun heroTodoMiniCardContentHeight(): Dp {
         remarkHeight
 }
 
+/**
+ * 背面那排小卡的**统一高度**。
+ *
+ * ## 为什么要「统一」
+ *
+ * 小卡横向排成一行（LazyRow），每张卡按自己的内容长高的话，这一排会变成
+ * **参差不齐的下沿** —— 玻璃面一深一浅，读起来像坏掉了。
+ * 所以量一次最长的那张，全排都用这个高度。
+ *
+ * ## 主行的高度从哪来
+ *
+ * 作业名**允许折行**（最多 [HeroTodoMiniCardTitleMaxLines] 行），
+ * 所以「主行有多高」取决于**实际那些名字**在**实际那个宽度**里折几行，
+ * 而不是拿一句示例文字量一次 —— 名字都短的时候没必要给两行留位。
+ *
+ * @param titles 这一屏要显示的作业名（空列表 = 没有作业）。
+ */
+@Composable
+private fun heroTodoMiniCardHeight(titles: List<String>): Dp {
+    val gap = LocalEffectiveFontScale
+    val titleStyle = heroTodoMiniCardTitleStyle()
+    val textWidth = heroTodoMiniCardTextWidth()
+
+    val titleHeight = if (titles.isEmpty()) {
+        // 没有作业时也要给出一个高度（背面那一行空态要用）。
+        measureTextHeight(text = "HW04 动态电路的时域分析", style = titleStyle)
+    } else {
+        titles.maxOf { title ->
+            measureTextHeight(
+                text = title,
+                style = titleStyle,
+                maxWidth = textWidth,
+                maxLines = HeroTodoMiniCardTitleMaxLines
+            )
+        }
+    }
+
+    return maxOf(
+        HeroTodoMiniCardMinHeight * gap,
+        heroTodoMiniCardContentHeight(titleHeight)
+    )
+}
+
+/**
+ * 背面小卡主行（作业名）的文字样式。
+ *
+ * 测量与渲染必须是**同一份**样式，否则量出来的高度不算数
+ * （换一个字重，行高就变了）。
+ */
+@Composable
+private fun heroTodoMiniCardTitleStyle(): TextStyle =
+    MaterialTheme.typography.titleSmall.copy(
+        fontWeight = FontWeight.Bold,
+        fontSize = HeroTodoMiniCardTitleSp
+    )
+
+/**
+ * 背面小卡里「作业名」那一列的可用宽（dp）。
+ *
+ * = 卡宽 − 左右内边距 − 左侧色条 − 色条与文字的间距。
+ *
+ * 卡宽跟着字放大，内边距 / 色条 / 间距是固定的 —— 所以**字越大，
+ * 能放名字的地方越宽**（这也是小卡宽跟着放大、而不是只放高度的原因）。
+ */
+@Composable
+private fun heroTodoMiniCardTextWidth(): Dp {
+    val scale = LocalEffectiveFontScale
+    return HeroTodoMiniCardWidth * scale -
+        HeroTodoMiniCardPadH * 2 -
+        HeroTodoMiniCardBarWidth -
+        HeroTodoMiniCardBarGap
+}
+
 @Composable
 private fun CoursesMiniCard(
     item: CoursesTodoItem,
     matchingCourse: CourseEntity?,
+    /** 统一的小卡高度（[heroTodoMiniCardHeight] 量出来的那一个）。 */
+    cardHeight: Dp,
     modifier: Modifier = Modifier
 ) {
     val courseColor = remember(matchingCourse) {
@@ -1796,39 +1894,46 @@ private fun CoursesMiniCard(
         modifier = modifier
             // 宽度保持固定：这张卡在 LazyRow 里，横向测量是**无界**的，
             // 宽度写成 min 时行内的 weight 分不到确定的剩余宽度（标题会被压没）。
-            // 高度则可以长：Row 上挂了 heightIn(min = 64.dp)。
+            // 高度则可以长：Row 上挂了 height(cardHeight)。
             //
             // 但「固定」不等于「不跟字走」：作业名 12.5.sp 在 156.dp 的卡里，
             // 字号一放大到 150% 名字就装不下（会被 Ellipsis 截掉）。
             // 所以宽度与高度都按文字放大倍数走（见 [scaledWithText]）——
             // 它在 LazyRow 里，卡变宽了用户横向滚就是了。
-            .width(156.dp.scaledWithText())
+            .width(HeroTodoMiniCardWidth.scaledWithText())
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                // 高度下限挂在这里而不是外面：Row 里的 glassSurface 需要覆盖
+                // 高度是**外面算好的那一个**（[heroTodoMiniCardHeight]）：
+                // 算主卡高和画小卡必须是同一个数 —— 差的那一截会从小卡身上
+                // 或主卡的下沿被裁掉（这一类坏点以前真的发生过）。
+                //
+                // 高度下限原来挂在这里：Row 里的 glassSurface 需要覆盖
                 // 「至少有 64dp」的那块面。不能再用 fillMaxSize —— 外层是
                 // LazyRow，把高度下限写成 min 之后，fillMaxSize 会按 LazyRow
                 // 的可用高度把每张小卡拉满（而不是 64dp）。
-                .heightIn(min = HeroTodoMiniCardMinHeight.scaledWithText())
+                .height(cardHeight)
                 .glassSurface(
                     shape = RoundedCornerShape(14.dp),
                     tint = cardTint(courseColor, 0.08f),
                     tintAlpha = 0.08f,
                     baseCoatAlpha = contentBase
                 )
-                .padding(horizontal = 10.dp, vertical = HeroTodoMiniCardPadV.scaledWithText()),
+                .padding(
+                    horizontal = HeroTodoMiniCardPadH,
+                    vertical = HeroTodoMiniCardPadV.scaledWithText()
+                ),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 左侧课程色细条
             Box(
                 modifier = Modifier
-                    .size(3.5.dp, 36.dp.scaledWithText())
+                    .size(HeroTodoMiniCardBarWidth, 36.dp.scaledWithText())
                     .clip(RoundedCornerShape(2.dp))
                     .background(accentBarColor(courseColor))
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(HeroTodoMiniCardBarGap))
 
             Column(
                 modifier = Modifier.weight(1f),
@@ -1837,12 +1942,12 @@ private fun CoursesMiniCard(
                 // 主行：作业名称
                 Text(
                     text = item.title,
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontWeight = FontWeight.Bold,
-                        fontSize = HeroTodoMiniCardTitleSp
-                    ),
+                    style = heroTodoMiniCardTitleStyle(),
                     color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
+                    // 名字**允许折行**（最多两行）：作业名普遍比一行长
+                    // （实测「HW04 动态电路的时域分析」就要两行），
+                    // 锁死一行的话末尾总被省略号吃掉一半 —— 读不全就不算标题。
+                    maxLines = HeroTodoMiniCardTitleMaxLines,
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(HeroTodoMiniCardGap * LocalEffectiveFontScale))

@@ -20,7 +20,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
@@ -790,6 +792,46 @@ fun measureTextSize(text: String, style: TextStyle): DpSize {
 @Composable
 fun measureTextHeight(text: String, style: TextStyle): Dp =
     measureTextSize(text, style).height
+
+/**
+ * 实测一段文字在**给定宽度**下渲染出来的高度（dp）。
+ *
+ * ## 与 [measureTextHeight] 的区别
+ *
+ * 那个不设宽度约束，量出来的是「**一行**有多高」；这个给一个宽度上限，
+ * 量出来的是「这段字**折行之后**有多高」—— 折几行就量几行。
+ *
+ * ## 为什么需要它
+ *
+ * 「盒子要留多大」这个问题，在文字**允许折行**之后就不能再用一行的高度算了：
+ * 名字长一点就折成两行，盒子得跟着长一截。用一行的高度去留位，
+ * 第二行就被裁掉（这正是「窄屏上小卡下面那行只剩半个字」那一类坏点）。
+ *
+ * @param maxWidth 文字可用的最大宽度（dp）。文字按它折行。
+ * @param maxLines 最多折几行；超出的部分按 [TextOverflow.Ellipsis] 截断。
+ */
+@Composable
+fun measureTextHeight(
+    text: String,
+    style: TextStyle,
+    maxWidth: Dp,
+    maxLines: Int = Int.MAX_VALUE
+): Dp {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val widthPx = with(density) { maxWidth.roundToPx() }
+    val layout = remember(measurer, text, style, widthPx, maxLines) {
+        measurer.measure(
+            text = text,
+            style = style,
+            overflow = TextOverflow.Ellipsis,
+            softWrap = true,
+            maxLines = maxLines,
+            constraints = Constraints(maxWidth = widthPx)
+        )
+    }
+    return with(density) { layout.size.height.toDp() }
+}
 
 /**
  * 给**独立窗口**（`androidx.compose.ui.window.Dialog`）用的自适应包装。

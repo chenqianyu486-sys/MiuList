@@ -230,9 +230,16 @@ fun TaskItemCard(
                     } else {
                         MaterialTheme.colorScheme.onSurface
                     },
-                    textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None
+                    // 名称**不设行数上限**：长名字折行显示，而不是被省略号截掉。
+                    //
+                    // 这一行是这条待办唯一能一眼读到名字的地方 —— 项目原则是
+                    // 「读不全就不算标题」。原来卡在两行：「【作业】数据结构 第6周作业」
+                    // 在窄屏上折两行还差一点，末尾就被省略号吃掉了，读出来的是
+                    // 一个不完整的名字（还容易被当成另一个待办的名字）。
+                    //
+                    // 名字是用户自己写的，长度不可控，所以上限交给内容本身：
+                    // 折几行就长几行，卡跟着长。
                 )
 
                 Spacer(modifier = Modifier.height(4.dp.scaledWithText()))
