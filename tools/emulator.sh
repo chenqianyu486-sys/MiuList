@@ -64,8 +64,13 @@ start_emulator() {
 
   echo "启动 AVD=$AVD  渲染=$gpu_flag ..."
   # 用 PowerShell 的 Start-Process：进程独立于本脚本，不会被 bash 任务超时带走。
+  #
+  # **`-gpu` 必须单独成一个参数**（'-gpu','$gpu_flag'），不能只传渲染模式的名：
+  # 只传 `swiftshader_indirect` 的话它会变成一个**位置参数**，模拟器看不懂就**启动即退**，
+  # 而这里的输出被丢进了 /dev/null —— 表现是「脚本跑满 5 分钟然后说超时，模拟器没起来」，
+  # 真正的原因（参数写错）一个字都看不到。
   powershell -NoProfile -Command \
-    "Start-Process -FilePath '$EMULATOR' -ArgumentList '-avd','$AVD','-no-window','-no-audio','-no-boot-anim','$gpu_flag' -WindowStyle Hidden" \
+    "Start-Process -FilePath '$EMULATOR' -ArgumentList '-avd','$AVD','-no-window','-no-audio','-no-boot-anim','-gpu','$gpu_flag' -WindowStyle Hidden" \
     >/dev/null 2>&1
 
   printf "等待开机"
@@ -83,7 +88,17 @@ start_emulator() {
     printf "."
     sleep 5
   done
-  echo "  ✘ 超时，模拟器没起来（看 .tmp/emu.err.log）"
+  echo "  ✘ 超时，模拟器没起来"
+  # 超时的时候**把真正的原因打出来**：模拟器把自己的日志写在**当前目录**下
+  # （emulator-<时间戳>.err.log），那里才有「为什么没起来」。
+  local errlog
+  errlog="$(ls -t emulator-*.err.log 2>/dev/null | head -1)"
+  if [ -n "$errlog" ]; then
+    echo "     最新的模拟器日志：$errlog（末尾几行）"
+    tail -5 "$errlog" | sed 's/^/       /'
+  else
+    echo "     当前目录下没有 emulator-*.err.log —— 模拟器可能根本没被拉起来。"
+  fi
   return 1
 }
 
