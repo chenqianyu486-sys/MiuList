@@ -41,6 +41,8 @@ google-services.json
 # 全部锚到仓库根目录，避免误伤 app/src 下的同名文件。
 .shots/
 /_shots/
+# Playwright CLI 的页面快照与截图。
+/.playwright-cli/
 # 断点矩阵的抓图输出（tools/capture-matrix.sh 与 capture-dialogs.sh 的产物）。
 # 一次矩阵就是几百 MB 的 png + uiautomator dump，是本地验收的中间产物。
 /.tmp/
@@ -59,6 +61,16 @@ google-services.json
 __pycache__/
 *.py[cod]
 *$py.class
+
+# 电脑端启动器的打包产物（PyInstaller）：
+# dist/ 里是几十 MB 的 exe，build/ 里是中间文件 —— 都不是源码。
+# 别人要用自己跑 `python tools/pc-web/build.py` 重新打。
+tools/pc-web/build/
+tools/pc-web/dist/
+
+# 新桌面端：依赖与单文件构建产物（产物用 npm run build 生成）
+desktop/node_modules/
+desktop/dist/
 
 # --- 设计工作笔记本：本地留存，不进版本库 ---
 # 约 21MB 的基线/对比截图、数据库快照、prefs 导出，外加 20 个

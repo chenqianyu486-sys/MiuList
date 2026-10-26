@@ -265,3 +265,32 @@ tools/release.sh v1.0.2 --summary "一句话概述"
 - `--dry-run` 会在构建与校验之后**把版本号还原**（任何退出路径都还原，包括构建失败）。
 - 想验 release 包能不能启动：手写一份临时 AVD（`avdmanager` 在这台机器上不可用），
   用完 `avdmanager delete avd -n <名字>` 删掉。
+
+---
+
+## 电脑端网页端：`desktop/`
+
+**beta 起桌面端改为单文件静态页面**：`desktop/dist/MiuList-Web.html`。
+Chrome / Edge 打开，浏览器直接当桌面端；没有 exe、没有本地服务，也没有
+Windows 的「未知发布者」弹窗。数据用 localStorage + 可选本机 JSON 快照
+（不含配对密钥）；手机地址扫手机「网页同步」里的地址码，之后让手机扫配对码。
+
+```bash
+cd desktop
+npm install
+npm run dev       # 开发（Vite）
+npm run build     # → desktop/dist/MiuList-Web.html
+```
+
+联调（mock 手机）：
+
+```bash
+node tools/web-mock-server.mjs --port 8801 --auto-secret
+# 打开 …/MiuList-Web.html?base=http://127.0.0.1:8801&devsecret=<打印出来的 secret>
+```
+
+- 新桌面端源码/说明：[../desktop/README.md](../desktop/README.md)
+- 协议（含新的密文 body 传输）：[../docs/lan-sync-protocol.md](../docs/lan-sync-protocol.md)
+
+> `tools/pc-web/` 的 Python 启动器与单 exe 已退役（会触发 Windows 的未签名应用提示）；
+> 保留目录仅供历史 / 本地开发参考。它用的仍是同一份 `web/`，但不再随 beta 分发。

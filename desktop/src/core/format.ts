@@ -1,0 +1,218 @@
+import { NO_DUE, type Exam, type Snapshot, type Task } from './types';
+
+const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+
+export function parseDay(day: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day || '');
+  if (!m) return null;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3]);
+}
+
+export function dayDiff(from: string, to: string): number | null {
+  const a = parseDay(from);
+  const b = parseDay(to);
+  if (a === null || b === null) return null;
+  return Math.round((b - a) / 86400000);
+}
+
+export function localToday(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+export function weekdayOf(day: string): number {
+  const ms = parseDay(day);
+  if (ms === null) return 0;
+  return new Date(ms).getUTCDay();
+}
+
+export function weekdayLabel(weekday: number): string {
+  if (weekday === 7 || weekday === 0) return '星期日';
+  return `星期${WEEKDAYS[weekday] || ''}`;
+}
+
+export function formatFullDate(day: string, weekday?: number): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day || '');
+  if (!m) return day || '';
+  return `${m[1]}年${+m[2]}月${+m[3]}日`;
+}
+
+export function formatMonthDay(day: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day || '');
+  if (!m) return day || '';
+  return `${+m[2]}月${+m[3]}日`;
+}
+
+export function shortDate(day: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day || '');
+  if (!m) return day || '';
+  return `${+m[2]}-${String(+m[3]).padStart(2, '0')}`;
+}
+
+export function dueLabel(task: Task, today: string): string {
+  const s = task.dueDateString || '';
+  if (!s) return '';
+  const date = s.slice(0, 10);
+  const time = s.length > 10 ? s.slice(11) : '';
+  const diff = dayDiff(today, date);
+  if (diff === null) return s;
+  if (diff === 0) return time ? `今天 ${time}` : '今天';
+  if (diff === 1) return time ? `明天 ${time}` : '明天';
+  if (diff === -1) return time ? `昨天 ${time}` : '昨天';
+  if (diff < 0) return `逾期 ${Math.abs(diff)} 天`;
+  if (diff <= 7) return `${diff} 天后`;
+  return time ? `${shortDate(date)} ${time}` : shortDate(date);
+}
+
+export function isOverdue(task: Task, today: string): boolean {
+  if (task.isCompleted) return false;
+  if (!task.dueDateString) return false;
+  const diff = dayDiff(today, task.dueDateString.slice(0, 10));
+  return diff !== null && diff < 0;
+}
+
+export function isDueToday(task: Task, today: string): boolean {
+  if (task.isCompleted || !task.dueDateString) return false;
+  return task.dueDateString.slice(0, 10) === today;
+}
+
+export function inTodayList(task: Task, today: string): boolean {
+  if (task.isCompleted) return false;
+  if (!task.dueDateString) return true;
+  return task.dueDateString.slice(0, 10) <= today;
+}
+
+export function formatTime(millis: number | null | undefined, offsetMinutes: number): string {
+  if (!millis) return '—';
+  const d = new Date(millis + (offsetMinutes ?? 480) * 60000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(
+    d.getUTCHours(),
+  )}:${p(d.getUTCMinutes())}`;
+}
+
+export function formatSyncTime(millis: number | null | undefined, snapshot: Snapshot): string {
+  return formatTime(millis, snapshot.utcOffsetMinutes ?? 480);
+}
+
+export function sortOpenTasks(tasks: Task[], today: string): Task[] {
+  return [...tasks].sort((a, b) => {
+    const aStar = a.priority === 'STAR' ? 1 : 0;
+    const bStar = b.priority === 'STAR' ? 1 : 0;
+    if (aStar !== bStar) return bStar - aStar;
+
+    const aOver = isOverdue(a, today) ? 0 : 1;
+    const bOver = isOverdue(b, today) ? 0 : 1;
+    if (aOver !== bOver) return aOver - bOver;
+
+    const aDue = a.dueDateString ? a.dueDateString : '9999-99-99';
+    const bDue = b.dueDateString ? b.dueDateString : '9999-99-99';
+    if (aDue !== bDue) return aDue < bDue ? -1 : 1;
+
+    return (b.createdAt || 0) - (a.createdAt || 0);
+  });
+}
+
+export function sortDoneTasks(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+}
+
+export function examTimestamp(exam: Exam): number {
+  if (exam.startAt) return exam.startAt;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(exam.whenText || '');
+  if (!m) return 0;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3]);
+}
+
+export function examDay(exam: Exam): string {
+  if (exam.startAt) {
+    const d = new Date(exam.startAt + 8 * 3600000);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
+  }
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(exam.whenText || '');
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+}
+
+export function examCountdown(exam: Exam, today: string): string {
+  const day = examDay(exam);
+  const diff = day ? dayDiff(today, day) : null;
+  if (diff === null) return '';
+  if (diff === 0) return '今天';
+  if (diff === 1) return '明天';
+  if (diff > 1) return `${diff} 天后`;
+  return `已过 ${Math.abs(diff)} 天`;
+}
+
+export function formatExamWhen(exam: Exam): string {
+  if (exam.whenText) return exam.whenText;
+  if (exam.startAt) return formatTime(exam.startAt, 480);
+  return exam.dateLabel || '';
+}
+
+export function toDueInput(task: Task | null): string {
+  if (!task) return '';
+  const s = task.dueDateString || '';
+  const m = /^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/.exec(s);
+  if (!m) return '';
+  return `${m[1]}T${m[2]}`;
+}
+
+export function dueFromInput(input: string, offsetMinutes: number): {
+  dueDateString: string;
+  dueDateTimestamp: number;
+} {
+  if (!input) return { dueDateString: '', dueDateTimestamp: NO_DUE };
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(input);
+  if (!m) return { dueDateString: '', dueDateTimestamp: NO_DUE };
+  const [, y, mo, d, h, mi] = m;
+  const ts = Date.UTC(+y, +mo - 1, +d, +h, +mi) - (offsetMinutes ?? 480) * 60000;
+  return {
+    dueDateString: `${y}-${mo}-${d} ${h}:${mi}`,
+    dueDateTimestamp: ts,
+  };
+}
+
+export function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 6) return '夜深了';
+  if (h < 12) return '早上好';
+  if (h < 18) return '下午好';
+  return '晚上好';
+}
+
+export function hexToRgba(hex: string | undefined, alpha: number): string {
+  const h = String(hex || '').replace('#', '').trim();
+  if (h.length !== 6 || /[^0-9a-fA-F]/.test(h)) return `rgba(201, 208, 216, ${alpha})`;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+export function todayStats(snapshot: Snapshot): {
+  courses: number;
+  tasks: number;
+  exams: number;
+  done: number;
+} {
+  const today = snapshot.today || localToday();
+  const tasks = snapshot.tasks || [];
+  const openToday = tasks.filter((t) => inTodayList(t, today));
+  const done = tasks.filter(
+    (t) => t.isCompleted && t.completedAt && formatDayOf(t.completedAt, snapshot.utcOffsetMinutes) === today,
+  ).length;
+  return {
+    courses: (snapshot.todayCourses || []).length,
+    tasks: openToday.length,
+    exams: (snapshot.exams || []).filter((e) => e.isToday).length,
+    done,
+  };
+}
+
+function formatDayOf(millis: number, offsetMinutes: number): string {
+  const d = new Date(millis + (offsetMinutes ?? 480) * 60000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
+}

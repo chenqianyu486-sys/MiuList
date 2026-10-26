@@ -52,7 +52,10 @@ interface SyncEventBroadcaster {
  *
  * ## 负载：密文
  *
- * 请求体放在 `X-ML-Enc` 头里（base64url 的密文），响应体也是密文。
+ * 请求密文放在 **HTTP body** 里（原始 sealed 字节，`X-ML-Enc: 1` 标记）；
+ * 响应密文也在 body 里（base64url，`X-ML-Enc: 1` 标记）。
+ * 不能把密文放进请求头：请求头在手机侧限制 16 KB，而带周课表的快照更大，
+ * 放头里会把连接顶断，浏览器只会报一个莫名其妙的 CORS 失败。
  * 抓包能看到的只有密文与随机数。
  *
  * 例外：`/api/health` 与 `/api/pair/` 下的接口不加密 ——
@@ -245,9 +248,12 @@ class WebSyncApi(
         val device = pairing.device(deviceId) ?: return null
 
         val enc = request.header(HEADER_ENC)
-        val body = if (enc != null) {
-            val sealed = runCatching { WebCrypto.fromBase64Url(enc) }.getOrNull() ?: return null
-            runCatching { WebCrypto.open(device.keys, sealed) }.getOrNull() ?: return null
+        // `X-ML-Enc: 1` = 密文直接放在 HTTP body 里。
+        // 不能把密文放进请求头：手机侧请求头限制 16 KB，而一份带周课表的快照
+        // 轻松超过这个数，放在头里会把连接直接顶断（浏览器只报 CORS 失败）。
+        if (request.body.isNotEmpty() && enc != "1") return null
+        val body = if (enc == "1") {
+            runCatching { WebCrypto.open(device.keys, request.body) }.getOrNull() ?: return null
         } else {
             request.body
         }

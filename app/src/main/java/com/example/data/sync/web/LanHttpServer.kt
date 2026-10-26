@@ -168,7 +168,7 @@ class LanHttpServer(
                 }
                 when (reply) {
                     is HttpReply.Full -> writeFull(socket, request, reply)
-                    is HttpReply.EventStream -> writeEventStream(socket, reply)
+                    is HttpReply.EventStream -> writeEventStream(socket, request, reply)
                 }
             }
         } catch (_: Exception) {
@@ -263,13 +263,18 @@ class LanHttpServer(
         out.flush()
     }
 
-    private fun writeEventStream(socket: Socket, reply: HttpReply.EventStream) {
+    private fun writeEventStream(socket: Socket, request: HttpRequest, reply: HttpReply.EventStream) {
         val out = BufferedOutputStream(socket.getOutputStream())
         val head = StringBuilder()
         head.append("HTTP/1.1 200 OK\r\n")
         head.append("Content-Type: text/event-stream; charset=utf-8\r\n")
         head.append("Cache-Control: no-cache\r\n")
         head.append("Connection: close\r\n")
+        // **SSE 也要带 CORS 头。** EventSource 是跨源的（网页端跑在电脑上时，
+        // 页面在 127.0.0.1，接口在手机的 192.168.x.x），
+        // 少了 Access-Control-Allow-Origin 浏览器会直接掐掉这条流 ——
+        // 症状是「配对能成、数据能拉，但改动不实时推送」。
+        appendCors(head, request)
         head.append("\r\n")
         out.write(head.toString().toByteArray(Charsets.ISO_8859_1))
         out.flush()
@@ -309,19 +314,64 @@ class LanHttpServer(
      * 数据接口本身要 Bearer token（网页端不会把 token 交给别的站点），
      * 但 `/api/pair/request` 是免鉴权的 —— `*` 会让别人随便申请配对码。
      * 回显 Origin 至少把「能不能读」绑在同源上。
+     *
+     * ## 预检要放行的头，一个都不能少
+     *
+     * 网页端跑在电脑上时（本机有「MiuList 网页端启动器」），页面在 `127.0.0.1`，
+     * 而接口在手机的 `192.168.x.x` —— **跨源**。浏览器于是会先发一个 OPTIONS 预检，
+     * 预检里 `Access-Control-Allow-Headers` 没列出的请求头会被**直接拦掉**，
+     * 表现是「网页端在电脑上打开就永远连不上」。
+     *
+     * 签名那四个头（`X-ML-Device` / `X-ML-Ts` / `X-ML-Nonce` / `X-ML-Sig`）
+     * 与密文头（`X-ML-Enc`）都在自定义头里，所以必须逐个列出来。
      */
     private fun appendCors(head: StringBuilder, request: HttpRequest) {
         val origin = request.header("origin") ?: return
         head.append("Access-Control-Allow-Origin: ").append(origin).append("\r\n")
         head.append("Access-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS\r\n")
-        head.append("Access-Control-Allow-Headers: Authorization, Content-Type\r\n")
+        head.append("Access-Control-Allow-Headers: ")
+            .append(ALLOWED_HEADERS.joinToString(", "))
+            .append("\r\n")
+        // **必须显式暴露 `X-ML-Enc`。**
+        //
+        // 跨源时浏览器只把「CORS 安全列表」里的响应头交给脚本
+        // （Cache-Control、Content-Type、Content-Length、Expires、Last-Modified、Pragma），
+        // 自定义头一律看不见 —— 除非服务端用 `Access-Control-Expose-Headers` 点名。
+        //
+        // 这个头是「**这坨是密文**」的标记：网页端靠它决定要不要解密。
+        // 少了这一行，网页端会把密文当明文 JSON 解析 → 报「响应不是合法 JSON」，
+        // 症状是「连上了、握手也成功了，但快照永远拉不下来」——
+        // 而同源时（网页由手机托管）一切正常，极难联想到是 CORS。
+        head.append("Access-Control-Expose-Headers: ").append(WebSyncApi.HEADER_ENC).append("\r\n")
         head.append("Access-Control-Max-Age: 600\r\n")
+        // Chrome 的 Private Network Access：从 file:// 页面访问局域网里的手机时，
+        // 预检会带 Access-Control-Request-Private-Network；必须明确放行。
+        if (request.header("access-control-request-private-network") == "true") {
+            head.append("Access-Control-Allow-Private-Network: true\r\n")
+        }
         head.append("Vary: Origin\r\n")
     }
 
     companion object {
         private const val READ_TIMEOUT_MS = 30_000
         private const val MAX_LINE_BYTES = 16 * 1024
+
+        /**
+         * CORS 预检放行的请求头。
+         *
+         * 签名那四个与密文那个都是**自定义头** —— 预检里没列出来的头，
+         * 浏览器会在真正发请求之前就拦掉。跨源时少列一个，
+         * 表现就是「网页端连不上」，而同源时一切正常。
+         */
+        private val ALLOWED_HEADERS = listOf(
+            "Authorization",
+            "Content-Type",
+            WebSyncApi.HEADER_DEVICE,
+            WebSyncApi.HEADER_TS,
+            WebSyncApi.HEADER_NONCE,
+            WebSyncApi.HEADER_SIG,
+            WebSyncApi.HEADER_ENC,
+        )
 
         fun statusText(status: Int): String = when (status) {
             200 -> "OK"

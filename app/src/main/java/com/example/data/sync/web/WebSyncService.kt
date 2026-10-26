@@ -49,6 +49,7 @@ class WebSyncService(
     private val sinks = CopyOnWriteArraySet<HttpReply.EventSink>()
     private val sinkDevices = java.util.concurrent.ConcurrentHashMap<HttpReply.EventSink, PairingStore.PairedDevice>()
     private var server: LanHttpServer? = null
+    private var discovery: DiscoveryResponder? = null
     private var observing = false
 
     /** 服务是否在跑。 */
@@ -113,6 +114,13 @@ class WebSyncService(
         return try {
             http.start()
             server = http
+            // 局域网发现：电脑端的网页端靠它找到「手机在哪」。
+            // 起不来也不影响同步本身 —— 用户可以手填地址。
+            discovery = DiscoveryResponder(
+                httpPortProvider = { port },
+                deviceName = { deviceName() },
+                appVersion = { appVersion() },
+            ).also { it.start() }
             observeDatabaseChanges()
             true
         } catch (e: Exception) {
@@ -124,6 +132,8 @@ class WebSyncService(
     fun stop() {
         server?.stop()
         server = null
+        discovery?.stop()
+        discovery = null
         for (sink in sinks) {
             runCatching { sink.close() }
         }

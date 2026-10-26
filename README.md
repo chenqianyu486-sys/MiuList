@@ -37,6 +37,7 @@
 - **数据导入导出**：整机状态导出成一份 JSON 快照，换机、重装、备份都能直接恢复。导入前先预览差异，再决定谁覆盖谁。
 - **天气与空气质量**：天气来自心知天气，空气质量来自 Open-Meteo，显示在总览里。
 - **拟物质感**：Jetpack Compose 编写，课程用粉彩配色，支持自定义壁纸。
+- **桌面端是一个单文件 HTML**：双击在 Chrome / Edge 打开，没有 exe、没有本地服务，也不会弹 Windows 的「未知应用」；数据留在本机（可选 JSON 快照）。见下面「🖥️ 在电脑上用网页端」。
 
 ## 🔐 安全性
 
@@ -48,6 +49,7 @@
 - **密码不参与输入法纠错**：密码框与学号框都关掉了自动更正与首字母大写，密码不会被存进输入法的学习词库。
 - **导出快照不含凭据**：导出的 JSON 只有课程、校历、待办、分类与生成规则，不含学号与密码（有单测钉住）。
 - **数据不离开设备**：课表、待办、壁纸与凭据都被排除在 Android 云备份与设备迁移之外 —— 系统不会替用户把数据上传到云端、也不会在换机时自动搬走。换机靠 App 自带的「导出快照 / 导入快照」。
+- **桌面端 JSON 快照不含配对密钥**：电脑端的快照文件只存课程、待办、考试与同步元数据；配对 secret 只在浏览器 localStorage 里。换浏览器/清缓存后重新扫码，数据本身仍可从 JSON 导入。
 - **只申请两个权限**：`INTERNET` 与 `ACCESS_NETWORK_STATE`，没有别的。
 
 > 上面这些基线由 `app/src/test/java/com/example/security/SecurityBaselineTest.kt` 钉住：清单、网络配置、备份规则一旦被改坏，测试立刻红。
@@ -59,6 +61,40 @@
 3. 打开 App：浙大同学填学号密码登录统一身份认证即可同步课表与考试；其他学校手动添加课程并填写学期校历即可。
 
 > 当前是测试版：功能仍在调整。本地数据不上云（Android 的云备份与换机迁移都已关闭），**卸载重装会丢**，重要数据记得先导出快照备份。
+
+## 🖥️ 在电脑上用网页端
+
+桌面端现在是**一个可以直接双击的单文件 HTML**：
+`desktop/dist/MiuList-Web.html`。它不需要 exe、不需要装 Python / Node，也没有本地服务 ——
+所以**不会再弹 Windows 的「未知发布者 / 未知应用」**。
+
+1. 构建（或直接使用 Release 里附带的 `MiuList-Web.html`）：
+   ```bash
+   cd desktop
+   npm install
+   npm run build
+   ```
+2. 用 **Chrome / Edge** 打开 `desktop/dist/MiuList-Web.html`（双击即可）。
+3. 第一次连接：
+   - 手机 MiuList → 更多 → 网页同步 → 打开「局域网服务」；
+   - 电脑点「扫描手机二维码」，扫手机屏幕上的**地址码**；没有摄像头就手动填地址，也可以上传二维码截图；
+   - 电脑显示配对码 → 手机相机扫它 → 手机上点「允许」。
+   地址和配对会被记住，之后打开即自动同步。
+4. 数据：
+   - 浏览器 localStorage 是实时数据，手机不在也能看、能改；
+   - 「同步 → 快照」可以绑定一个本机 **JSON 文件**自动落盘；**文件不含配对密钥**；
+   - 清浏览器数据或换浏览器后需要重新扫码；数据本身仍可从 JSON 导入。
+
+beta 的几个取舍：
+
+- **没有 UDP 自动发现**：浏览器发不了广播；地址扫一次或填一次，之后记住。
+- **首次是两步扫码**：先扫手机地址，再让手机扫电脑的配对码；之后秒连。
+- **Chrome / Edge**：自动写入 JSON 依赖 File System Access API；其他浏览器可以用导出/导入。
+- 手机 App 需要与桌面端**同一批 beta**：同步请求体已改为 HTTP body，旧版客户端不兼容。
+- 旧的 `tools/pc-web` Python 启动器 / 单 exe 已退役，保留仅为历史参考。
+
+细节见 [desktop/README.md](desktop/README.md)，
+协议细节见 [docs/lan-sync-protocol.md](docs/lan-sync-protocol.md)。
 
 ## 🛠️ 源码
 
@@ -80,6 +116,23 @@ gradlew.bat assembleDebug
 
 产物在 `app/build/outputs/apk/debug/app-debug.apk`。
 
+### 桌面网页端
+
+需要 Node.js 20+。桌面端用 React + TypeScript + Vite 构建，产物是**单个 HTML**：
+
+```bash
+cd desktop
+npm install
+npm run build     # → desktop/dist/MiuList-Web.html
+```
+
+开发时 `npm run dev`；用 mock 手机联调、截图验收的步骤见
+[desktop/README.md](desktop/README.md)。手机侧的同步单测：
+
+```bash
+gradlew.bat testDebugUnitTest --tests "com.example.data.sync.web.WebSyncApiTest"
+```
+
 ### 一键预览
 
 Windows 上开发，双击仓库根目录的 **`start-preview.bat`** 就行：构建 → 起模拟器 → 装包 → 启动 App 一条龙，
@@ -95,7 +148,7 @@ start-preview.bat -Display base  # 换成设计基准 411dp
 ### 跑测试
 
 ```bash
-# JVM 单测（77 个测试类、810 个用例，默认不联网）
+# JVM 单测（98 个测试类、941 个用例，默认不联网）
 gradlew.bat :app:testDebugUnitTest
 
 # 插桩测试（需要连着设备或模拟器）

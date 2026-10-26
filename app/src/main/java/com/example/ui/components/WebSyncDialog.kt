@@ -265,6 +265,13 @@ fun WebSyncDialog(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "想把这套东西搬到电脑上单独用？下载 Release 里的 MiuList-Web.html，" +
+                            "双击用 Chrome / Edge 打开即可 —— 不用装 exe，手机离线时也能看能改。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
 
                 // ── 同步密码 ────────────────────────────────────────

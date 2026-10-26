@@ -22,6 +22,72 @@
 
 「权威」不是一个固定的东西，而是**每次同步时用户选的方向**。
 
+### 网页端跑在哪里：三种方式
+
+**接口服务端永远是手机**（协议里所有 `/api/*` 都在手机上）。
+变的只是**网页端由谁托管**：
+
+| | 托管方 | 页面地址 | 什么时候用 |
+|---|---|---|---|
+| **单文件桌面端（beta）** | 无本地服务；Chrome / Edge 直接打开 HTML | `file:///…/MiuList-Web.html` | **桌面端主用法**：手机不在也能看能改；地址扫一次/填一次；本地快照是 localStorage + 可选 JSON |
+| 手机托管 | 手机既提供接口也提供网页文件 | `http://192.168.x.x:手机端口/` | 手机上开着局域网服务时，手机扫别的设备也能直接打开 |
+| **电脑端启动器（已退役）** | 电脑上一个本地服务只托管网页文件 | `http://127.0.0.1:8777/` | 旧版；会触发 Windows 未签名应用提示，beta 起由单文件桌面端取代 |
+
+三种方式用的是**同一套同步协议**，网页端代码里只有两处不同：「接口地址从哪来」与「本地快照存哪」。
+
+**单文件桌面端（beta 起）**：
+
+- 页面由浏览器从 `file://` 打开，没有本地 HTTP 服务；
+- 手机地址来自手机「网页同步」里的**地址二维码**（电脑扫一次）或手动填，
+  记在 localStorage；浏览器不能发 UDP，所以没有自动发现；
+- 本地快照在浏览器 localStorage；可额外绑定一个本机 **JSON 文件**做镜像，
+  文件**不含配对密钥**；
+- 首次配对：电脑扫手机地址 → 电脑显示配对码 → 手机扫配对码并点「允许」；
+  之后打开即自动同步。
+
+> **旧的「电脑端启动器」（`tools/pc-web/`）已经退役**：它用本地服务托管网页、
+> UDP 自动发现手机、DPAPI 加密镜像，并且会触发 Windows 的「未知发布者」。
+> 下面与启动器 / UDP / DPAPI 有关的段落只用于理解旧版；beta 桌面端不用。
+
+桌面端（单文件的 `file://`，或旧启动器的 `127.0.0.1`）与手机的 `192.168.x.x` → **跨源**。
+为此手机上那个 HTTP 服务要额外做四件事（少一件就是「同源正常、跨源连不上」）：
+
+1. 预检回显 `Access-Control-Allow-Headers`，且**包含 `X-ML-*` 那几个签名头**；
+2. 回显 `Access-Control-Expose-Headers: X-ML-Enc` ——
+   跨源时自定义响应头默认对脚本不可见，而这个头是「**这坨是密文**」的标记，
+   少了它网页端会把密文当明文 JSON 解析；
+3. **SSE 响应也要带 CORS 头** —— `EventSource` 是跨源的，缺了这条流会被浏览器掐掉；
+4. **Private Network Access** —— 从 `file://` 访问局域网手机时，Chrome 的预检可能带
+   `Access-Control-Request-Private-Network: true`，服务端要回
+   `Access-Control-Allow-Private-Network: true`（手机与 mock 已实现）。
+
+### 找到手机：UDP 广播探测（旧启动器）
+
+> **beta 单文件桌面端不用这一节**：浏览器不能发 UDP，地址从手机屏幕上的
+> 地址二维码扫入或手动填。手机的 UDP 发现口保留给旧启动器。
+
+手机的 HTTP 端口是**随机的**（`LanHttpServer(port = 0)`，免得跟电脑上别的服务撞端口），
+所以「按固定端口找手机」这条路走不通。
+
+于是手机在开着局域网服务时，额外开一个**固定端口的 UDP 探测口**：
+
+```
+电脑端                                        手机
+  │ 广播 UDP:38777  "MIULIST-DISCOVER/1"        │
+  │ ───────────────────────────────────────────►│
+  │                          应答 {"app":"MiuList","port":<HTTP 端口>,
+  │                                 "deviceName":"…","appVersion":"…"}
+  │ ◄───────────────────────────────────────────│
+  │ 于是知道该往 http://192.168.x.x:<port> 发请求 │
+```
+
+- 探测端口固定（`38777`），电脑端要能预先知道往哪儿发；
+- 手机的 HTTP 端口随机，由应答告诉电脑端；
+- 应答里**只有地址，没有密钥**，也没有任何快照内容。
+
+手机不在同一个网段时广播到不了 —— 旧启动器里手动填地址；
+新桌面端本来就用地址二维码/手动填，跨网段也能用。
+
 ---
 
 ## 2. 配对：secret 只走视觉通道
@@ -108,7 +174,12 @@ EventSource 不能设请求头，这是唯一的例外。
 
 ## 4. 负载：密文
 
-请求体放在 `X-ML-Enc` 头里（base64url 的密文），响应体也是密文。
+请求密文放在 **HTTP body** 里（原始 sealed 字节，`X-ML-Enc: 1` 标记）；
+响应密文也在 body 里（base64url，`X-ML-Enc: 1` 标记）。
+
+**不要把密文塞进请求头。** 手机侧的请求头限制 16 KB，而一份带周课表的快照
+轻松超过这个数；放头里会让连接被顶断，浏览器只会报一个看起来像 CORS 的失败。
+beta 起只保留 body 这一条传输。
 
 ```
 plaintext ──ChaCha20(kEnc, nonce)──► ciphertext
@@ -248,6 +319,23 @@ sealed = nonce(12) ‖ ciphertext ‖ MAC(32)
 | GET | `/api/events` | 是（查询串） | 事件载荷是 |
 | GET | `/…`（静态文件） | 否 | 否 |
 
+### 电脑端启动器的本地接口（旧版，已退役）
+
+> 单文件桌面端**不用这些接口**；它们只属于旧的 `tools/pc-web` 启动器。
+> 手机托管或新桌面端下这些路径不存在。
+
+**不在上面那张表里** —— 它们是电脑上的本地服务提供的，跟手机无关。
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| GET | `/__miulist/ping` | 启动器在不在（端口被占时用来判断「是不是我自己」） |
+| GET | `/__miulist/target` | 手机在哪：`{"base":"http://192.168.x.x:端口","source":"discovered\|manual"}` |
+| POST | `/__miulist/target` | 手动指定手机地址（网页端里填的地址存这里） |
+| GET | `/__miulist/state` | 读本地镜像 |
+| POST | `/__miulist/state` | 写本地镜像（网页端每次改动后防抖上传） |
+
+镜像里含配对 secret，落盘时用 **Windows DPAPI** 加密（绑定当前 Windows 用户）。
+
 ### SSE 事件
 
 | 事件 | 数据 | 什么时候 |
@@ -288,6 +376,13 @@ sealed = nonce(12) ‖ ciphertext ‖ MAC(32)
 - 设备密钥**加密落盘**在手机本地（Keystore AES-GCM），它等价于 secret 本身。
 - 会话空闲 30 分钟即失效；每台设备可单独撤销。
 - CORS **回显 Origin**，不写 `*`：写 `*` 等于让任何网页都能读本机这个 API。
+  跨源时还要**放行签名头**、**暴露密文标记**、**给 SSE 也带上 CORS 头**（见 §1）。
+- **旧启动器的本地镜像**（`web-state.bin`）含配对 secret，用 **Windows DPAPI** 加密：
+  绑定当前 Windows 用户；这是旧版，新桌面端改为**不含 secret 的 JSON 快照**。
+- **新桌面端的 JSON 快照**含课程/待办/考试，**不含配对 secret**；secret 只在浏览器
+  localStorage。快照是明文个人数据，请像备份一样保管。
+- **UDP 发现口**（`38777`，旧启动器用）会告诉局域网里的设备「这里跑着 MiuList、
+  它的 HTTP 端口是多少」。泄露的是**地址**，不是**内容**；数据仍要配对、签名才能读。
 
 ---
 
@@ -303,7 +398,15 @@ sealed = nonce(12) ‖ ciphertext ‖ MAC(32)
 | `app/.../data/sync/web/LanHttpServer.kt` | HTTP/SSE 内核（无新依赖） |
 | `app/.../data/sync/web/WebCrypto.kt` | 手机端密码学（与网页端逐字节一致） |
 | `app/.../data/sync/web/PairingStore.kt` | 配对状态机、签名校验、防重放 |
+| `app/.../data/sync/web/ServiceDiscovery.kt` | UDP 发现口：应答探测包，告诉电脑端自己的 HTTP 端口 |
 | `app/.../data/sync/web/SnapshotApplier.kt` | 落库（merge / replace 两条路径） |
 | `app/.../data/sync/web/WebTimetableBuilder.kt` | 周课表计算（调 `ScheduleResolver`，纯函数可单测） |
 | `app/.../data/sync/web/WebSyncApi.kt` | 路由与接口 |
 | `app/.../data/sync/web/WebSyncService.kt` | 总控：服务生命周期、广播、地址、设备落盘 |
+| `desktop/src/core/sync.ts` | **新桌面端**的同步/配对/SSE/本机 JSON 快照调度 |
+| `desktop/src/core/snapshotFile.ts` | 新桌面端的 JSON 快照文件（File System Access API + 导出/导入） |
+| `desktop/src/views/*` | 新桌面端页面：总览 / 课表 / 清单 / 欢迎 |
+| `desktop/README.md` | 新桌面端的构建、联调与限制 |
+| `tools/pc-web/launcher.py` | **旧电脑端启动器**（已退役）：托管网页、发现手机、DPAPI 镜像 |
+| `tools/pc-web/dpapi.py` | 旧启动器镜像的 DPAPI 加密（Windows） |
+| `tools/pc-web/build.py` | 旧启动器打包成 exe（PyInstaller） |

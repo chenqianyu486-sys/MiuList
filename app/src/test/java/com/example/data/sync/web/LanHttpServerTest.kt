@@ -216,4 +216,88 @@ class LanHttpServerTest {
             b.stop()
         }
     }
+
+    // ── 跨源（网页端跑在电脑上时） ──────────────────────────────
+    //
+    // 网页端跑在电脑上时，页面在 `127.0.0.1`，接口在手机的 `192.168.x.x` ——
+    // **跨源**。于是浏览器会先发 OPTIONS 预检，并且只把「CORS 安全列表」里的
+    // 响应头交给脚本。下面三个用例守的就是这条路上的三道坎：
+    // 预检放行、响应头暴露、SSE 也带 CORS。
+    //
+    // 三道坎缺任何一道，症状都是「同源一切正常，跨源就是连不上」。
+
+    /** 裸 socket 发一条请求，把响应头读回来。 */
+    private fun rawHeaders(port: Int, request: String): Map<String, String> {
+        val socket = Socket("127.0.0.1", port)
+        socket.soTimeout = 3000
+        val out = socket.getOutputStream()
+        out.write(request.toByteArray(StandardCharsets.UTF_8))
+        out.flush()
+        val reader = BufferedReader(InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))
+        val headers = LinkedHashMap<String, String>()
+        var line = reader.readLine()
+        while (line != null && line.isNotEmpty()) {
+            val idx = line.indexOf(':')
+            if (idx > 0) {
+                headers[line.substring(0, idx).trim().lowercase()] = line.substring(idx + 1).trim()
+            }
+            line = reader.readLine()
+        }
+        socket.close()
+        return headers
+    }
+
+    @Test
+    fun `跨源预检要放行签名头 - 少一个网页端就连不上`() {
+        val (server, port) = startServer { HttpReply.text(200, "ok") }
+        try {
+            val headers = rawHeaders(
+                port,
+                "OPTIONS /api/snapshot HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+                    "Origin: http://127.0.0.1:8777\r\n" +
+                    "Access-Control-Request-Method: GET\r\n" +
+                    "Access-Control-Request-Headers: x-ml-device,x-ml-ts,x-ml-nonce,x-ml-sig\r\n\r\n"
+            )
+            val allow = headers["access-control-allow-headers"].orEmpty()
+            for (name in listOf("X-ML-Device", "X-ML-Ts", "X-ML-Nonce", "X-ML-Sig", "X-ML-Enc")) {
+                assertTrue("预检必须放行 $name，实际是：$allow", allow.contains(name))
+            }
+            assertEquals("http://127.0.0.1:8777", headers["access-control-allow-origin"])
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `要暴露密文标记 - 跨源时浏览器看不见自定义响应头`() {
+        val (server, port) = startServer { HttpReply.text(200, "ok") }
+        try {
+            val headers = rawHeaders(
+                port,
+                "GET /api/snapshot HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://127.0.0.1:8777\r\n\r\n"
+            )
+            assertEquals(
+                "X-ML-Enc",
+                headers["access-control-expose-headers"],
+            )
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `SSE 也要带 CORS 头 - 否则跨源时这条流被浏览器掐掉`() {
+        val (server, port) = startServer { _ ->
+            HttpReply.EventStream { sink -> sink.send("hello", "{}") }
+        }
+        try {
+            val headers = rawHeaders(
+                port,
+                "GET /api/events HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://127.0.0.1:8777\r\n\r\n"
+            )
+            assertEquals("http://127.0.0.1:8777", headers["access-control-allow-origin"])
+        } finally {
+            server.stop()
+        }
+    }
 }

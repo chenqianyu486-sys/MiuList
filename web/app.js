@@ -109,6 +109,8 @@ function saveJson(key, value) {
     // 配额满了：这一端的本地快照写不进去。
     toast('浏览器存储写不下了，本地快照可能没保存', true);
   }
+  // 电脑端启动器：顺手把这一份镜像到电脑上的文件。
+  if (MIRROR_KEYS.includes(key)) scheduleMirror();
 }
 
 function emptySnapshot() {
@@ -180,8 +182,11 @@ function authQuery(path) {
 /**
  * 一次 API 调用。
  *
- * - 请求体被**加密**放进 `X-ML-Enc` 头（原文不上网络）；
- * - 响应体是密文，收到后解开。
+ * - 请求体被**加密**后放进 HTTP body（`X-ML-Enc: 1` 只是标记；原文不上网络）；
+ * - 响应体也是密文，收到后解开。
+ *
+ * 密文不能放进请求头：完整快照带周课表会超过手机侧 16 KB 的头上限，
+ * 连接会被直接顶断。beta 起只保留 body 这一条传输。
  *
  * `plain: true` 用于**还没有密钥的时候**（申请配对）——
  * 那条请求里只有 secret 的摘要，没有需要保密的东西。
@@ -190,12 +195,17 @@ async function api(path, { method = 'GET', body, auth = true, plain = false } = 
   const headers = {};
   let rawBody = null;
 
+  let sealedBody = null;
   if (body !== undefined) {
     rawBody = utf8Bytes(JSON.stringify(body));
     if (plain) {
       headers['Content-Type'] = 'application/json';
     } else {
-      headers['X-ML-Enc'] = toBase64Url(seal(state.keys, rawBody));
+      // 密文走 HTTP body：完整快照会超过请求头 16 KB 的上限。
+      // 手机与 mock 同时兼容旧的「密文放 X-ML-Enc 头」。
+      headers['X-ML-Enc'] = '1';
+      headers['Content-Type'] = 'application/octet-stream';
+      sealedBody = seal(state.keys, rawBody);
     }
   }
   if (auth && !plain) {
@@ -207,7 +217,7 @@ async function api(path, { method = 'GET', body, auth = true, plain = false } = 
     res = await fetch(state.base + path, {
       method,
       headers,
-      body: rawBody === null ? undefined : (plain ? rawBody : new Uint8Array(0)),
+      body: rawBody === null ? undefined : (plain ? rawBody : sealedBody),
       cache: 'no-store',
     });
   } catch (e) {
@@ -593,6 +603,11 @@ function updateSyncPill() {
   if (state.conflict) {
     text = '需手动同步';
     cls = 'is-conflict';
+  } else if (!phoneReachable) {
+    // **连不上手机，但本地数据还在用**（电脑端常见：手机没开局域网服务）。
+    // 这时写「实时同步」是骗人的 —— 顶栏那颗胶囊就是给用户看这个的。
+    text = '未连接';
+    cls = 'is-local';
   } else if (!isOnline()) {
     text = '本地模式';
     cls = 'is-local';
@@ -652,6 +667,8 @@ function handleUnauthorized() {
   state.keys = null;
   localStorage.removeItem(LS.secret);
   localStorage.removeItem(LS.deviceId);
+  // 镜像里那把钥匙也要一起收走，别留在磁盘上。
+  scheduleMirror();
   stopEvents();
   updateSyncPill();
   showPairView('配对已失效，请重新扫码');
@@ -1163,6 +1180,8 @@ function pollPair(requestId, secret) {
         state.deviceId = res.deviceId;
         localStorage.setItem(LS.secret, secret);
         localStorage.setItem(LS.deviceId, res.deviceId);
+        // 配对密钥也要镜像：它是「钥匙」，落在磁盘上就得跟着加密走。
+        scheduleMirror();
         state.keys = deriveKeys(fromBase64Url(secret), localStorage.getItem(LS.passcode) || '');
         showMainView();
         updateSyncPill();
@@ -1355,6 +1374,7 @@ function bind() {
         toast('同步密码只能是 4 位数字');
       }
       localStorage.setItem(LS.passcode, digits.slice(0, 4));
+      scheduleMirror();
       // 密码变了，已派生的密钥就作废了。
       if (state.secret) {
         state.keys = deriveKeys(fromBase64Url(state.secret), digits.slice(0, 4));
@@ -1375,9 +1395,16 @@ function bind() {
   if (manualUrlInline) manualUrlInline.value = state.base;
   $('#btnManualInline').addEventListener('click', async () => {
     const v = (manualUrlInline.value || '').trim().replace(/\/+$/, '');
-    if (!v) return;
-    state.base = v;
-    localStorage.setItem(LS.base, v);
+    if (localLauncher) {
+      // 电脑端：地址记在**启动器**里 —— 它才是「手机在哪」这个答案的持有者。
+      // 留空 = 交还给自动发现。
+      await setLauncherTarget(v);
+      if (!v) toast('已恢复自动发现手机');
+    } else {
+      if (!v) return;
+      state.base = v;
+      localStorage.setItem(LS.base, v);
+    }
     await boot();
   });
 
@@ -1386,9 +1413,14 @@ function bind() {
   $('#btnManualCancel').addEventListener('click', () => { $('#manualSheet').hidden = true; });
   $('#btnManualOk').addEventListener('click', async () => {
     const v = $('#manualUrl').value.trim().replace(/\/+$/, '');
-    if (!v) return;
-    state.base = v;
-    localStorage.setItem(LS.base, v);
+    if (localLauncher) {
+      await setLauncherTarget(v);
+      if (!v) toast('已恢复自动发现手机');
+    } else {
+      if (!v) return;
+      state.base = v;
+      localStorage.setItem(LS.base, v);
+    }
     $('#manualSheet').hidden = true;
     await boot();
   });
@@ -1427,6 +1459,148 @@ function selectSubTab(name) {
   $$('[data-subpanel]').forEach((p) => { p.hidden = p.dataset.subpanel !== name; });
 }
 
+// ── 电脑端启动器 ────────────────────────────────────────────
+//
+// ## 这一节解决的是「网页端跑在电脑上」这件事
+//
+// 网页端有两种跑法，用的是**同一套协议**，只有两处不同：
+// 「接口地址从哪来」与「本地快照存哪」。
+//
+// 1. **手机托管**（老路）：手机既提供接口也提供网页文件，页面在
+//    `http://192.168.x.x:端口/`，与接口同源，地址就是 `location.origin`。
+// 2. **电脑端启动器**（新路）：电脑上有个本地服务把 `web/` 托管起来，
+//    页面在 `http://127.0.0.1:8777/`。手机继续当接口服务端 —— 于是
+//    **手机在哪**要另外问：启动器在局域网里广播探测，手机的应答里
+//    带着它自己的 HTTP 端口（手机那个端口是随机的，没法按固定端口找）。
+//
+// 启动器不存在时（老路），下面这些接口都是 404，
+// `localLauncher` 保持 false，网页端的行为与从前完全一致。
+
+const LAUNCHER = {
+  target: '/__miulist/target',
+  state: '/__miulist/state',
+};
+
+/** 页面是不是跑在电脑端启动器上。 */
+let localLauncher = false;
+
+/**
+ * 手机现在连得上吗。
+ *
+ * 与 [isOnline] 不是一回事：**连得上** = 网络通；**已配对** = 有密钥。
+ * 电脑端模式下手机可能没开局域网服务 —— 那时密钥还在（不该因为对端不在就丢），
+ * 但「实时同步」是骗人的，顶栏要写「未连接」。
+ */
+let phoneReachable = false;
+
+/**
+ * 要镜像到电脑上的键。
+ *
+ * `base` 不在列表里 —— 它是**手机**的地址，手机换了 IP 它就过期了，
+ * 存下来反而会让人连到一台已经不存在的地址上。
+ */
+const MIRROR_KEYS = ['snapshot', 'pending', 'remoteBase', 'meta', 'secret', 'deviceId', 'passcode'];
+
+let mirrorTimer = null;
+
+/** 问启动器「手机在哪」。启动器不存在时返回 null。 */
+async function queryLauncher() {
+  try {
+    const res = await fetch(LAUNCHER.target, { cache: 'no-store' });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (_) {
+    return null;
+  }
+}
+
+/** 把本地状态镜像到电脑上的文件（防抖 800ms）。 */
+function scheduleMirror() {
+  if (mirrorTimer || !localLauncher) return;
+  mirrorTimer = setTimeout(() => {
+    mirrorTimer = null;
+    pushMirror();
+  }, 800);
+}
+
+async function pushMirror() {
+  if (!localLauncher) return;
+  const values = {};
+  for (const key of MIRROR_KEYS) {
+    const raw = localStorage.getItem(LS[key]);
+    if (raw !== null) values[key] = raw;
+  }
+  try {
+    await fetch(LAUNCHER.state, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values }),
+    });
+  } catch (_) {
+    // 启动器没开就算了 —— 浏览器里那份还在，数据不会丢。
+  }
+}
+
+/**
+ * 启动时把镜像恢复回来。
+ *
+ * **谁新谁赢**：比的是快照的 `latestEditAt`（这一端最后一次改数据的时刻）。
+ * 浏览器里的更新就不动它 —— 同一个浏览器开两个标签页时，
+ * 后写的那个标签页才是最新。
+ */
+async function restoreMirroredState() {
+  if (!localLauncher) return;
+  let payload = null;
+  try {
+    const res = await fetch(LAUNCHER.state, { cache: 'no-store' });
+    if (!res.ok) return;
+    payload = await res.json();
+  } catch (_) {
+    return;
+  }
+  const values = payload && payload.values;
+  if (!values || typeof values !== 'object') return;
+
+  const localLatest = state.snapshot?.latestEditAt || 0;
+  let mirrorLatest = 0;
+  try {
+    mirrorLatest = JSON.parse(values.snapshot || '{}').latestEditAt || 0;
+  } catch (_) { /* 镜像坏了就当没有 */ }
+  if (mirrorLatest <= localLatest) return;
+
+  for (const key of MIRROR_KEYS) {
+    if (typeof values[key] === 'string') {
+      try { localStorage.setItem(LS[key], values[key]); } catch (_) { }
+    }
+  }
+  // 重新读回内存里的状态。
+  state.snapshot = loadJson(LS.snapshot, state.snapshot);
+  state.pending = loadJson(LS.pending, state.pending);
+  state.remoteBase = loadJson(LS.remoteBase, state.remoteBase);
+  state.meta = loadJson(LS.meta, state.meta);
+  state.secret = localStorage.getItem(LS.secret) || null;
+  state.deviceId = localStorage.getItem(LS.deviceId) || null;
+  state.keys = null;
+  if (state.secret) {
+    try {
+      state.keys = deriveKeys(fromBase64Url(state.secret), localStorage.getItem(LS.passcode) || '');
+    } catch (_) {
+      state.secret = null;
+    }
+  }
+}
+
+/** 手动指定手机的地址（电脑端模式下，地址记在启动器里）。 */
+async function setLauncherTarget(base) {
+  try {
+    await fetch(LAUNCHER.target, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base }),
+    });
+  } catch (_) { /* 启动器没开就算了 */ }
+}
+
 // ── 启动 ────────────────────────────────────────────────────
 
 async function boot() {
@@ -1447,19 +1621,79 @@ async function boot() {
   bind();
   updateSyncPill();
 
+  // 电脑端启动器：先问「手机在哪」，再决定往哪儿发请求。
+  // 老路（手机托管网页）没有这个接口，queryLauncher 返回 null，行为不变。
+  const launcher = await queryLauncher();
+  if (launcher) {
+    localLauncher = true;
+    state.base = launcher.base || '';
+  }
+  // 手动填地址那个输入框要跟着更新 —— bind() 跑的时候还不知道手机在哪，
+  // 填进去的是页面自己的地址（127.0.0.1），用户改了等于没改。
+  const manualField = $('#manualUrlInline');
+  if (manualField) manualField.value = state.base;
+
+  // 把上次镜像到电脑上的本地快照恢复回来（换浏览器、清缓存之后还在）。
+  await restoreMirroredState();
+
   // 先把本地快照画出来 —— **没有手机也能用**。
   render();
 
-  try {
-    const health = await api('/api/health', { auth: false });
-    $('#deviceName').textContent = health.deviceName || '这台设备';
-  } catch (_) {
+  const health = await probePhone();
+  if (!health) {
+    if (localLauncher) {
+      // **电脑端：手机没开服务是常态** —— 网页端是这一端自己的，
+      // 它不该因为对端不在就什么都看不了。
+      // 有本地数据就照常显示（顶栏写「本地模式」），没数据才摆配对卡。
+      if (hasLocalData()) {
+        showMainView();
+        setLink('idle', '未连接');
+        updateSyncPill();
+        toast('还没找到手机上的 MiuList，先用本地数据');
+      } else {
+        showPairView(
+          '还没找到手机上的 MiuList。请在手机上打开「更多 → 网页同步」，把局域网服务打开，这里会自动连上。'
+        );
+      }
+      watchPhone();
+      return;
+    }
     $('#deviceName').textContent = '本地模式';
     updateSyncPill();
     showPairView('这个地址上没有 MiuList 服务。可以先看本地保存的数据，连上后再同步。');
     return;
   }
 
+  await afterPhoneFound();
+}
+
+/** 本地有没有东西可看（决定「没连上手机」时是摆数据还是摆配对卡）。 */
+function hasLocalData() {
+  const snap = state.snapshot || {};
+  return (snap.tasks || []).length > 0
+    || (snap.courses || []).length > 0
+    || (snap.exams || []).length > 0;
+}
+
+/** 探一下当前 base 上有没有 MiuList 服务。 */
+async function probePhone() {
+  if (!state.base) {
+    phoneReachable = false;
+    return null;
+  }
+  try {
+    const health = await api('/api/health', { auth: false });
+    phoneReachable = true;
+    $('#deviceName').textContent = health.deviceName || '这台设备';
+    return health;
+  } catch (_) {
+    phoneReachable = false;
+    return null;
+  }
+}
+
+/** 连上手机之后：按「配对过没有」决定显示哪一屏。 */
+async function afterPhoneFound() {
   if (!isOnline()) {
     showPairView();
     return;
@@ -1467,6 +1701,30 @@ async function boot() {
   showMainView();
   connectEvents();
   await autoSync('boot');
+}
+
+/**
+ * 手机是**后**开的服务：它什么时候开，我们什么时候连上。
+ *
+ * 只在电脑端启动器模式下有这回事 —— 手机托管网页时页面和接口同源，
+ * 不存在「找不到手机」这回事。
+ */
+let phoneWatcher = null;
+
+function watchPhone() {
+  if (!localLauncher) return;
+  if (phoneWatcher) clearInterval(phoneWatcher);
+  phoneWatcher = setInterval(async () => {
+    const launcher = await queryLauncher();
+    if (!launcher) return;
+    if (!launcher.base || launcher.base === state.base) return;
+    state.base = launcher.base;
+    const health = await probePhone();
+    if (!health) return;
+    clearInterval(phoneWatcher);
+    phoneWatcher = null;
+    await afterPhoneFound();
+  }, 2500);
 }
 
 boot();

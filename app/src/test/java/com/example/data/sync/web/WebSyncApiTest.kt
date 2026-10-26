@@ -101,10 +101,9 @@ class WebSyncApiTest {
         headers["X-ML-Ts"] = ts.toString()
         headers["X-ML-Nonce"] = nonce
         headers["X-ML-Sig"] = sig
-        val rawBody = if (encryptBody) ByteArray(0) else body
-        if (encryptBody) {
-            headers["X-ML-Enc"] = WebCrypto.base64Url(WebCrypto.seal(device.keys, body))
-        }
+        // 密文走 HTTP body（`X-ML-Enc: 1` 只是标记）；签名始终覆盖明文。
+        val rawBody = if (encryptBody) WebCrypto.seal(device.keys, body) else body
+        if (encryptBody) headers["X-ML-Enc"] = "1"
         return HttpRequest(method, path, emptyMap(), headers, rawBody)
     }
 
@@ -278,14 +277,10 @@ class WebSyncApiTest {
     fun `密文被改过就解不开 - 改一个字节也不行`() {
         val api = setUpApi()
         val body = "{\"mode\":\"replace\",\"snapshot\":{\"tasks\":[]}}".toByteArray()
-        val sealed = WebCrypto.seal(device.keys, body)
-        sealed[15] = (sealed[15].toInt() xor 0x01).toByte()
-        val request = signedRequest(api, method = "POST", path = "/api/snapshot/apply", body = ByteArray(0), encryptBody = true)
-        val tampered = HttpRequest(
-            request.method, request.path, request.query,
-            request.headers + mapOf("X-ML-Enc" to WebCrypto.base64Url(sealed)),
-            request.body,
-        )
+        val request = signedRequest(api, method = "POST", path = "/api/snapshot/apply", body = body, encryptBody = true)
+        val tamperedBody = request.body.copyOf()
+        tamperedBody[15] = (tamperedBody[15].toInt() xor 0x01).toByte()
+        val tampered = HttpRequest(request.method, request.path, request.query, request.headers, tamperedBody)
         assertEquals(401, statusOf(api.handle(tampered)))
     }
 

@@ -27,6 +27,7 @@
  */
 
 import http from 'node:http';
+import dgram from 'node:dgram';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -46,8 +47,21 @@ function arg(name, fallback) {
 }
 const PORT = Number(arg('--port', 8777));
 const HOST = arg('--host', '0.0.0.0');
-const SECRET = arg('--secret', '');
 const PASSCODE = arg('--passcode', '');
+
+/**
+ * 配对 secret。
+ *
+ * `--secret <base64url>` 给一把固定的；`--auto-secret` 自己随机生成一把
+ * 并把它打印出来（这样网页端可以带 `?devsecret=<打印出来的值>`，
+ * 两边就算得出同一套密钥）。
+ *
+ * 两个都不给 = **故意配不成**：悄悄跳过鉴权会让「配对成功但连不上」
+ * 这类问题变成玄学。
+ */
+const SECRET = arg('--secret', '') || (argv.includes('--auto-secret')
+  ? toBase64Url(randomBytes(32))
+  : '');
 /**
  * 不发周课表 —— 模拟**旧版本手机**的快照。
  *
@@ -55,6 +69,14 @@ const PASSCODE = arg('--passcode', '');
  * 那才是「这一端还不知道周课表」时该有的样子，而不是画一张空表。
  */
 const NO_TIMETABLE = argv.includes('--no-timetable');
+
+/**
+ * 不自动批准配对 —— 模拟「手机上还没点允许」。
+ *
+ * 真机上，手机扫了码之后要人点「允许」，这之前网页端一直停在配对页。
+ * 自动批准是 mock 的默认（方便截图），但要拍**配对页那张二维码**就得关掉它。
+ */
+const NO_AUTO_APPROVE = argv.includes('--no-auto-approve');
 
 // ── 假数据 ──────────────────────────────────────────────────
 
@@ -427,8 +449,38 @@ function json(res, code, obj) {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store',
+    ...corsHeaders(res.req),
   });
   res.end(body);
+}
+
+// ── CORS：回显 Origin ────────────────────────────────────────
+//
+// 网页端跑在电脑上时，页面在 `127.0.0.1`，接口在手机的局域网地址 ——
+// **跨源**。浏览器会先发 OPTIONS 预检，预检里没列出的请求头会被直接拦掉。
+//
+// 这里是 mock，但**要跟真机一样**：真机（App 侧的 LanHttpServer）也是
+// 回显 Origin，并把 X-ML-* 那几个签名头列进 Allow-Headers。
+// mock 少了这段，跨源那条路就测不出真问题。
+function corsHeaders(req) {
+  const origin = req && req.headers ? req.headers.origin : null;
+  if (!origin) return {};
+  const out = {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers':
+      'Authorization, Content-Type, X-ML-Device, X-ML-Ts, X-ML-Nonce, X-ML-Sig, X-ML-Enc',
+    // **必须暴露 X-ML-Enc**：跨源时自定义响应头默认对脚本不可见，
+    // 而这个头是「这坨是密文」的标记 —— 少了它，网页端会把密文当明文解析。
+    'Access-Control-Expose-Headers': 'X-ML-Enc',
+    'Access-Control-Max-Age': '600',
+    Vary: 'Origin',
+    'Access-Control-Allow-Private-Network': 'true',
+  };
+  if (req.headers['access-control-request-private-network'] === 'true') {
+    out['Access-Control-Allow-Private-Network'] = 'true';
+  }
+  return out;
 }
 
 function encrypted(res, payload) {
@@ -438,6 +490,7 @@ function encrypted(res, payload) {
     'Content-Length': Buffer.byteLength(body),
     'X-ML-Enc': '1',
     'Cache-Control': 'no-store',
+    ...corsHeaders(res.req),
   });
   res.end(body);
 }
@@ -453,6 +506,21 @@ function readBody(req) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
   const p = url.pathname;
+
+  // 所有响应都带上回显的 Origin：哪怕某条分支忘了，浏览器也不会把它
+  // 当成「没有 CORS」而掐掉。预检分支会再覆盖一遍完整头。
+  if (req.headers.origin) {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  }
+
+  // 预检：跨源时浏览器会先问一次「这些请求头你允许吗」。
+  // 少放行一个签名头，网页端在电脑上就是「永远连不上」。
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, { ...corsHeaders(req), 'Content-Length': '0' });
+    return res.end();
+  }
 
   try {
     if (p === '/api/health') {
@@ -475,6 +543,10 @@ const server = http.createServer(async (req, res) => {
           keys: Object.keys(body),
         });
       }
+      // --no-auto-approve：停在「等手机上点允许」这一步。
+      if (NO_AUTO_APPROVE) {
+        return json(res, 200, { state: 'pending', expiresAt: Date.now() + 300000 });
+      }
       return json(res, 200, { state: 'approved', expiresAt: Date.now() + 300000, deviceId: DEVICE_ID });
     }
 
@@ -484,6 +556,9 @@ const server = http.createServer(async (req, res) => {
       ensureKeys();
       if (requestId !== requestIdOf(secretBytes)) {
         return json(res, 200, { state: 'expired' });
+      }
+      if (NO_AUTO_APPROVE) {
+        return json(res, 200, { state: 'pending' });
       }
       return json(res, 200, { state: 'approved', deviceId: DEVICE_ID, deviceName: 'Mock 手机' });
     }
@@ -510,9 +585,13 @@ const server = http.createServer(async (req, res) => {
     const rawBody = await readBody(req);
     let bodyBytes = new Uint8Array(rawBody);
     const enc = req.headers['x-ml-enc'];
-    if (enc) {
+    // 带 body 的签名请求必须是密文，且密文走 HTTP body（不能走请求头）。
+    if (rawBody.length > 0 && enc !== '1') {
+      return json(res, 401, { error: '请求体必须是密文' });
+    }
+    if (enc === '1') {
       try {
-        bodyBytes = open(keys, fromBase64Url(enc));
+        bodyBytes = open(keys, new Uint8Array(rawBody));
       } catch (_) {
         return json(res, 401, { error: '解密失败' });
       }
@@ -545,6 +624,9 @@ const server = http.createServer(async (req, res) => {
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
+        // **SSE 也要带 CORS 头。** EventSource 是跨源的，
+        // 少了 Access-Control-Allow-Origin 浏览器会直接掐掉这条流。
+        ...corsHeaders(req),
       });
       res.write(`event: hello\ndata: ${toBase64Url(seal(keys, utf8Bytes(JSON.stringify({ revision, protocol: 3 }))))}\n\n`);
       sseClients.add(res);
@@ -575,4 +657,33 @@ server.listen(PORT, HOST, () => {
   } else {
     console.log('[miulist-mock] 未给 --secret：配对会失败（这是有意的，别偷偷跳过鉴权）');
   }
+});
+
+// ── 局域网发现：应答 UDP 探测包 ──────────────────────────────
+//
+// 真机上手机会开一个固定端口的 UDP 探测口（见 App 侧 ServiceDiscovery.kt），
+// 电脑端的启动器靠它找到「手机在哪」——因为手机的 HTTP 端口是随机的。
+//
+// mock 把这一段也补上，于是它能完整扮演手机：
+// 启动器会广播探测包，mock 应答自己的端口，网页端就能连上来。
+const DISCOVERY_PORT = 38777;
+const PROBE = 'MIULIST-DISCOVER/1';
+
+const udp = dgram.createSocket('udp4');
+udp.on('message', (msg, rinfo) => {
+  if (msg.toString().trim() !== PROBE) return;
+  const payload = JSON.stringify({
+    app: 'MiuList',
+    protocol: 3,
+    port: PORT,
+    deviceName: 'Mock 手机',
+    appVersion: '0.0.0-mock',
+  });
+  udp.send(payload, rinfo.port, rinfo.address);
+});
+udp.on('error', (e) => {
+  console.log(`[miulist-mock] 发现口起不来（${e.message}）：电脑端要手填地址`);
+});
+udp.bind(DISCOVERY_PORT, () => {
+  console.log(`[miulist-mock] 发现口: udp ${DISCOVERY_PORT}`);
 });
