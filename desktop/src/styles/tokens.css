@@ -1,6 +1,32 @@
+/*
+ * MiuList 桌面网页端 · 设计令牌
+ *
+ * 这一层的色值与手机端 `app/src/main/java/com/example/ui/theme/Color.kt`、
+ * `Mica.kt` **一一对应**，不是「看着差不多另配的一套」。
+ * 两端共用一套玻璃语言，是「网页端和手机端看起来是同一个 App」的唯一保证。
+ *
+ * 对应关系（改色时先看右边那列，别凭观感另调）：
+ *
+ *   --lime        ← LimeGreenPrimary   主题绿 #BCE472
+ *   --lime-deep   ← LimeGreenDark
+ *   --lime-dark   ← LimeGreenOnLight   浅底上的绿前景（白卡上约 5.3:1）
+ *   --lime-ink    ← LimeGreenOnPrimary 浅绿底上的墨炭字
+ *   --lake        ← LakeBlueAccent      点缀色
+ *   --ink         ← TextPrimary    #1E2320
+ *   --ink-2       ← TextSecondary  #4A524D
+ *   --ink-3       ← TextTertiary   #3B433F（层级在 ink-2 之下，但仍过 4.5:1）
+ *   --muted       ← TextMuted      #78827B
+ *   --cream       ← WarmRiceWhite  #FAF8F5
+ *   --paper-2     ← WarmCreamSurfaceVariant
+ *   --glass-face  ← GlassTintNeutral #EDF1F5
+ *   --glass-coat  ← CardBaseCoatAlpha 0.55
+ *   --control-tint← ControlNeutralFaceAlpha 0.60
+ */
+
 :root {
   color-scheme: light;
 
+  /* ── 主题色 ─────────────────────────────────────────────── */
   --lime: #bce472;
   --lime-deep: #a6cd56;
   --lime-dark: #55751e;
@@ -9,9 +35,13 @@
   --lake-soft: #e8f2f7;
   --lake-ink: #1e526d;
 
+  /* ── 文字三级 ───────────────────────────────────────────── */
   --ink: #1e2320;
   --ink-2: #4a524d;
+  --ink-3: #3b433f;
   --muted: #78827b;
+
+  /* ── 底 ─────────────────────────────────────────────────── */
   --cream: #faf8f5;
   --paper: #ffffff;
   --paper-2: #f3efe8;
@@ -19,22 +49,53 @@
   --line: rgba(30, 35, 32, 0.08);
   --line-strong: rgba(30, 35, 32, 0.14);
 
-  --glass: rgba(255, 255, 255, 0.6);
-  --glass-strong: rgba(255, 255, 255, 0.82);
-  --glass-soft: rgba(255, 255, 255, 0.4);
-  --border-light: rgba(255, 255, 255, 0.64);
-  --border: rgba(30, 35, 32, 0.1);
+  /* ── 玻璃材质三件套 ────────────────────────────────────────
+   *
+   * 真实磨砂玻璃的质感来自三样**不依赖背景**的东西：
+   *
+   *   1. 面（tint）—— 中性冷灰，够淡，于是底下的壁纸透得上来；
+   *   2. 白衬底（coat）—— 卡片下面那层不透明白，让卡的明度由自己决定；
+   *   3. 颗粒（grain）—— 磨砂表面把光散射成细密噪点。
+   *
+   * 少了颗粒，半透明的卡面就只是一块淡色板，怎么调 alpha 都出不来玻璃感。
+   *
+   * ⚠️ **玻璃面不再带浅色描边。**
+   * 一道浅色发丝边压在同样浅的玻璃面上，只会比面更亮 —— 读出来的是「一圈白边」，
+   * 不是「精细的轮廓」；换到深色或花纹底上，它又变成扎眼的硬亮环。
+   * 手机端 2026-10-26 把这条描边连同 `glassSurface` 的 0.5dp 白内线一起删了，
+   * 网页端跟着删。**边界由「面更实 + 更大的模糊半径」承担**，不是由线条画出来。
+   * 没有框的按钮，字（已加深到 ink-2）就是它的边界。
+   */
+  --glass-tint: rgba(237, 241, 245, 0.48); /* GlassTintNeutral @ GLASS_FACE_ALPHA */
+  --glass-coat: rgba(255, 255, 255, 0.55); /* CardBaseCoatAlpha */
+  --control-tint: rgba(241, 245, 249, 0.6); /* ControlNeutralFaceAlpha */
+  --control-accent: rgba(188, 228, 114, 0.72); /* ControlAccentFaceAlpha */
+  --glass-blur: 28px; /* GlassBlurRadius */
+  --control-blur: 18px; /* ControlBlurRadius */
 
+  /* 磨砂颗粒。feTurbulence 出噪点，saturate 0 去掉色相，
+     feFuncA 把 alpha 压到很薄 —— 细密的中性噪点，不是脏点。 */
+  /* 磨砂颗粒。**预烘焙的 64×64 PNG 噪点瓦片**，不是 SVG feTurbulence。
+     ⚠️ 换成 SVG 滤镜会把渲染进程卡死：桌面端有几十块玻璃面，滤镜区域在 1600px
+     宽屏上被放大到 3200×1800 的设备像素，1600px 的周课表场景**永远等不到一帧**
+     （截图 40s+ 超时，页面随后连 Runtime.evaluate 都无响应）。
+     实测对照：同一份代码，`--grain: none` 时该场景 693ms 截完。
+     PNG 瓦片解码一次、贴图平铺，零滤镜开销。强度对齐手机端 GlassGrain = 0.055。 */
+  --grain: url("data:image/png;base64,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");
+  --grain-size: 64px 64px;
+
+  /* ── 阴影 ───────────────────────────────────────────────── */
   --shadow-lg: 0 34px 90px -42px rgba(30, 35, 32, 0.4);
   --shadow-md: 0 22px 50px -30px rgba(30, 35, 32, 0.3);
   --shadow-sm: 0 10px 26px -18px rgba(30, 35, 32, 0.24);
 
-  --blur: 28px;
-  --r-xl: 34px;
-  --r-lg: 26px;
-  --r-md: 18px;
-  --r-sm: 14px;
-  --r-chip: 18px;
+  /* ── 圆角 ─────────────────────────────────────────────────
+   * 手机端：卡片 20dp / 浮岛 28dp / 小控件 12dp。网页端按同一档收。 */
+  --r-xl: 28px;
+  --r-lg: 20px;
+  --r-md: 16px;
+  --r-sm: 12px;
+  --r-chip: 12px;
   --r-pill: 999px;
 
   --font: "Inter", "SF Pro Text", "Segoe UI Variable Text", "PingFang SC",
@@ -45,15 +106,6 @@
 
   --sidebar-w: 84px;
   --sidebar-open: 252px;
-
-  /* 旧周课表渲染器（web/timetable.js）沿用的一组令牌 */
-  --text: var(--ink);
-  --text-2: var(--ink-2);
-  --text-3: var(--muted);
-  --coat-w: rgba(255, 255, 255, 0.56);
-  --nested: rgba(255, 255, 255, 0.76);
-  --grain: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0));
-  --lime-on-primary: var(--lime-ink);
 }
 
 *,
@@ -141,22 +193,34 @@ p {
   width: 10px;
   height: 10px;
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
   background: rgba(30, 35, 32, 0.16);
   border: 3px solid transparent;
   border-radius: 999px;
   background-clip: content-box;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(30, 35, 32, 0.28);
   border: 3px solid transparent;
   background-clip: content-box;
 }
 
-/* ── 透光背景 ───────────────────────────────────────────────── */
+/* ── 透光背景 ─────────────────────────────────────────────────
+ *
+ * 这四组不再是随手配的彩色光斑，而是**手机端四张壁纸的 CSS 版**：
+ * 色值取自 `app/src/main/java/com/example/data/model/WallpaperModel.kt`
+ * 里那八张壁纸的实测三段取样。
+ *
+ * 手机端默认壁纸是 Cloudy Knoxville（极简云烟近乎纯白，实测 #F5F5F6 → #F1F2F3），
+ * 所以网页端的默认底色也回到近白：**页面底提供颜色、玻璃面只做透光**，
+ * 颜色由课程卡的染色面给出，而不是由背景铺一层重彩。
+ */
 
 .bg {
   position: fixed;
@@ -180,46 +244,42 @@ p {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  opacity: 0.42;
+  opacity: 0.22;
   mix-blend-mode: soft-light;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.28'/%3E%3C/svg%3E");
 }
 
-/* 默认：云烟（青柠 + 樱粉 + 青） */
+/* 云烟（默认）—— Cloudy Knoxville：近乎纯白，只有一层很轻的冷灰漂移。 */
 .bg--cloud::before {
   background:
-    radial-gradient(46% 52% at 12% 14%, rgba(188, 228, 114, 0.52), transparent 68%),
-    radial-gradient(38% 44% at 88% 8%, rgba(255, 205, 224, 0.48), transparent 70%),
-    radial-gradient(46% 52% at 82% 92%, rgba(178, 234, 233, 0.46), transparent 72%),
-    radial-gradient(40% 46% at 10% 90%, rgba(255, 228, 196, 0.5), transparent 70%),
-    linear-gradient(160deg, #fdfcf7 0%, #faf8f5 48%, #f7f4ee 100%);
+    radial-gradient(54% 60% at 14% 10%, rgba(226, 232, 234, 0.5), transparent 70%),
+    radial-gradient(46% 52% at 88% 20%, rgba(232, 228, 234, 0.4), transparent 72%),
+    radial-gradient(52% 58% at 76% 92%, rgba(220, 231, 229, 0.42), transparent 72%),
+    linear-gradient(165deg, #fcfcfc 0%, #f6f7f7 46%, #f1f3f4 100%);
 }
 
+/* 草木 —— Soft Grass：整张同一个薄荷绿，往下深一点。 */
 .bg--mint::before {
   background:
-    radial-gradient(48% 54% at 18% 16%, rgba(188, 228, 114, 0.58), transparent 68%),
-    radial-gradient(42% 46% at 86% 18%, rgba(178, 234, 233, 0.5), transparent 70%),
-    radial-gradient(46% 54% at 78% 92%, rgba(56, 123, 155, 0.22), transparent 72%),
-    radial-gradient(34% 40% at 8% 88%, rgba(134, 239, 172, 0.32), transparent 70%),
-    linear-gradient(155deg, #fcfdf8 0%, #f4f9f2 52%, #edf4f0 100%);
+    radial-gradient(52% 58% at 20% 14%, rgba(238, 248, 238, 0.72), transparent 70%),
+    radial-gradient(46% 52% at 84% 26%, rgba(212, 235, 214, 0.55), transparent 72%),
+    linear-gradient(162deg, #e4f0e4 0%, #d5e8d6 50%, #c7e1ca 100%);
 }
 
+/* 暖钢 —— Kind Steel：顶是暖奶黄，底是藕紫。 */
 .bg--dusk::before {
   background:
-    radial-gradient(46% 52% at 10% 8%, rgba(255, 203, 164, 0.55), transparent 68%),
-    radial-gradient(42% 48% at 88% 16%, rgba(216, 180, 254, 0.4), transparent 70%),
-    radial-gradient(48% 54% at 82% 92%, rgba(249, 168, 212, 0.36), transparent 72%),
-    radial-gradient(38% 44% at 12% 92%, rgba(147, 197, 253, 0.34), transparent 70%),
-    linear-gradient(160deg, #fffaf3 0%, #fbf4ed 50%, #f6f0f5 100%);
+    radial-gradient(52% 56% at 18% 10%, rgba(251, 244, 220, 0.78), transparent 70%),
+    radial-gradient(44% 50% at 84% 88%, rgba(238, 230, 241, 0.68), transparent 72%),
+    linear-gradient(160deg, #f7f3e6 0%, #f2edea 48%, #eee6f1 100%);
 }
 
+/* 柔粉 —— Nega：通体浅玫红，往下暖意渐深。 */
 .bg--sakura::before {
   background:
-    radial-gradient(48% 54% at 14% 12%, rgba(255, 205, 224, 0.56), transparent 68%),
-    radial-gradient(42% 48% at 88% 12%, rgba(216, 180, 254, 0.4), transparent 70%),
-    radial-gradient(46% 54% at 80% 92%, rgba(255, 228, 196, 0.46), transparent 72%),
-    radial-gradient(34% 40% at 8% 90%, rgba(188, 228, 114, 0.3), transparent 70%),
-    linear-gradient(160deg, #fffbfa 0%, #fbf5f3 52%, #faf2f0 100%);
+    radial-gradient(52% 58% at 16% 12%, rgba(252, 232, 236, 0.66), transparent 70%),
+    radial-gradient(46% 52% at 84% 86%, rgba(238, 186, 195, 0.5), transparent 72%),
+    linear-gradient(160deg, #fdf4f5 0%, #f8c5cc 50%, #f1a8b2 100%);
 }
 
 @media (prefers-reduced-motion: reduce) {

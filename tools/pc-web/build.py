@@ -81,6 +81,16 @@ def stage_web() -> str:
 def main() -> int:
     if not os.path.isdir(WEB_DIR):
         raise SystemExit("找不到网页端资源目录：%s" % WEB_DIR)
+    # 旧网页端的入口页已经删除（桌面端以 desktop/ 为准，见 desktop/README.md）。
+    # `web/` 现在只剩共享模块，没有 index.html —— 照旧打包会得到一个**打开就是
+    # 404** 的 exe，而且全程不报错。宁可在这里把话说清楚。
+    if not os.path.isfile(os.path.join(WEB_DIR, "index.html")):
+        raise SystemExit(
+            "旧网页端已删除，%s 里没有 index.html，打不出可用的 exe。\n"
+            "这个启动器已经退役（保留仅为历史参考）；\n"
+            "现在的桌面端在 desktop/ 里：cd desktop && npm run build，"
+            "产物是单文件 desktop/dist/MiuList-Web.html。" % WEB_DIR
+        )
 
     os.makedirs(DIST, exist_ok=True)
     os.makedirs(WORK, exist_ok=True)

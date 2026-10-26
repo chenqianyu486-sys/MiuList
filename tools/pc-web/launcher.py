@@ -110,6 +110,10 @@ def resolve_assets_dir(explicit: str = "") -> str:
     """网页端资源目录。
 
     打包成 exe 时资源在 `sys._MEIPASS/web`；从源码跑时是仓库根的 `web/`。
+
+    ⚠️ 旧网页端（`web/index.html`）已删除，`web/` 现在只剩共享模块。
+    缺入口页时**必须在这里停住**：否则启动器会正常起来、开出一个 404 页面，
+    看起来像是「网页端坏了」，而不是「你要的资源已经不在了」。
     """
     if explicit:
         return os.path.abspath(explicit)
@@ -121,6 +125,13 @@ def resolve_assets_dir(explicit: str = "") -> str:
     here = os.path.dirname(os.path.abspath(__file__))
     candidate = os.path.abspath(os.path.join(here, "..", "..", "web"))
     if os.path.isdir(candidate):
+        if not os.path.isfile(os.path.join(candidate, "index.html")):
+            raise SystemExit(
+                "旧网页端已删除：%s 里没有 index.html。\n"
+                "这个启动器已经退役（保留仅为历史参考）；\n"
+                "现在的桌面端在 desktop/ 里：cd desktop && npm run build，"
+                "产物是单文件 desktop/dist/MiuList-Web.html。" % candidate
+            )
         return candidate
     raise SystemExit("找不到网页端资源目录（web/）")
 

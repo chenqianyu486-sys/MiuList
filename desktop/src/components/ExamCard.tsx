@@ -1,11 +1,6 @@
 import { MapPin, Medal } from 'lucide-react';
-import {
-  examCountdown,
-  examDay,
-  formatExamWhen,
-  hexToRgba,
-  shortDate,
-} from '../core/format';
+import { examCountdown, examDay, formatExamWhen, shortDate } from '../core/format';
+import { COURSE_TINT_ALPHA, accentBarColor, courseFace } from '../core/tint';
 import type { Exam } from '../core/types';
 import { cx } from './ui';
 
@@ -29,7 +24,12 @@ export function ExamCard({
     <button
       type="button"
       className={cx('exam-card', compact && 'is-compact', onClick && 'is-clickable')}
-      style={{ '--course': color, '--tint': hexToRgba(color, 0.14) } as never}
+      style={
+        {
+          '--course-bar': accentBarColor(color),
+          '--course-face': courseFace(color, COURSE_TINT_ALPHA),
+        } as never
+      }
       onClick={() => onClick?.(exam)}
     >
       <span className="exam-date">

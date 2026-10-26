@@ -1,26 +1,50 @@
-/* ── 玻璃表面 ───────────────────────────────────────────────── */
+/* ── 玻璃表面 ─────────────────────────────────────────────────
+ *
+ * 三层结构，和手机端 `glassSurface` 的顺序一致：
+ *
+ *   1. 背景模糊 —— backdrop-filter，糊掉身后的一切
+ *   2. 面（tint）—— 半透明色，底下的壁纸从这儿透上来
+ *   3. 磨砂颗粒 —— feTurbulence 噪点，缺了它就只是一块淡色板
+ *
+ * 课程卡 / 待办卡另外铺一层**不透明白衬底**（见 app.css 的 .course-card 等），
+ * 那是手机端 `CardBaseCoatAlpha` 的对应物：让卡面的明度由自己决定，换壁纸时不跟着暗。
+ *
+ * ⚠️ 玻璃面**没有描边**，也没有 inset 白高光。
+ * 浅色描边压在同样浅的玻璃面上只会比面更亮 —— 读出来是「一圈白边」，不是轮廓。
+ * 手机端 2026-10-26 把 `glassSurface` 的 0.5dp 白内线与清单页 chip 的发丝边一起删了，
+ * 网页端跟着删：**边界由「面更实 + 更大的模糊半径」承担**，没有框的按钮字就是它的边界。
+ */
 
 .glass,
 .glass-soft {
-  border: 1px solid var(--border-light);
-  background: linear-gradient(155deg, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0.44));
-  box-shadow: var(--shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.46);
-  backdrop-filter: blur(var(--blur)) saturate(150%);
-  -webkit-backdrop-filter: blur(var(--blur)) saturate(150%);
+  background-image:
+    var(--grain),
+    linear-gradient(var(--glass-tint), var(--glass-tint));
+  background-size: var(--grain-size), auto;
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
 }
 
+.glass {
+  box-shadow: var(--shadow-md);
+}
+
+/* 小面板 / 控件级：中性面更浅、模糊更小，背后是要动的内容，不能铺白衬底。 */
 .glass-soft {
-  background: rgba(255, 255, 255, 0.42);
-  border-color: rgba(255, 255, 255, 0.52);
+  background-image:
+    var(--grain),
+    linear-gradient(var(--control-tint), var(--control-tint));
+  backdrop-filter: blur(var(--control-blur)) saturate(1.1);
+  -webkit-backdrop-filter: blur(var(--control-blur)) saturate(1.1);
   box-shadow: var(--shadow-sm);
 }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .glass {
-    background: rgba(255, 255, 255, 0.94);
+    background-image: linear-gradient(rgba(243, 246, 249, 0.97), rgba(243, 246, 249, 0.97));
   }
   .glass-soft {
-    background: rgba(255, 255, 255, 0.82);
+    background-image: linear-gradient(rgba(244, 247, 250, 0.94), rgba(244, 247, 250, 0.94));
   }
 }
 
@@ -68,15 +92,17 @@
   transform: translateY(-1px);
 }
 
+/* 柔和按钮：中性玻璃面，没有描边 —— 字（ink-2）就是它的边界。 */
 .btn--soft {
-  background: rgba(255, 255, 255, 0.6);
-  border-color: rgba(255, 255, 255, 0.58);
+  background: var(--control-tint);
   color: var(--ink);
+  backdrop-filter: blur(var(--control-blur));
+  -webkit-backdrop-filter: blur(var(--control-blur));
   box-shadow: var(--shadow-sm);
 }
 
 .btn--soft:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(241, 245, 249, 0.86);
 }
 
 .btn--ghost {
@@ -86,7 +112,7 @@
 }
 
 .btn--ghost:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.44);
+  background: var(--control-tint);
   color: var(--ink);
 }
 
@@ -113,11 +139,11 @@
   display: grid;
   place-items: center;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.58);
-  background: rgba(255, 255, 255, 0.48);
+  border: 0;
+  background: var(--control-tint);
   color: var(--ink-2);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(var(--control-blur));
+  -webkit-backdrop-filter: blur(var(--control-blur));
   box-shadow: var(--shadow-sm);
   transition:
     background 0.18s var(--ease),
@@ -126,7 +152,7 @@
 }
 
 .icon-btn:hover {
-  background: rgba(255, 255, 255, 0.8);
+  background: rgba(241, 245, 249, 0.88);
   color: var(--ink);
   transform: translateY(-1px);
 }
@@ -185,7 +211,6 @@
   gap: 4px;
   padding: 2px 7px;
   border-radius: var(--r-pill);
-  background: var(--chip-bg, #e8ece9);
   background: color-mix(in srgb, var(--chip-bg, #e8ece9) 52%, white);
   color: var(--chip-ink, #4a524d);
   font-size: 10.5px;
@@ -205,7 +230,7 @@
 }
 
 .chip--ghost {
-  background: rgba(255, 255, 255, 0.48);
+  background: var(--control-tint);
   color: var(--ink-2);
 }
 
@@ -224,8 +249,10 @@
   gap: 2px;
   padding: 4px;
   border-radius: var(--r-pill);
-  background: rgba(255, 255, 255, 0.38);
-  border: 1px solid rgba(255, 255, 255, 0.5);
+  background: var(--control-tint);
+  border: 0;
+  backdrop-filter: blur(var(--control-blur));
+  -webkit-backdrop-filter: blur(var(--control-blur));
 }
 
 .segment {
@@ -286,7 +313,7 @@
   padding: 10px 12px;
   border-radius: 13px;
   border: 1px solid rgba(30, 35, 32, 0.1);
-  background: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.72);
   color: var(--ink);
   font-size: 13px;
   outline: none;
@@ -302,7 +329,7 @@
 .field select:focus,
 .field textarea:focus {
   border-color: rgba(120, 160, 60, 0.62);
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.9);
   box-shadow: 0 0 0 3px rgba(188, 228, 114, 0.22);
 }
 
@@ -385,19 +412,19 @@
   height: 38px;
   padding: 0 13px;
   border-radius: var(--r-pill);
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  background: rgba(255, 255, 255, 0.48);
+  border: 0;
+  background: var(--control-tint);
   color: var(--ink-2);
   font-size: 12px;
   font-weight: 650;
-  backdrop-filter: blur(18px) saturate(1.15);
-  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  backdrop-filter: blur(var(--control-blur)) saturate(1.1);
+  -webkit-backdrop-filter: blur(var(--control-blur)) saturate(1.1);
   box-shadow: var(--shadow-sm);
   transition: background 0.16s ease;
 }
 
 .sync-pill:hover {
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(241, 245, 249, 0.88);
 }
 
 .sync-dot,
@@ -464,8 +491,8 @@
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.6);
+  background: var(--control-tint);
+  border: 0;
   color: var(--ink-2);
   margin-bottom: 3px;
 }
@@ -574,7 +601,7 @@
   align-items: center;
   gap: 14px;
   padding: 18px 22px;
-  border-radius: 24px;
+  border-radius: var(--r-xl);
 }
 
 .splash-icon {

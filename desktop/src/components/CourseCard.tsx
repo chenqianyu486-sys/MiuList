@@ -1,5 +1,5 @@
 import { MapPin, UserRound } from 'lucide-react';
-import { hexToRgba } from '../core/format';
+import { COURSE_TINT_ALPHA, accentBarColor, courseFace } from '../core/tint';
 import type { Course } from '../core/types';
 import { Chip, cx } from './ui';
 
@@ -15,7 +15,12 @@ export function CourseCard({
     <button
       type="button"
       className={cx('course-tile', onClick && 'is-clickable')}
-      style={{ '--course': color, '--tint': hexToRgba(color, 0.16) } as never}
+      style={
+        {
+          '--course-bar': accentBarColor(color),
+          '--course-face': courseFace(color, COURSE_TINT_ALPHA),
+        } as never
+      }
       onClick={() => onClick?.(course)}
     >
       <span className="course-tile-bar" />

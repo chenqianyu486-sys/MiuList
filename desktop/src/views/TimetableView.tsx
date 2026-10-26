@@ -125,11 +125,11 @@ export function TimetableView() {
           ) : (
             <EmptyState
               icon={CalendarDays}
-              title="还没有周课表"
-              text="周课表由手机计算（停课、补课、开课周都会考虑），同步一次就有了。"
+              title="这台电脑还没有周课表"
+              text="课表不会跟着待办一起同步过来。在「同步 → 连接」里点「用手机的课表和考试」搬一份，或导入一份 JSON 快照。"
               action={
                 <Button variant="primary" icon={ExternalLink} onClick={() => openSync('connection')}>
-                  连接手机
+                  去搬课表
                 </Button>
               }
             />
@@ -158,7 +158,7 @@ export function TimetableView() {
             <EmptyState
               icon={CalendarDays}
               title="还没有课程"
-              text="在手机上登录教务或手动添加课程，同步后就会出现在这里。"
+              text="课表是这台电脑上独立的一份：在「同步 → 连接」里用手机的课表搬过来，或导入一份 JSON 快照。"
             />
           )}
         </section>
@@ -181,7 +181,7 @@ export function TimetableView() {
             <EmptyState
               icon={CalendarDays}
               title="还没有考试安排"
-              text={exams.length ? '' : '手机上的考试信息同步过来后，会按日期排在这里。'}
+              text="考试随课表一起搬过来：先在这台电脑上有一份，再点「用手机的课表和考试」。"
             />
           )}
         </section>

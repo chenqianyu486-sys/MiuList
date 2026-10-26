@@ -253,4 +253,78 @@ class SnapshotApplierTest {
         assertEquals("待办要挂到课程行上", course.id, task.courseId)
         assertEquals("新课程", task.courseName)
     }
+
+    /**
+     * 两端各管各的课表时，远端推过来的待办**仍然要挂在本机已有的课程上**。
+     *
+     * 远端不带课表（`hasCourses=false`）时，本机的课表一个字节都不动 ——
+     * 但待办是带着 `courseKey`（自然键）来的，那是跨端通用的，
+     * 按它查本机的课就能挂上。
+     *
+     * 不这么做的话，远端每一条带课程的待办都会落成「未关联课程」，
+     * 用户看到的是「手机上这条待办突然没有课了」。
+     */
+    @Test
+    fun `远端没带课表时 - 待办仍然挂到本机已有的课程上`() = runBlocking {
+        container.courseRepository.saveCourseWithSlots(
+            CourseEntity(
+                name = "微积分", code = "MATH2432F", category = "公共基础",
+                teacher = "王", classroom = "教十 201", colorHex = "#7aa2ff"
+            ),
+            listOf(SlotWithWeeks(CourseSlotEntity(courseId = 0, dayOfWeek = 1, startPeriod = 3, endPeriod = 4), emptySet()))
+        )
+        val course = container.courseRepository.getAllCoursesOnce().first { it.code == "MATH2432F" }
+
+        applier.apply(
+            WebSnapshotDto(
+                hasCourses = false,
+                tasks = listOf(remoteTask("u1", "挂在这门课上", updatedAt = 100L, courseKey = course.dedupeKey)),
+            ),
+            SyncMode.MERGE,
+        )
+
+        val task = container.taskRepository.getAllTasksOnce().first { it.syncUid == "u1" }
+        assertEquals("待办要挂到本机的课程上", course.id, task.courseId)
+        assertEquals("微积分", task.courseName)
+        assertEquals("公共基础", task.courseCategory)
+        assertEquals("#7aa2ff", task.courseColorHex)
+        assertEquals(
+            "本机的课表不能被一份没标记的快照动掉",
+            1,
+            container.courseRepository.getAllCoursesOnce().size,
+        )
+    }
+
+    /** 远端带着课程列表却**没带标记**：那也不能替换本机的课表。 */
+    @Test
+    fun `远端带着课程但没标记时 - 本机课表不动 - 对不上的待办就是未关联`() = runBlocking {
+        container.courseRepository.saveCourseWithSlots(
+            CourseEntity(
+                name = "本机的课", code = "KEEP1", category = "公共基础",
+                teacher = "王教授", classroom = "教二-301", colorHex = "#93C5FD"
+            ),
+            listOf(SlotWithWeeks(CourseSlotEntity(courseId = 0, dayOfWeek = 1, startPeriod = 1, endPeriod = 2), emptySet()))
+        )
+
+        applier.apply(
+            WebSnapshotDto(
+                hasCourses = false,
+                courses = listOf(
+                    WebCourseDto(key = "K2", name = "远端那门", code = "C2", category = "公共基础", teacher = "李", colorHex = "#fff")
+                ),
+                tasks = listOf(remoteTask("u1", "远端那门课的待办", updatedAt = 100L, courseKey = "K2")),
+            ),
+            SyncMode.MERGE,
+        )
+
+        val courses = container.courseRepository.getAllCoursesOnce()
+        assertEquals("本机的课表不能被换掉", 1, courses.size)
+        assertEquals("本机的课", courses.first().name)
+        val task = container.taskRepository.getAllTasksOnce().first { it.syncUid == "u1" }
+        assertEquals(
+            "本机没有这门课，挂不上就是未关联",
+            TaskEntity.UNLINKED_COURSE_ID,
+            task.courseId,
+        )
+    }
 }

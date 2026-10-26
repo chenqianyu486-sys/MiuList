@@ -62,7 +62,8 @@ export function Welcome() {
               在手机上点允许。
             </h1>
             <p className="welcome-lead">
-              配对码只在你和手机之间走。确认后，两端的课表和待办会开始同步；手机不在时，这一端仍然能看、能改。
+              配对码只在你和手机之间走。确认后，两端的待办会开始同步；
+              课表各留一份，要搬的时候在「同步」里点一下。手机不在时，这一端仍然能看、能改。
             </p>
             <ol className="welcome-steps">
               <li>
@@ -167,7 +168,8 @@ export function Welcome() {
             带到电脑上。
           </h1>
           <p className="welcome-lead">
-            打开一个 HTML，浏览器就是你的桌面端。数据留在本机，手机不在也能看、能改；连上手机后自动同步。
+            打开一个 HTML，浏览器就是你的桌面端。数据留在本机，手机不在也能看、能改；
+            连上手机后待办自动同步，课表则是这台电脑上独立的一份。
           </p>
 
           <button type="button" className="scan-tile welcome-scan" onClick={openScanner}>

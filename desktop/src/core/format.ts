@@ -1,4 +1,5 @@
 import { NO_DUE, type Exam, type Snapshot, type Task } from './types';
+import { todayCoursesOf } from './todayCourses';
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 
@@ -145,6 +146,20 @@ export function examCountdown(exam: Exam, today: string): string {
   return `已过 ${Math.abs(diff)} 天`;
 }
 
+/**
+ * 这场考试是不是今天。
+ *
+ * **不看快照里那个 `isToday` 标记**：那是**快照生成那一刻**算的。
+ * 网页端的配置是独立的 —— 课表可能是昨天搬过来的，标记还停在昨天，
+ * 于是一张「今天有考试」的卡片会挂在那里好几天，而且看起来完全正常。
+ * 有绝对时刻就按日期算，算不出来（学校还没公布日期）才回退到那个标记。
+ */
+export function examIsToday(exam: Exam, today: string): boolean {
+  const day = examDay(exam);
+  if (day) return day === today;
+  return exam.isToday === true;
+}
+
 export function formatExamWhen(exam: Exam): string {
   if (exam.whenText) return exam.whenText;
   if (exam.startAt) return formatTime(exam.startAt, 480);
@@ -182,14 +197,12 @@ export function greeting(): string {
   return '晚上好';
 }
 
-export function hexToRgba(hex: string | undefined, alpha: number): string {
-  const h = String(hex || '').replace('#', '').trim();
-  if (h.length !== 6 || /[^0-9a-fA-F]/.test(h)) return `rgba(201, 208, 216, ${alpha})`;
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
+/**
+ * ⚠️ 这里原来有 `hexToRgba(课程色, alpha)` —— 把课程原色薄薄叠一层。
+ * 它被 `core/tint.ts` 的 `courseFace()` 取代了：直接叠原色会让八门课的卡面
+ * 深浅不齐（黄很重、青很淡），扫列表时重的课比轻的课更抢眼。
+ * 反解的做法见 tint.ts。
+ */
 
 export function todayStats(snapshot: Snapshot): {
   courses: number;
@@ -204,9 +217,9 @@ export function todayStats(snapshot: Snapshot): {
     (t) => t.isCompleted && t.completedAt && formatDayOf(t.completedAt, snapshot.utcOffsetMinutes) === today,
   ).length;
   return {
-    courses: (snapshot.todayCourses || []).length,
+    courses: todayCoursesOf(snapshot, today).length,
     tasks: openToday.length,
-    exams: (snapshot.exams || []).filter((e) => e.isToday).length,
+    exams: (snapshot.exams || []).filter((e) => examIsToday(e, today)).length,
     done,
   };
 }

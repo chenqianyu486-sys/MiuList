@@ -12,7 +12,6 @@ import {
 import { dueFromInput, formatTime } from './format';
 import { scheduleSnapshotFileSave, restoreSnapshotFileOnBoot } from './snapshotFile';
 import {
-  emptySnapshot,
   loadPasscode,
   normalizeSnapshot,
   persistBase,
@@ -287,6 +286,18 @@ function detectConflicts(remote: Snapshot): ConflictItem[] {
   return conflicts;
 }
 
+/**
+ * 把远端（手机）那份快照并进本机。
+ *
+ * ## 只有待办会跟着同步走
+ *
+ * 课表、考试、自定义分类、周课表是**配置**，不是数据：
+ * 两端各持一份、各管各的（网页端是独立的一端，不是手机的镜像）。
+ * 所以这里**只**并入待办，配置原样留在本机。
+ *
+ * 远端的「今天 / 星期几 / 时区偏移」照收 —— 那是**时间基准**，
+ * 不是配置：网页端显示截止时间要按手机那边的时区算，换算错一位就会差一天。
+ */
 function applyRemote(remote: Snapshot): void {
   const s = get();
   const pendingTasks = new Map(
@@ -306,14 +317,33 @@ function applyRemote(remote: Snapshot): void {
     ...s.snapshot,
     ...remote,
     tasks,
-    hasCourses: remote.hasCourses !== false,
-    hasExams: remote.hasExams !== false,
-    hasTaskTypes: remote.hasTaskTypes !== false,
+    // 配置：留本机自己的。
+    courses: s.snapshot.courses,
+    exams: s.snapshot.exams,
+    taskTypes: s.snapshot.taskTypes,
+    timetable: s.snapshot.timetable,
+    todayCourses: s.snapshot.todayCourses,
+    // 这三个标记描述的是**本机**这份快照有没有配置 ——
+    // 推给手机时，手机按它决定要不要动自己的课表。
+    hasCourses: (s.snapshot.courses?.length || 0) > 0,
+    hasExams: (s.snapshot.exams?.length || 0) > 0,
+    hasTaskTypes: (s.snapshot.taskTypes?.length || 0) > 0,
   };
   saveLocalSnapshot(next);
 }
 
-function buildPushPayload(mode: 'merge' | 'replace'): Snapshot {
+/**
+ * 推给手机的载荷。
+ *
+ * `includeConfig` 默认**关**：不带配置，手机就保留自己的课表。
+ * 只有用户明确点「把本页课表推给手机」时才打开。
+ *
+ * 带上 `hasCourses` 这个标记是**危险**的：手机侧收到它就会
+ * 「先清空整张课表，再按这份重建」（见 `SnapshotApplier.replaceCourses`）。
+ * 所以本机一门课都没有的时候，标记必须是 false ——
+ * 否则一次空推送就把手机上的课表清空了。
+ */
+function buildPushPayload(mode: 'merge' | 'replace', includeConfig = false): Snapshot {
   const s = get();
   const snapshot = s.snapshot;
   const tasks =
@@ -323,9 +353,27 @@ function buildPushPayload(mode: 'merge' | 'replace'): Snapshot {
   return {
     ...snapshot,
     tasks,
-    hasCourses: snapshot.hasCourses === true,
-    hasExams: snapshot.hasExams === true,
-    hasTaskTypes: snapshot.hasTaskTypes === true,
+    hasCourses: includeConfig && (snapshot.courses?.length || 0) > 0,
+    hasExams: includeConfig && (snapshot.exams?.length || 0) > 0,
+    hasTaskTypes: includeConfig && (snapshot.taskTypes?.length || 0) > 0,
+  };
+}
+
+/**
+ * 只推配置、不动待办的载荷。
+ *
+ * `tasks` 传空数组 + `mode=merge`：手机侧一条待办都不会碰，
+ * 而配置照常被替换（`SnapshotApplier` 里配置与待办是两条独立的路）。
+ */
+function buildConfigPushPayload(): Snapshot {
+  const s = get();
+  const snapshot = s.snapshot;
+  return {
+    ...snapshot,
+    tasks: [],
+    hasCourses: (snapshot.courses?.length || 0) > 0,
+    hasExams: (snapshot.exams?.length || 0) > 0,
+    hasTaskTypes: (snapshot.taskTypes?.length || 0) > 0,
   };
 }
 
@@ -548,7 +596,9 @@ function connectEvents(): void {
         /* 坏载荷按 merge */
       }
       const direction = payload?.direction || 'merge';
-      if (direction === 'pull') void syncPull();
+      // 手机上明确点了「把手机上的推给网页端」→ 取手机的**整份**（含课表）。
+      // 那是一次明确的整体意图；自动同步与网页端自己的冲突按钮都不带配置。
+      if (direction === 'pull') void syncPull(true);
       else if (direction === 'push') void syncPush();
       else void syncMerge();
     });
@@ -683,24 +733,54 @@ export async function manualSync(): Promise<void> {
   await autoSync('manual');
 }
 
-export async function syncPull(): Promise<void> {
+/**
+ * 「以手机为准」——**待办**以手机为准。
+ *
+ * 配置（课表 / 考试 / 分类）默认不动：解决一条待办的冲突，
+ * 不该顺手把整张课表换掉。要搬配置走 [syncConfigPull]。
+ *
+ * `includeConfig` 只有一种情况为 true：**手机上明确点了「把手机上的推给网页端」**。
+ * 那是一次明确的整体意图，网页端取手机那一份（含课表）是顺着它的意思；
+ * 自动同步与网页端自己的冲突按钮都不走这条。
+ */
+export async function syncPull(includeConfig = false): Promise<void> {
   const s = get();
   if (!s.base || !s.secret || !s.deviceId) return;
   set({ syncing: true, syncError: null });
   try {
     const remote = normalizeSnapshot(await api('/api/snapshot'));
-    const snapshot = { ...emptySnapshot(), ...remote };
+    const tasks = remote.tasks || [];
     const pending: PendingMap = {};
     const remoteBase: Record<string, number> = {};
-    for (const task of remote.tasks || []) remoteBase[task.syncUid] = task.updatedAt || 0;
+    for (const task of tasks) remoteBase[task.syncUid] = task.updatedAt || 0;
     const meta = { lastSyncAt: Date.now(), lastDirection: 'pull' };
+    const snapshot: Snapshot = {
+      ...s.snapshot,
+      tasks,
+      revision: remote.revision,
+      generatedAt: remote.generatedAt,
+      latestEditAt: remote.latestEditAt,
+      // 明确要整份时才把配置也换成手机那份。
+      ...(includeConfig
+        ? {
+            courses: remote.courses || [],
+            exams: remote.exams || [],
+            taskTypes: remote.taskTypes || [],
+            timetable: remote.timetable ?? null,
+            todayCourses: remote.todayCourses || [],
+            hasCourses: (remote.courses?.length || 0) > 0,
+            hasExams: (remote.exams?.length || 0) > 0,
+            hasTaskTypes: (remote.taskTypes?.length || 0) > 0,
+          }
+        : {}),
+    };
     set({ snapshot, pending, remoteBase, meta, remoteSnapshot: remote, conflict: null });
     persistSnapshot(snapshot);
     persistPending(pending);
     persistRemoteBase(remoteBase);
     persistMeta(meta);
     scheduleSnapshotFileSave();
-    toast('已换成手机上的数据', 'success');
+    toast(includeConfig ? '已换成手机上的数据' : '待办已换成手机上的', 'success');
   } catch (error: any) {
     if (error?.unauthorized) return handleUnauthorized();
     syncFailureToast(error?.message || '拉取失败');
@@ -709,6 +789,12 @@ export async function syncPull(): Promise<void> {
   }
 }
 
+/**
+ * 「以本页为准」——把本机的待办整份推给手机。
+ *
+ * 载荷不带配置（`buildPushPayload` 的 `includeConfig` 默认关），
+ * 手机上的课表不会被这一推换掉。
+ */
 export async function syncPush(): Promise<void> {
   const s = get();
   if (!s.base || !s.secret || !s.deviceId) return;
@@ -732,7 +818,7 @@ export async function syncPush(): Promise<void> {
     persistRemoteBase(remoteBase);
     persistMeta(meta);
     scheduleSnapshotFileSave();
-    toast('已把本页推到手机上', 'success');
+    toast('已把本页待办推到手机上', 'success');
   } catch (error: any) {
     if (error?.unauthorized) return handleUnauthorized();
     syncFailureToast(error?.message || '推送失败');
@@ -741,6 +827,7 @@ export async function syncPush(): Promise<void> {
   }
 }
 
+/** 「合并」——两边的待办并成一份。配置仍然各管各的。 */
 export async function syncMerge(): Promise<void> {
   const s = get();
   if (!s.base || !s.secret || !s.deviceId) return;
@@ -771,6 +858,75 @@ export async function syncMerge(): Promise<void> {
   } catch (error: any) {
     if (error?.unauthorized) return handleUnauthorized();
     syncFailureToast(error?.message || '合并失败');
+  } finally {
+    set({ syncing: false });
+  }
+}
+
+/**
+ * 「用手机的课表和考试」——把手机的配置搬到本机。
+ *
+ * 这是**配置唯一的入口**。自动同步不会做这件事（网页端是独立的一端），
+ * 要搬就得明确点一下。
+ *
+ * 待办一个字都不动。
+ */
+export async function syncConfigPull(): Promise<void> {
+  const s = get();
+  if (!s.base || !s.secret || !s.deviceId) return;
+  set({ syncing: true, syncError: null });
+  try {
+    const remote = normalizeSnapshot(await api('/api/snapshot'));
+    const snapshot: Snapshot = {
+      ...s.snapshot,
+      courses: remote.courses || [],
+      exams: remote.exams || [],
+      taskTypes: remote.taskTypes || [],
+      timetable: remote.timetable ?? null,
+      todayCourses: remote.todayCourses || [],
+      hasCourses: (remote.courses?.length || 0) > 0,
+      hasExams: (remote.exams?.length || 0) > 0,
+      hasTaskTypes: (remote.taskTypes?.length || 0) > 0,
+      revision: remote.revision,
+      generatedAt: remote.generatedAt,
+    };
+    set({ snapshot, remoteSnapshot: remote });
+    saveLocalSnapshot(snapshot);
+    toast(
+      `已用手机上的课表：${snapshot.courses.length} 门课 · ${snapshot.exams.length} 场考试`,
+      'success',
+    );
+  } catch (error: any) {
+    if (error?.unauthorized) return handleUnauthorized();
+    syncFailureToast(error?.message || '搬课表失败');
+  } finally {
+    set({ syncing: false });
+  }
+}
+
+/**
+ * 「把本页课表推给手机」——用本机的配置覆盖手机上的课表与考试。
+ *
+ * 本机一门课都没有时**直接拒绝**：手机侧收到 `hasCourses=true` 会
+ * 「先清空整张课表再重建」，一份空配置推过去等于把手机上的课表删了。
+ */
+export async function syncConfigPush(): Promise<void> {
+  const s = get();
+  if (!s.base || !s.secret || !s.deviceId) return;
+  if (!(s.snapshot.courses?.length || 0)) {
+    toast('本页还没有课程。先导入一份 JSON 快照，或用手机的课表。', 'error');
+    return;
+  }
+  set({ syncing: true, syncError: null });
+  try {
+    await api('/api/snapshot/apply', {
+      method: 'POST',
+      body: { mode: 'merge', snapshot: buildConfigPushPayload() },
+    });
+    toast('已把本页的课表和考试推给手机', 'success');
+  } catch (error: any) {
+    if (error?.unauthorized) return handleUnauthorized();
+    syncFailureToast(error?.message || '推课表失败');
   } finally {
     set({ syncing: false });
   }
@@ -965,6 +1121,8 @@ export const sync = {
   syncPull,
   syncPush,
   syncMerge,
+  syncConfigPull,
+  syncConfigPush,
   probePhone,
   connectBase,
   requestPairCode,

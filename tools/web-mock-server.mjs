@@ -38,7 +38,14 @@ import {
 } from '../web/crypto.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WEB_DIR = path.resolve(__dirname, '..', 'web');
+// 静态托管目录 = **新桌面端**的构建产物。旧网页端（web/index.html 等）已删除，
+// 原来这里指的是 web/；现在 127.0.0.1:8801/ 打开就是桌面端本身，
+// 不用再拿 file:// 打开 HTML —— 同源，省掉一轮跨源配置。
+// 没构建过就退回 web/（里面还有 crypto.js / timetable.js 这些共享模块）。
+const DESKTOP_DIST = path.resolve(__dirname, '..', 'desktop', 'dist');
+const WEB_DIR = fs.existsSync(path.join(DESKTOP_DIST, 'MiuList-Web.html'))
+  ? DESKTOP_DIST
+  : path.resolve(__dirname, '..', 'web');
 
 const argv = process.argv.slice(2);
 function arg(name, fallback) {
@@ -145,24 +152,25 @@ const TOTAL_WEEKS = 16;
 const WEEKS_BEFORE_TODAY = 10;
 const CURRENT_WEEK = WEEKS_BEFORE_TODAY + 1;
 
-/** 时段去重表：周计划里只存下标。 */
-const SLOT_LIST = [];
-const slotIndex = new Map();
-for (const c of COURSES) {
-  for (const s of c.slots) {
-    const key = `${c.key}|${s.dayOfWeek}|${s.startPeriod}|${s.endPeriod}`;
-    if (slotIndex.has(key)) continue;
-    slotIndex.set(key, SLOT_LIST.length);
-    SLOT_LIST.push({
-      courseKey: c.key,
-      startPeriod: s.startPeriod,
-      endPeriod: s.endPeriod,
-      classroom: s.classroom || c.classroom,
-    });
+/** 时段去重表：周计划里只存下标。按当前这份课表现算，课表换了表也跟着换。 */
+function buildSlotList(courses) {
+  const list = [];
+  const index = new Map();
+  for (const c of courses) {
+    for (const s of c.slots || []) {
+      const key = `${c.key}|${s.dayOfWeek}|${s.startPeriod}|${s.endPeriod}`;
+      if (index.has(key)) continue;
+      index.set(key, list.length);
+      list.push({
+        courseKey: c.key,
+        startPeriod: s.startPeriod,
+        endPeriod: s.endPeriod,
+        classroom: s.classroom || c.classroom,
+      });
+    }
   }
+  return { list, index };
 }
-const slotIndexOf = (courseKey, dow, start, end) =>
-  slotIndex.get(`${courseKey}|${dow}|${start}|${end}`);
 
 /** 钟点 → 节次区间（抄 PeriodTable.periodSpanOf）。 */
 function periodSpanOf(startMinute, endMinute) {
@@ -188,7 +196,10 @@ function periodSpanOf(startMinute, endMinute) {
  * - **本周周五让出课、周六补**（VACATED / 补课日）→ 周五空着，
  *   周六出的是周五那门课。
  */
-function buildTimetable() {
+function buildTimetable(courses = COURSES) {
+  const { list: slotList, index: slotIndex } = buildSlotList(courses);
+  const slotIndexOf = (courseKey, dow, start, end) =>
+    slotIndex.get(`${courseKey}|${dow}|${start}|${end}`);
   const weeks = [];
   // 第 1 周的周一 = 今天所在那周的周一往前推 10 周（学期的起点）
   const semesterStart = mondayMs - WEEKS_BEFORE_TODAY * 7 * DAY_MS;
@@ -211,8 +222,8 @@ function buildTimetable() {
 
       const slotIndexes = [];
       if (!offReason) {
-        for (const c of COURSES) {
-          for (const s of c.slots) {
+        for (const c of courses) {
+          for (const s of c.slots || []) {
             if (s.dayOfWeek !== effectiveDow) continue;
             const idx = slotIndexOf(c.key, s.dayOfWeek, s.startPeriod, s.endPeriod);
             if (idx !== undefined) slotIndexes.push(idx);
@@ -254,7 +265,7 @@ function buildTimetable() {
     currentWeek: CURRENT_WEEK,
     periodsPerDay: PERIODS.length,
     periods: PERIODS.map(([period, startMinute, endMinute]) => ({ period, startMinute, endMinute })),
-    slotList: SLOT_LIST,
+    slotList,
     weeks,
   };
 }
@@ -306,11 +317,84 @@ const EXAMS = [
   { courseName: '数据结构', kind: 'FINAL', day: dayOffset(13), start: '14:00', end: '16:00', classroom: '待学校安排', seat: '', colorHex: '#4ec98d' },
 ];
 
-const todayCourses = [
-  { name: '微积分 B(下)', colorHex: '#7aa2ff', classroom: '教十 201', teacher: '李伟', timeText: '08:00 - 09:35', state: 'past' },
-  { name: '大学物理', colorHex: '#f0b429', classroom: '实验楼 A302', teacher: '王芳', timeText: '13:30 - 15:05', state: 'now' },
-  { name: '数据结构', colorHex: '#4ec98d', classroom: '教十 305', teacher: '陈默', timeText: '15:25 - 16:55', state: 'future' },
-];
+/** 考试记录 → 线上 DTO 形状（与手机端 WebExamDto 同字段）。 */
+function examDto(e) {
+  return {
+    id: e.courseName,
+    courseCode: '',
+    courseName: e.courseName,
+    kind: e.kind,
+    whenText: `${e.day} ${e.start}-${e.end}`,
+    dateLabel: '',
+    classroom: e.classroom,
+    seat: e.seat,
+    credit: 0,
+    termLabel: '2026-2027 秋冬',
+    colorHex: e.colorHex,
+    isToday: e.day === TODAY,
+    startAt: stamp(e.day, e.start),
+    endAt: stamp(e.day, e.end),
+    startMinute: 0,
+    endMinute: 0,
+    updatedAt: 0,
+  };
+}
+
+/**
+ * 课表 / 考试 / 分类是**配置**，不是待办。
+ *
+ * mock 跟真机一样：**只有网页端明确把配置推上来（载荷里带
+ * `hasCourses` / `hasExams` / `hasTaskTypes` 标记）才替换**。
+ * 自动同步不带标记 —— 于是「网页端保留自己的配置」这条规则
+ * 在本地联调时也能验出来，而不是只能靠真机验。
+ */
+state.courses = COURSES.map((c) => ({
+  ...c,
+  slots: (c.slots || []).map((s) => ({ ...s })),
+}));
+state.exams = EXAMS.map(examDto);
+state.taskTypes = [];
+
+/** 「HH:mm」→ 自 00:00 起的分钟数。 */
+function hhmm(minute) {
+  const h = Math.floor(minute / 60);
+  const m = minute % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/**
+ * 今天要上的课 —— 从周课表里那一列自己取。
+ *
+ * 跟网页端同一套算法：网页端的配置是独立的，手机那份 `todayCourses`
+ * 可能是另一天的，所以两边都自己按日期取。
+ */
+function deriveTodayCourses(courses) {
+  const tt = buildTimetable(courses);
+  const day = tt.weeks.flatMap((w) => w.days || []).find((d) => d.date === TODAY);
+  if (!day) return [];
+  const byKey = new Map(courses.map((c) => [c.key, c]));
+  return (day.slotIndexes || [])
+    .map((idx) => {
+      const slot = tt.slotList[idx];
+      if (!slot) return null;
+      const course = byKey.get(slot.courseKey);
+      if (!course) return null;
+      const from = tt.periods.find((p) => p.period === slot.startPeriod);
+      const to = tt.periods.find((p) => p.period === slot.endPeriod);
+      return {
+        courseKey: slot.courseKey,
+        name: course.name,
+        colorHex: course.colorHex,
+        classroom: slot.classroom || course.classroom,
+        teacher: course.teacher,
+        timeText: `${hhmm(from?.startMinute ?? 0)} - ${hhmm(to?.endMinute ?? 0)}`,
+        startPeriod: slot.startPeriod,
+        endPeriod: slot.endPeriod,
+        state: 'future',
+      };
+    })
+    .filter(Boolean);
+}
 
 // ── 配对与密钥 ──────────────────────────────────────────────
 
@@ -365,30 +449,12 @@ function snapshot() {
     hasExams: true,
     hasTaskTypes: true,
     tasks: state.tasks,
-    taskTypes: [],
-    courses: COURSES,
-    exams: EXAMS.map((e) => ({
-      id: e.courseName,
-      courseCode: '',
-      courseName: e.courseName,
-      kind: e.kind,
-      whenText: `${e.day} ${e.start}-${e.end}`,
-      dateLabel: '',
-      classroom: e.classroom,
-      seat: e.seat,
-      credit: 0,
-      termLabel: '2026-2027 秋冬',
-      colorHex: e.colorHex,
-      isToday: e.day === TODAY,
-      startAt: stamp(e.day, e.start),
-      endAt: stamp(e.day, e.end),
-      startMinute: 0,
-      endMinute: 0,
-      updatedAt: 0,
-    })),
-    todayCourses,
-    // 周课表：网页端只画，不自己算（手机那边才是权威）
-    timetable: NO_TIMETABLE ? null : buildTimetable(),
+    taskTypes: state.taskTypes,
+    courses: state.courses,
+    exams: state.exams,
+    todayCourses: deriveTodayCourses(state.courses),
+    // 周课表：随课表一起走；网页端只画，不自己算（手机那边才是权威）
+    timetable: NO_TIMETABLE ? null : buildTimetable(state.courses),
   };
 }
 
@@ -405,6 +471,15 @@ function applyRemoteSnapshot(body) {
   const incomingTasks = (incoming.tasks || []).filter((t) => t.syncUid);
   const applied = [];
   const kept = [];
+
+  // ── 配置：只有带标记才替换（跟真机同一条规则） ──
+  //
+  // 标记的含义是「这一端**有**配置」，不是「这一端想替换」。
+  // 自动同步不带标记 → 手机的课表不动；
+  // 「把本页课表推给手机」带标记 → 手机的课表被换成这一份。
+  if (incoming.hasCourses) state.courses = (incoming.courses || []).map((c) => ({ ...c }));
+  if (incoming.hasExams) state.exams = incoming.exams || [];
+  if (incoming.hasTaskTypes) state.taskTypes = incoming.taskTypes || [];
 
   if (mode === 'replace') {
     const before = state.tasks.length;
@@ -525,6 +600,32 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === '/api/health') {
       return json(res, 200, { ok: true, app: 'MiuList', appVersion: '1.0.4', protocol: 3, deviceName: 'Mock 手机', serverTime: Date.now() });
+    }
+
+    // ── 调试：换掉这台「手机」的课表 ────────────────────────────
+    //
+    // 用来验「网页端的配置是独立的」：把手机这边的课表换成另一份，
+    // 再看网页端会不会被自动同步改掉（**不该**）。
+    //
+    // 只在本地 mock 上有这个接口；App 里没有，网页端也永远不会调它。
+    if (p === '/__mock/state' && req.method === 'GET') {
+      return json(res, 200, {
+        courses: state.courses.length,
+        courseNames: state.courses.map((c) => c.name),
+        exams: state.exams.length,
+        taskTypes: state.taskTypes.length,
+        tasks: state.tasks.length,
+      });
+    }
+
+    if (p === '/__mock/courses' && req.method === 'POST') {
+      const raw = await readBody(req);
+      let body = {};
+      try { body = JSON.parse(raw.toString('utf8') || '{}'); } catch (_) { /* 坏体当空 */ }
+      const keep = Number(body.keep || 0);
+      state.courses = state.courses.slice(0, keep).map((c) => ({ ...c, name: `${c.name}（改）` }));
+      bump('mock:courses');
+      return json(res, 200, { ok: true, courses: state.courses.length });
     }
 
     if (p === '/api/pair/request' && req.method === 'POST') {

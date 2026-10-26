@@ -3,7 +3,9 @@ import {
   AlertTriangle,
   Check,
   Copy,
+  Download,
   FileJson2,
+  GraduationCap,
   Info,
   Link2,
   Palette,
@@ -27,6 +29,8 @@ import {
   manualSync,
   normalizeBase,
   requestPairCode,
+  syncConfigPull,
+  syncConfigPush,
   syncMerge,
   syncPull,
   syncPush,
@@ -298,12 +302,88 @@ function ConnectionPanel() {
         </div>
       )}
 
+      {state.base ? <SchedulePanel /> : null}
+
       <div className="panel-note">
         <ShieldCheck size={16} />
         <p>
-          网页端与手机是对等快照；配对密钥只在本机，快照文件不含它。手机 App 继续当接口服务端，协议不变。
+          待办在两端之间自动同步；<strong>课表与考试各留一份</strong>，不会跟着同步跑 ——
+          要搬的时候用上面那张卡片。配对密钥只在本机，快照文件不含它。手机 App 继续当接口服务端，协议不变。
         </p>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 「课表与考试」——配置搬运的唯一入口。
+ *
+ * 两端各持一份课表：网页端是独立的一端，不是手机的镜像。
+ * 自动同步只交换待办，课表要搬得明确点一下，否则用户永远不知道
+ * 「手机上改了课表，为什么网页端没跟着变」。
+ */
+function SchedulePanel() {
+  const state = useAppStore();
+  const localCourses = state.snapshot.courses?.length || 0;
+  const localExams = state.snapshot.exams?.length || 0;
+  const remote = state.remoteSnapshot;
+  const paired = Boolean(state.secret && state.deviceId);
+  const busy = state.syncing || !paired;
+
+  return (
+    <div className="panel-card glass-soft">
+      <div className="panel-card-head">
+        <span className="panel-icon">
+          <GraduationCap size={18} />
+        </span>
+        <div>
+          <h3>课表与考试</h3>
+          <p>两端各留一份。自动同步只动待办，课表不会跟着跑。</p>
+        </div>
+      </div>
+
+      <div className="config-compare">
+        <div className="config-side">
+          <span>这台电脑</span>
+          <strong>
+            {localCourses} 门课 · {localExams} 场考试
+          </strong>
+        </div>
+        <div className="config-side">
+          <span>手机</span>
+          <strong>
+            {remote
+              ? `${remote.courses?.length || 0} 门课 · ${remote.exams?.length || 0} 场考试`
+              : '还没连上'}
+          </strong>
+        </div>
+      </div>
+
+      <div className="connection-actions">
+        <Button
+          variant="soft"
+          icon={Download}
+          loading={state.syncing}
+          disabled={busy}
+          onClick={() => void syncConfigPull()}
+        >
+          用手机的课表和考试
+        </Button>
+        <Button
+          variant="ghost"
+          icon={Upload}
+          disabled={busy || !localCourses}
+          onClick={() => void syncConfigPush()}
+        >
+          把本页课表推给手机
+        </Button>
+      </div>
+
+      <p className="field-hint">
+        {localCourses
+          ? '「用手机的」会覆盖这台电脑上的课表与考试；「推给手机」会覆盖手机上的。两者都只动配置，不动待办。'
+          : '这台电脑还没有课表：先「用手机的课表和考试」搬一份过来，或者导入一份 JSON 快照。'}
+      </p>
     </div>
   );
 }
@@ -344,13 +424,13 @@ function ConflictCard() {
           disabled={state.syncing}
           onClick={() => void syncPush()}
         >
-          以本页为准
+          以本页待办为准
         </Button>
         <Button variant="soft" disabled={state.syncing} onClick={() => void syncPull()}>
-          以手机为准
+          以手机待办为准
         </Button>
         <Button variant="ghost" disabled={state.syncing} onClick={() => void syncMerge()}>
-          合并
+          合并待办
         </Button>
       </div>
     </div>
@@ -509,11 +589,15 @@ function SnapshotPanel() {
   );
 }
 
+/**
+ * 四组背景 = 手机端四张壁纸的 CSS 版（`WallpaperModel.kt` 里的实测三段取样）。
+ * 标签与说明按**实际渲染出来的颜色**写，别让它们说出底色没有的东西。
+ */
 const WALLPAPERS: { id: WallpaperId; label: string; desc: string }[] = [
-  { id: 'cloud', label: '云烟', desc: '青柠 · 樱粉' },
-  { id: 'mint', label: '薄荷', desc: '青竹 · 湖蓝' },
-  { id: 'dusk', label: '暮色', desc: '杏橙 · 藕紫' },
-  { id: 'sakura', label: '樱粉', desc: '粉樱 · 米白' },
+  { id: 'cloud', label: '云烟', desc: '近乎纯白 · 冷灰' },
+  { id: 'mint', label: '草木', desc: '浅淡绿意' },
+  { id: 'dusk', label: '暖钢', desc: '暖黄渐藕紫' },
+  { id: 'sakura', label: '柔粉', desc: '暖粉渐深' },
 ];
 
 function AppearancePanel() {

@@ -74,6 +74,10 @@ export type TodayCourse = {
   teacher?: string;
   timeText?: string;
   state?: 'past' | 'now' | 'future' | string;
+  /** 课程自然键。本机自己算「今天的课」时用它回查课程。 */
+  courseKey?: string;
+  startPeriod?: number;
+  endPeriod?: number;
 };
 
 export type TimetableSlot = {
@@ -116,12 +120,23 @@ export type Timetable = {
   weeks: TimetableWeek[];
 };
 
+/**
+ * 一个待办分类。
+ *
+ * `name` 是**落库用的 key**，不是显示名：内置类型存枚举名（`PRE_STUDY`），
+ * 自定义类型存 `CUSTOM:<id>` —— 与手机端 `tasks.taskType` 一列的约定一致。
+ * 手机发过来的自定义分类只有 `id` 与 `label`，key 由前端按 `CUSTOM:<id>` 补出来
+ * （见 `taskTypes.ts`）；补不出来时 `name` 为空串，这条分类就只是「看得见、选不了」。
+ */
 export type TaskTypeOption = {
   name: string;
   label: string;
   colorHex: string;
   inkHex: string;
   isCustom?: boolean;
+  /** 自定义分类的稳定 id（手机端的主键）。 */
+  id?: string;
+  sortOrder?: number;
 };
 
 export type Snapshot = {

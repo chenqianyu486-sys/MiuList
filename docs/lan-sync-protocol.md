@@ -237,6 +237,25 @@ sealed = nonce(12) ‖ ciphertext ‖ MAC(32)
 那不是「手机上没有课程」，而是「网页端还不知道」。没有标记就照单全收，
 会把手机上的课表整个清空 —— 而「刚打开网页端就点同步」最容易踩这个坑。
 
+### 两端各管各的课表
+
+**网页端是独立的一端，不是手机的镜像。**
+
+- 自动同步只交换**待办**：网页端的推载荷默认**不带**这三个标记
+  （`hasCourses` / `hasExams` / `hasTaskTypes` 都是 false），
+  手机收到就**保留自己的课表**，不会被网页端那份换掉。
+- 反过来也一样：网页端拉手机快照时，也**不拿**手机的课表覆盖自己那份。
+- 要搬配置是**显式**动作（网页端「同步 → 连接」里的两个按钮）：
+  - 「用手机的课表和考试」→ 一次 GET，把配置搬进本机；
+  - 「把本页课表推给手机」→ 一次 apply，载荷带标记、**且 `tasks` 为空**
+    （手机侧待办一条都不动，只换课表/考试/分类）。
+
+**远端不带课表时，待办仍然要挂到课程上。**
+网页端推过来的待办带着 `courseKey`（自然键 `代码|名称|教师`，跨端通用），
+手机按这个键查**自己**的课就能挂上（`SnapshotApplier.linkToLocalCourses`）。
+否则每一条带课程的待办都会落成「未关联课程」——
+用户看到的是「手机上这条待办突然没有课」。
+
 ### 快照里的周课表（`timetable`）
 
 网页端课表页有一张**周课表栅格**：七列 = 这一周里真实的七个日期，
@@ -388,11 +407,14 @@ sealed = nonce(12) ‖ ciphertext ‖ MAC(32)
 
 ## 9. 实现位置
 
+> `web/` 目录现在**只剩共享模块**（`crypto.js` / `crypto.test.mjs` / `timetable.js`）——
+> 旧网页端的前端三件套（`app.js` / `styles.css` / `index.html`）已删除，
+> 桌面端以 `desktop/` 为准（见 `desktop/README.md`）。下面按文件列出实现位置。
+
 | 文件 | 职责 |
 |---|---|
 | `web/crypto.js` | 浏览器端密码学（纯 JS，因为明文 HTTP 下没有 `crypto.subtle`） |
 | `web/crypto.test.mjs` | 上述实现的自测（对照 Node / RFC 8439 / OpenSSL） |
-| `web/app.js` | 网页端主逻辑：本地快照、差分、冲突判定、签名与加密 |
 | `web/timetable.js` | 周课表：课程色两档推导（抄 App 的 `Color.kt`）+ 撞课分列 + 栅格渲染 |
 | `tools/web-mock-server.mjs` | 零依赖 mock 服务（同一份协议的参考实现） |
 | `app/.../data/sync/web/LanHttpServer.kt` | HTTP/SSE 内核（无新依赖） |

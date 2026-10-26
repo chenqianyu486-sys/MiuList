@@ -57,6 +57,12 @@ enum class SyncMode(val wire: String) {
  * 那不是「手机上没有课程」，而是「网页端还不知道」。没有标记就照单全收，
  * 会把手机上的课表整个清空 —— 而「刚打开网页端就点同步」最容易踩这个坑。
  *
+ * 标记现在还多担一件事：**两端各管各的课表**。
+ * 网页端默认不带课表（它自己那份是独立的），所以手机上收到
+ * 「只有待办、没有课表」的推送是常态；这时待办仍然要挂到课程上，
+ * 按自然键查本机的课就行（见 [linkToLocalCourses]），
+ * 而不是让它落成「未关联课程」。
+ *
  * 整个替换在**一个事务**里。中途失败不会留下「课程换了、待办没换」的半截状态。
  */
 class SnapshotApplier(
@@ -81,8 +87,15 @@ class SnapshotApplier(
     }
 
     suspend fun apply(remote: WebSnapshotDto, mode: SyncMode): Report = db.withTransaction {
-        // ── 课程（先做：待办要按 courseKey 挂到新的课程 id 上） ──
-        val courseIds = if (remote.hasCourses) replaceCourses(remote) else emptyMap()
+        // ── 课程（先做：待办要按 courseKey 挂到课程 id 上） ──
+        //
+        // 这一端**没带**课表时：不替换本机的课表（两端各管各的），
+        // 但待办仍然要挂到课程上 —— courseKey 是自然键，按它查本机的课就行。
+        val courseIds = if (remote.hasCourses) {
+            replaceCourses(remote)
+        } else {
+            linkToLocalCourses(remote.tasks)
+        }
 
         // ── 自定义分类 ──
         var taskTypeCount = 0
@@ -228,6 +241,36 @@ class SnapshotApplier(
             updatedAt = updatedAt,
             syncUid = syncUid,
         )
+    }
+
+    /**
+     * 远端**没带**课表时，按自然键把远端待办挂到**本机**已有的课程上。
+     *
+     * ## 为什么不能直接返回空表
+     *
+     * 远端不带课表有两层意思：「这一端还没有课表」和「两端各管各的，
+     * 这一端不想动对方的课表」。两者的**共同后果**都是：远端那份
+     * 课程列表不能用。
+     *
+     * 但待办仍然带着 `courseKey`（自然键）—— 那是**跨端通用**的：
+     * 两台机器的自增 id 一定不同，但「代码|名称|教师」是一样的。
+     * 于是本机按这个键查自己的课，就能把待办挂到正确的课程上。
+     *
+     * 不这么做的话，远端推过来的每一条带课程的待办都会落成「未关联课程」，
+     * 用户看到的是「手机上这条待办突然没有课了」。
+     */
+    private suspend fun linkToLocalCourses(
+        tasks: List<WebTaskDto>,
+    ): Map<String, Pair<Long, CourseEntity>> {
+        val keys = tasks.mapNotNull { it.courseKey.takeIf(String::isNotBlank) }.distinct()
+        if (keys.isEmpty()) return emptyMap()
+        val result = LinkedHashMap<String, Pair<Long, CourseEntity>>()
+        for (key in keys) {
+            // 同一个自然键可能有多条（历史数据里本就可能重复），取首条。
+            val local = courseRepo.getByDedupeKey(key).firstOrNull() ?: continue
+            result[key] = local.id to local
+        }
+        return result
     }
 
     /**

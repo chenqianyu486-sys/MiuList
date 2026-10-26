@@ -1,5 +1,6 @@
 import { formatExamWhen } from '../core/format';
 import { useAppStore } from '../core/store';
+import { accentBarColor } from '../core/tint';
 import { Sheet } from './Sheet';
 
 export function DetailSheet() {
@@ -37,7 +38,9 @@ export function DetailSheet() {
       title={title}
       subtitle={course ? '在手机上修改课程信息；这里只读。' : '考试信息来自手机快照。'}
       headerExtra={
-        color ? <span className="detail-color" style={{ background: color }} aria-hidden="true" /> : null
+        color ? (
+          <span className="detail-color" style={{ background: accentBarColor(color) }} aria-hidden="true" />
+        ) : null
       }
     >
       <div className="detail-list">

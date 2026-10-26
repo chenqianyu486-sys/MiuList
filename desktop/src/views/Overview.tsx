@@ -13,10 +13,10 @@ import { TaskCard } from '../components/TaskCard';
 import { Button, EmptyState, SectionHead, cx } from '../components/ui';
 import {
   examDay,
+  examIsToday,
   formatFullDate,
   formatMonthDay,
   greeting,
-  hexToRgba,
   inTodayList,
   isOverdue,
   localToday,
@@ -26,6 +26,8 @@ import {
   weekdayOf,
 } from '../core/format';
 import { useAppStore } from '../core/store';
+import { COURSE_TINT_ALPHA, accentBarColor, courseFace } from '../core/tint';
+import { todayCoursesOf } from '../core/todayCourses';
 import type { Course, Exam } from '../core/types';
 
 export function Overview() {
@@ -38,8 +40,8 @@ export function Overview() {
   const openTasks = sortOpenTasks(snapshot.tasks || [], today);
   const todayTasks = openTasks.filter((task) => inTodayList(task, today));
   const overdueCount = todayTasks.filter((task) => isOverdue(task, today)).length;
-  const todayCourses = snapshot.todayCourses || [];
-  const todayExams = (snapshot.exams || []).filter((exam) => exam.isToday);
+  const todayCourses = todayCoursesOf(snapshot, today);
+  const todayExams = (snapshot.exams || []).filter((exam) => examIsToday(exam, today));
   const upcomingExams = (snapshot.exams || [])
     .filter((exam) => !exam.isToday && examDay(exam) >= today)
     .sort((a, b) => (examDay(a) < examDay(b) ? -1 : 1))
@@ -151,7 +153,7 @@ export function Overview() {
                     <div className="timeline-marker">
                       <span
                         className={cx('timeline-dot', entry.state === 'now' && 'is-now')}
-                        style={{ background: color }}
+                        style={{ background: accentBarColor(color) }}
                       />
                     </div>
                     <button
@@ -159,13 +161,13 @@ export function Overview() {
                       className={cx('course-card', entry.state === 'now' && 'is-now')}
                       style={
                         {
-                          '--course': color,
-                          '--course-tint': hexToRgba(color, 0.14),
+                          '--course-bar': accentBarColor(color),
+                          '--course-face': courseFace(color, COURSE_TINT_ALPHA),
                         } as never
                       }
                       onClick={() => openDetail({ kind: 'course', course })}
                     >
-                      <span className="course-card-bar" style={{ background: color }} />
+                      <span className="course-card-bar" />
                       <span className="course-card-body">
                         <span className="course-card-title">
                           {entry.name}

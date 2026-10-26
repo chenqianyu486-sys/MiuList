@@ -24,20 +24,33 @@ const NEUTRAL: TaskTypeOption = {
   isCustom: true,
 };
 
+/**
+ * 手机发来的自定义分类长这样：`{id, label, colorHex, inkHex, sortOrder}` ——
+ * **没有 `name`**。而 `name` 才是落库的 key（`CUSTOM:<id>`）。
+ *
+ * 不补这个 key 的后果：所有自定义分类的 `name` 都是空串，
+ * 于是「新建待办」里的下拉框选哪个自定义分类，存进去的都是「未分类」，
+ * 而且两个自定义分类还会共用同一个空 value，互相顶掉。
+ */
 export function taskTypeOptions(custom: TaskTypeOption[] = []): TaskTypeOption[] {
   const out = [...BUILTIN_TASK_TYPES];
   const seen = new Set(out.map((v) => v.name));
   for (const item of custom) {
-    if (!item || !item.label || seen.has(item.name)) continue;
-    out.push({ ...NEUTRAL, ...item, isCustom: true });
-    seen.add(item.name);
+    if (!item || !item.label) continue;
+    const name = item.name || (item.id ? `CUSTOM:${item.id}` : '');
+    if (!name || seen.has(name)) continue;
+    out.push({ ...NEUTRAL, ...item, name, isCustom: true });
+    seen.add(name);
   }
   return out;
 }
 
 export function normalizeTaskType(raw: string, label: string, custom: TaskTypeOption[] = []): TaskTypeOption {
   const key = ALIASES[label] || ALIASES[raw] || raw || label;
-  const customHit = custom.find((v) => v.name === key || v.label === label || v.label === raw);
+  const options = taskTypeOptions(custom);
+  const customHit = options.find(
+    (v) => v.isCustom && (v.name === key || v.label === label || v.label === raw),
+  );
   const builtin = BUILTIN_TASK_TYPES.find((v) => v.name === key || v.label === label || v.label === raw);
   const found = customHit || builtin;
   if (found) return found;

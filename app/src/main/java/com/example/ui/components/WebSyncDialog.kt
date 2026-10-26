@@ -239,19 +239,19 @@ fun WebSyncDialog(
                     Spacer(Modifier.height(6.dp))
                     DirectionButton(
                         title = "把手机上的推给网页端",
-                        desc = "网页端那份以手机为准",
+                        desc = "网页端那份待办和课表都以手机为准",
                         onClick = { onRequestSync(SyncDirection.PULL) },
                     )
                     Spacer(Modifier.height(6.dp))
                     DirectionButton(
                         title = "从网页端拉过来",
-                        desc = "手机这份以网页端为准",
+                        desc = "待办以网页端为准；课表仍以手机为准",
                         onClick = { onRequestSync(SyncDirection.PUSH) },
                     )
                     Spacer(Modifier.height(6.dp))
                     DirectionButton(
                         title = "合并两边",
-                        desc = "两边的改动都保留",
+                        desc = "两边的待办改动都保留",
                         onClick = { onRequestSync(SyncDirection.MERGE) },
                     )
                     Spacer(Modifier.height(10.dp))

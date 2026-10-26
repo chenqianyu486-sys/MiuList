@@ -1,7 +1,6 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -55,10 +54,10 @@ import com.example.ui.components.parseColor
 import com.example.ui.theme.ChipSurfaceNeutral
 import com.example.ui.theme.CardBlockGap
 import com.example.ui.theme.CardListGap
-import com.example.ui.theme.GlassEdgeBottom
 import com.example.ui.theme.PageHInset
 import com.example.ui.theme.LocalCardRevealProgress
 import com.example.ui.theme.StarInk
+import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.controlSurface
 import com.example.ui.viewmodel.MainUiState
 import com.example.data.calendar.AppZone
@@ -157,7 +156,7 @@ private const val STAR_GROUP_TITLE = "已标星"
 private const val UNSTARRED_GROUP_TITLE = "未标星"
 
 /**
- * 筛选 chip：选中 = 主题绿 + 深墨字，未选中 = 中性冷灰 + 一道几乎看不见的发丝边。
+ * 筛选 chip：选中 = 主题绿 + 深墨字，未选中 = 中性冷灰玻璃片 + 石墨字。
  *
  * 抽出来是因为两行筛选（分组+状态、类型）现在有 10 颗 chip 走同一套语言，
  * 逐个摊开写必然出现两处长得不一样的那份。
@@ -167,8 +166,16 @@ private const val UNSTARRED_GROUP_TITLE = "未标星"
  * 顶栏图标按键都不在一套语言里。选中那一档传 `accent = true`（0.72），
  * 未选中走中性面（0.60）——绿块要靠颜色本身被认出，透明度的余量不能给一样多。
  *
- * 发丝边保留：模糊面本身没有边界，未选中的 chip 又只有十几 dp 高，
- * 去掉描边会读成一片浮在页面上的浅色文字。
+ * **不描边**（2026-10-26 改）：未选中的 chip 原来挂了一道 0.5.dp 的
+ * `GlassEdgeBottom` 发丝边。那道边压在浅色玻璃面上只会比面更亮，
+ * 于是读出来就是一圈**白边**；换到深色或花纹壁纸，它又变成硬亮的一圈。
+ * 全 App 的玻璃语言在这一轮已经统一过一次——`glassSurface` 自己那条
+ * 0.5.dp 白描边早就删了（见 Mica.kt 的注释），这里跟着去掉才是同一套语言。
+ *
+ * 框没了，边界改由**字**扛：未选中的字从 `onSurfaceVariant`（#78827B）
+ * 提到 [TextSecondary]（#4A524D）——前者压在浅玻璃上只有 3.4:1，
+ * 没有框的时候它撑不住一颗 chip；后者 7.5:1，读起来才像一颗**按钮**
+ * 而不是一行浮在页面上的浅色文字。
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -195,11 +202,6 @@ private fun SelectableChip(
                 color = if (selected) MaterialTheme.colorScheme.primary else ChipSurfaceNeutral,
                 accent = selected
             )
-            .border(
-                width = if (selected) 0.dp else 0.5.dp,
-                color = if (selected) Color.Transparent else GlassEdgeBottom,
-                shape = shape
-            )
             .then(clickModifier)
             .padding(horizontal = 10.dp, vertical = 6.dp)
     ) {
@@ -210,7 +212,7 @@ private fun SelectableChip(
             color = if (selected) {
                 MaterialTheme.colorScheme.onPrimary
             } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
+                TextSecondary
             }
         )
     }
