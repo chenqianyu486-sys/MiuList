@@ -585,7 +585,7 @@ function AboutPanel() {
           <h3>MiuList · 电脑网页端</h3>
           <p>单文件静态前端 · 本机 JSON 快照 · 与手机对等同步</p>
         </div>
-        <span className="about-version">1.0.0</span>
+        <span className="about-version">1.0.6</span>
       </div>
       <div className="panel-card glass-soft">
         <h3 className="about-heading">它是什么</h3>

@@ -1,7 +1,7 @@
 {
   "name": "miulist-desktop",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.6",
   "type": "module",
   "description": "MiuList 桌面网页端：单文件静态前端 + 本机 JSON 快照",
   "scripts": {
