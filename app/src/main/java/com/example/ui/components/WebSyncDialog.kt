@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.sync.web.PairingStore
 import com.example.data.sync.web.QrCodes
 import com.example.data.sync.web.SyncDirection
+import com.example.data.sync.web.WebSyncService
 
 /**
  * 「网页同步」弹层。
@@ -74,16 +75,13 @@ fun WebSyncDialog(
     addresses: List<String>,
     port: Int,
     pairedDevices: List<PairingStore.PairedDevice>,
-    /** 有一台设备正在等确认。 */
-    pendingPairing: Boolean,
     /**
-     * **配对码**：电脑上显示的那 6 位码。
+     * **正在等确认的配对请求**：可能不止一条，**一条一张卡**。
      *
-     * 用户要拿它跟自己电脑上看到的一比 —— 对不上就别点「允许」。
+     * 每条都带**服务端观察到的来源地址** —— 那是客户端伪造不了的，
+     * 比它自己报的设备名可靠。
      */
-    pendingPairCode: String = "",
-    /** 在等确认的是哪台设备。 */
-    pendingDeviceName: String = "",
+    pendingPairings: List<WebSyncService.PendingPairing> = emptyList(),
     /** 设了同步密码没有。 */
     hasPasscode: Boolean,
     /** 本机最新的一次编辑时间。 */
@@ -91,8 +89,10 @@ fun WebSyncDialog(
     /** 网页端最近一次同步过来的快照的最新编辑时间。 */
     remoteLatestEditAt: Long,
     onToggleService: (Boolean) -> Unit,
-    onApprove: () -> Unit,
-    onDeny: () -> Unit,
+    /** 批准某一条（参数是它的 requestId）。 */
+    onApprove: (String) -> Unit,
+    /** 拒绝某一条（参数是它的 requestId）。 */
+    onDeny: (String) -> Unit,
     onRevoke: (String) -> Unit,
     /** 让网页端按指定方向同步一次。 */
     onRequestSync: (SyncDirection) -> Unit,
@@ -124,12 +124,12 @@ fun WebSyncDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "局域网服务",
+                            "允许其他设备连接",
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.Medium,
                         )
                         Text(
-                            if (running) "已开启，其他设备可以连进来" else "已关闭",
+                            if (running) "已开启" else "已关闭",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -141,13 +141,25 @@ fun WebSyncDialog(
                     )
                 }
 
-                if (pendingPairing) {
-                    PendingPairingCard(
-                        pairCode = pendingPairCode,
-                        deviceName = pendingDeviceName,
-                        onApprove = onApprove,
-                        onDeny = onDeny,
-                    )
+                if (pendingPairings.isNotEmpty()) {
+                    // ── 待确认的配对请求：一条一张卡 ────────────────
+                    //
+                    // **不用 LazyColumn**：外层已经是可滚动的 Column，
+                    // 里面再套一个滚动容器，两层滚动手势会互相打架。
+                    //
+                    // 一条一条列出来是有意为之：后来的请求**不再顶掉**先来的，
+                    // 真电脑的和陌生设备会同时出现，用户才看得见「怎么来了两个」。
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        pendingPairings.forEachIndexed { index, pending ->
+                            if (index > 0) Spacer(Modifier.height(10.dp))
+                            PendingPairingCard(
+                                pending = pending,
+                                index = index,
+                                onApprove = onApprove,
+                                onDeny = onDeny,
+                            )
+                        }
+                    }
                 }
 
                 if (running) {
@@ -157,7 +169,7 @@ fun WebSyncDialog(
                     // 放最后就永远在折叠线以下，用户得先滚一屏才找得到。
                     if (addresses.isEmpty()) {
                         Text(
-                            "没找到局域网地址。请确认手机连着 Wi-Fi，或者先关掉 VPN / 代理再试。",
+                            "没找到可用地址。请确认手机连着 Wi-Fi，或者先关掉 VPN / 代理再试。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                         )
@@ -221,7 +233,7 @@ fun WebSyncDialog(
                             }
                             Spacer(Modifier.height(6.dp))
                             Text(
-                                "在电脑上粘贴这个地址，网页端会立刻显示配对码 —— 之后只需手机扫一次。",
+                                "在电脑上粘贴这个地址，网页端会显示配对码，之后手机扫一次就能连上。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -248,7 +260,7 @@ fun WebSyncDialog(
                                 }
                                 Spacer(Modifier.height(6.dp))
                                 Text(
-                                    "不想复制？让电脑扫这个地址码",
+                                    "不想复制？让电脑扫这个码",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -257,7 +269,7 @@ fun WebSyncDialog(
                                     // **说清楚代价**：走这条路电脑先扫地址码、
                                     // 手机再扫电脑的配对码 —— 是两次扫码。
                                     // 上面那条「复制连接链接」才是只扫一次的走法。
-                                    "这样要扫两次码；复制链接那条路只扫一次。",
+                                    "这样要扫两次；复制链接那条路只扫一次。",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -289,20 +301,20 @@ fun WebSyncDialog(
                     // ── 方向选择 ──────────────────────────────────────
                     SectionLabel("手动同步")
                     Text(
-                        "两端都在线且没有冲突时会自动同步；下面三个是手动指定方向。",
+                        "没冲突时会自动同步；需要的话可以手动指定方向。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(6.dp))
                     DirectionButton(
-                        title = "把手机上的推给网页端",
-                        desc = "网页端那份待办和课表都以手机为准",
+                        title = "以手机为准",
+                        desc = "网页端的待办和课表都会被手机上的覆盖",
                         onClick = { onRequestSync(SyncDirection.PULL) },
                     )
                     Spacer(Modifier.height(6.dp))
                     DirectionButton(
-                        title = "从网页端拉过来",
-                        desc = "待办以网页端为准；课表仍以手机为准",
+                        title = "以网页端为准",
+                        desc = "待办会被网页端的覆盖；课表仍以手机为准",
                         onClick = { onRequestSync(SyncDirection.PUSH) },
                     )
                     Spacer(Modifier.height(6.dp))
@@ -317,16 +329,16 @@ fun WebSyncDialog(
                 if (running) {
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        "电脑上打开 MiuList 网页端 → 粘贴上面的连接链接（地址手动填一次也行）→ " +
+                        "电脑上打开 MiuList 网页端 → 粘贴上面的连接链接 → " +
                             "网页端会显示一张配对码 → 用手机扫它，在 MiuList 里点「允许」。" +
-                            "全程只扫一次码；配对过的设备以后不用再扫。",
+                            "配对过一次，以后就不用再扫了。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "想把这套东西搬到电脑上单独用？下载 Release 里的 MiuList-Web.html，" +
-                            "双击用 Chrome / Edge 打开即可 —— 不用装 exe，手机离线时也能看能改。",
+                        "想在电脑上单独用？下载 MiuList-Web.html，" +
+                            "用 Chrome / Edge 打开就行 —— 不用安装，手机不在也能看能改。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -370,7 +382,7 @@ fun WebSyncDialog(
                 if (hasPasscode) {
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "网页端配对时要填同一个密码。改密码后已配对的设备需要重新扫码。",
+                        "配对时网页端要填同一个密码；改过密码的设备要重新配对。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -430,23 +442,31 @@ fun WebSyncDialog(
 }
 
 /**
- * 有设备在等确认时，插在最上面的一块。
+ * 一条待批准的配对请求 —— **一条一张卡**。
  *
- * ## 这张卡上最重要的是**配对码**
+ * ## 这张卡上先看哪里
  *
- * 电脑上会显示同一串 6 位码。用户点「允许」之前，**先核对这两个码**：
- * 一致才说明「手机上要连的」确实是「我眼前这台电脑」。
+ * 1. **来源地址**（主标识）：手机自己从网络上观察到的地址，**对面伪造不了**。
+ *    设备名谁都能自报成「我的电脑」，这个地址不能 —— 所以它排在最上面。
+ * 2. **配对码**：跟电脑上显示的那 6 位一致才点允许；对不上就是有人中间换过公钥。
+ * 3. **设备名**（副信息）：对方自报的，**只能当参考**。
  *
- * 这个码是公钥的哈希（见 [WebDh.pairCode]）——
- * 有人在中间把公钥换掉的话，两边显示的码就对不上，用户一眼能看出来。
+ * 配对码那段的样式沿用原来的，只是外面多了来源地址、下面多了不可信提示。
  */
 @Composable
 private fun PendingPairingCard(
-    pairCode: String,
-    deviceName: String,
-    onApprove: () -> Unit,
-    onDeny: () -> Unit,
+    pending: WebSyncService.PendingPairing,
+    /** 这张卡是列表里的第几张 —— 用来给 testTag 加后缀。 */
+    index: Int,
+    onApprove: (String) -> Unit,
+    onDeny: (String) -> Unit,
 ) {
+    // **第一张卡沿用原来的 tag**（`web_sync_approve` / `web_sync_deny`），
+    // 其余的加序号后缀 —— 语义树里不能出现两个一样的 tag。
+    val tagSuffix = if (index == 0) "" else "_$index"
+    val source = pending.sourceAddress.trim()
+    val sourceKnown = source.isNotEmpty()
+    val deviceName = pending.deviceName.trim()
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -459,8 +479,9 @@ private fun PendingPairingCard(
             )
             .padding(14.dp),
     ) {
+        // 标题**不带设备名** —— 它是对方自报的，让它当标题等于把不可信的东西摆最显眼的位置。
         Text(
-            if (deviceName.isBlank()) "有一台设备请求连接" else "「$deviceName」请求连接",
+            "有一台设备请求连接",
             style = MaterialTheme.typography.bodyLarge,
             fontWeight = FontWeight.SemiBold,
         )
@@ -470,7 +491,40 @@ private fun PendingPairingCard(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (pairCode.isNotBlank()) {
+
+        // ── 来源地址（主标识） ──────────────────────────────────
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "来源地址",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            if (sourceKnown) source else "来源未知",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.testTag("web_sync_source$tagSuffix"),
+        )
+        Text(
+            if (sourceKnown) {
+                "这是手机自己看到的地址，对面改不了 —— " +
+                    "用它确认是不是你眼前那台设备。"
+            } else {
+                "这条请求没带来源地址，核对不了来源。\n" +
+                    "除非你正看着电脑上那串配对码，否则请直接拒绝。"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = if (sourceKnown) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.error
+            },
+        )
+
+        // ── 配对码 ─────────────────────────────────────────────
+        if (pending.pairCode.isNotBlank()) {
             Spacer(Modifier.height(12.dp))
             Column(
                 modifier = Modifier
@@ -487,31 +541,51 @@ private fun PendingPairingCard(
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    pairCode,
+                    pending.pairCode,
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 4.sp,
-                    modifier = Modifier.testTag("web_sync_pair_code"),
+                    modifier = Modifier.testTag("web_sync_pair_code$tagSuffix"),
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    "和电脑上显示的 6 位码一致再点允许",
+                    // 这个码是公钥的哈希（见 [WebDh.pairCode]）——
+                    // 有人在中间把公钥换掉的话，两边显示的码就对不上，用户一眼能看出来。
+                    "和电脑上显示的 6 位码一致再点允许；对不上就别允许。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
+
+        // ── 设备名（副信息，不可信） ───────────────────────────
+        Spacer(Modifier.height(10.dp))
+        Text(
+            deviceName.ifBlank { "对方没有提供设备名" },
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+        )
+        Text(
+            "设备名是对方自己填的，只能当参考；" +
+                "认设备请看上面的来源地址。",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onApprove, modifier = Modifier.testTag("web_sync_approve")) {
+            Button(
+                onClick = { onApprove(pending.requestId) },
+                modifier = Modifier.testTag("web_sync_approve$tagSuffix"),
+            ) {
                 Text("允许")
             }
             // 「拒绝」是次要动作，但它**必须看得清** ——
             // 默认的 OutlinedButton 用主题绿写字，落在浅绿卡片上几乎读不出来。
             // 这里换成次级墨色，对比度够了才谈得上「用户看清了再决定」。
             OutlinedButton(
-                onClick = onDeny,
-                modifier = Modifier.testTag("web_sync_deny"),
+                onClick = { onDeny(pending.requestId) },
+                modifier = Modifier.testTag("web_sync_deny$tagSuffix"),
                 colors = ButtonDefaults.outlinedButtonColors(
                     contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 ),

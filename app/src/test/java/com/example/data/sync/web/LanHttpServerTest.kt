@@ -1,6 +1,7 @@
 package com.example.data.sync.web
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.BufferedReader
@@ -10,6 +11,10 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 /**
  * 局域网 HTTP 内核。
@@ -20,8 +25,18 @@ import java.nio.charset.StandardCharsets
  */
 class LanHttpServerTest {
 
-    private fun startServer(handler: (HttpRequest) -> HttpReply): Pair<LanHttpServer, Int> {
-        val server = LanHttpServer(port = 0, handler = handler)
+    // 注意：`handler` 必须是**最后一个参数**。
+    // 否则调用方写成 `startServer { ... }` 时，
+    // 尾随的 lambda 会绑到最后一个参数上（那时是 allowedOrigins）。
+    private fun startServer(
+        allowedOrigins: Set<String> = emptySet(),
+        handler: (HttpRequest) -> HttpReply,
+    ): Pair<LanHttpServer, Int> {
+        val server = LanHttpServer(
+            port = 0,
+            handler = handler,
+            allowedOrigins = { allowedOrigins },
+        )
         val port = server.start()
         return server to port
     }
@@ -109,7 +124,7 @@ class LanHttpServerTest {
             socket.soTimeout = 3000
             val out = socket.getOutputStream()
             out.write(
-                ("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://192.168.1.9:8777\r\n\r\n")
+                ("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://127.0.0.1:8777\r\n\r\n")
                     .toByteArray()
             )
             out.flush()
@@ -118,7 +133,7 @@ class LanHttpServerTest {
             var sawCors = false
             while (line != null && line.isNotEmpty()) {
                 if (line.startsWith("Access-Control-Allow-Origin", ignoreCase = true)) {
-                    sawCors = line.contains("http://192.168.1.9:8777")
+                    sawCors = line.contains("http://127.0.0.1:8777")
                 }
                 line = reader.readLine()
             }
@@ -187,6 +202,79 @@ class LanHttpServerTest {
         } finally {
             server.stop()
         }
+    }
+
+    @Test
+    fun `工作池拒绝任务不会终止监听循环或泄漏连接`() {
+        val pool = ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(1),
+        )
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val server = LanHttpServer(
+            port = 0,
+            handler = {
+                entered.countDown()
+                release.await(5, TimeUnit.SECONDS)
+                HttpReply.text(200, "ok")
+            },
+            workers = pool,
+        )
+        val port = server.start()
+        val sockets = mutableListOf<Socket>()
+        try {
+            fun openBlockedRequest(): Socket {
+                val socket = Socket("127.0.0.1", port)
+                socket.soTimeout = 3000
+                socket.getOutputStream().write(
+                    "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".toByteArray()
+                )
+                socket.getOutputStream().flush()
+                sockets.add(socket)
+                return socket
+            }
+
+            openBlockedRequest()
+            assertTrue("第一个请求应占住唯一的工作线程", entered.await(2, TimeUnit.SECONDS))
+            openBlockedRequest()
+            val queued = waitUntil(2000) { pool.queue.size == 1 }
+            assertTrue("第二个请求应进入队列", queued)
+
+            // 第三个连接会被有界池拒绝：它必须被服务端关掉，而不是留着。
+            val rejected = openBlockedRequest()
+            val closed = try {
+                rejected.getInputStream().read()
+                true
+            } catch (_: java.net.SocketTimeoutException) {
+                false
+            } catch (_: java.io.IOException) {
+                true
+            }
+            assertTrue("被拒绝的连接必须关闭，不能泄漏", closed)
+            assertTrue(
+                "拒绝任务不能把 accept 线程带走",
+                Thread.getAllStackTraces().keys.any { it.name == "miulist-web-accept" && it.isAlive },
+            )
+
+            // 放开工作线程后，服务仍然可用 —— 监听循环确实还活着。
+            release.countDown()
+            val (code, _) = get(port, "/api/health")
+            assertEquals(200, code)
+        } finally {
+            release.countDown()
+            sockets.forEach { runCatching { it.close() } }
+            server.stop()
+            pool.shutdownNow()
+        }
+    }
+
+    private fun waitUntil(timeoutMs: Long, condition: () -> Boolean): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (condition()) return true
+            Thread.sleep(10)
+        }
+        return condition()
     }
 
     @Test
@@ -296,6 +384,187 @@ class LanHttpServerTest {
                 "GET /api/events HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://127.0.0.1:8777\r\n\r\n"
             )
             assertEquals("http://127.0.0.1:8777", headers["access-control-allow-origin"])
+        } finally {
+            server.stop()
+        }
+    }
+
+    // ── 跨源来源闸门（协议 v3.2 起） ─────────────────────────────
+    //
+    // 原来的实现是「**无条件回显请求的 Origin**」——
+    // 那等于对**互联网上的任意网页**开放这个局域网接口，
+    // 而其中 `/api/pair/request` 是**免鉴权**的：
+    // 恶意网页可以直接凭空造一条配对请求，骗用户在手机上点「允许」。
+    //
+    // v3.2 改成白名单，白名单外**直接 403**。
+    //
+    // 注意这不是「不给 CORS 响应头」那种软处理 ——
+    // 后者只挡得住「读响应」，挡不住「把请求发出去」，
+    // 而 `/api/pair/request` 恰恰是**不需要读响应**就能生效的。
+
+    /** 裸 socket 发一条请求，把状态码、响应头与响应体都读回来。 */
+    private fun rawExchange(port: Int, request: String): Triple<Int, Map<String, String>, String> {
+        val socket = Socket("127.0.0.1", port)
+        socket.soTimeout = 3000
+        val out = socket.getOutputStream()
+        out.write(request.toByteArray(StandardCharsets.UTF_8))
+        out.flush()
+        val reader = BufferedReader(InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))
+        val statusLine = reader.readLine().orEmpty()
+        val code = statusLine.split(" ").getOrNull(1)?.toIntOrNull() ?: 0
+        val headers = LinkedHashMap<String, String>()
+        var line = reader.readLine()
+        while (line != null && line.isNotEmpty()) {
+            val idx = line.indexOf(':')
+            if (idx > 0) {
+                headers[line.substring(0, idx).trim().lowercase()] = line.substring(idx + 1).trim()
+            }
+            line = reader.readLine()
+        }
+        // 服务端发完就关连接（`Connection: close`），所以读到 EOF 就是读完。
+        val body = reader.readText()
+        socket.close()
+        return Triple(code, headers, body)
+    }
+
+    @Test
+    fun `白名单外的 Origin 直接 403 - handler 根本不会被调用`() {
+        var handlerCalled = false
+        val (server, port) = startServer(
+            handler = {
+                handlerCalled = true
+                HttpReply.text(200, "ok")
+            },
+            allowedOrigins = setOf("http://192.168.1.7:8765"),
+        )
+        try {
+            val (code, headers, _) = rawExchange(
+                port,
+                "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example.com\r\n\r\n",
+            )
+            assertEquals(403, code)
+            assertFalse(
+                "403 的响应里不能有 Access-Control-Allow-Origin",
+                headers.containsKey("access-control-allow-origin"),
+            )
+            assertFalse("白名单外的请求根本不该进 handler", handlerCalled)
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `file 单文件的 Origin 是 null - 要放行`() {
+        // 桌面端是**本地单文件 HTML**，双击打开就是 file://，
+        // 浏览器给这种页面发请求时 Origin 头是字符串 "null"。
+        // 不放行它，桌面端就彻底连不上手机了。
+        val (server, port) = startServer { HttpReply.text(200, "ok") }
+        try {
+            val (code, headers, _) = rawExchange(
+                port,
+                "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: null\r\n\r\n",
+            )
+            assertEquals(200, code)
+            assertEquals("null", headers["access-control-allow-origin"])
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `没有端口的 localhost Origin 也要放行`() {
+        val (server, port) = startServer { HttpReply.text(200, "ok") }
+        try {
+            for (origin in listOf("http://localhost", "http://127.0.0.1", "http://localhost:3000")) {
+                val (code, headers, _) = rawExchange(
+                    port,
+                    "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: $origin\r\n\r\n",
+                )
+                assertEquals("$origin 应放行", 200, code)
+                assertEquals(origin, headers["access-control-allow-origin"])
+            }
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `长得像 localhost 的其他主机仍要拒绝`() {
+        val (server, port) = startServer { HttpReply.text(200, "ok") }
+        try {
+            for (origin in listOf("http://localhost.evil.example", "http://127.0.0.1.evil.example")) {
+                val (code, _, _) = rawExchange(
+                    port,
+                    "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: $origin\r\n\r\n",
+                )
+                assertEquals("$origin 不是本机，必须 403", 403, code)
+            }
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `手机自己的局域网地址要放行 - 网页端也可能由手机托管`() {
+        val (server, port) = startServer(
+            handler = { HttpReply.text(200, "ok") },
+            allowedOrigins = setOf("http://192.168.1.7:8765"),
+        )
+        try {
+            val (code, headers, _) = rawExchange(
+                port,
+                "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://192.168.1.7:8765\r\n\r\n",
+            )
+            assertEquals(200, code)
+            assertEquals("http://192.168.1.7:8765", headers["access-control-allow-origin"])
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `没有 Origin 头的请求照常放行 - curl 与原生客户端都不带`() {
+        val (server, port) = startServer { HttpReply.text(200, "ok") }
+        try {
+            val (code, _, _) = rawExchange(port, "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            assertEquals(200, code)
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `来源地址是服务端观察到的 - 客户端自报的头一律不作数`() {
+        // 确认卡上给用户看的「来源地址」必须是服务端从 TCP 连接上读出来的：
+        // 客户端自报的 deviceName 谁都能写成「我的电脑」，
+        // 而 X-Forwarded-For 之类同样可以随手填。
+        val (server, port) = startServer { req -> HttpReply.text(200, "peer=${req.remoteAddress}") }
+        try {
+            val (code, _, body) = rawExchange(
+                port,
+                "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+                    "X-Forwarded-For: 1.2.3.4\r\nX-Real-IP: 1.2.3.4\r\n\r\n",
+            )
+            assertEquals(200, code)
+            assertTrue(body, body.contains("peer=127.0.0.1:"))
+            assertFalse(body, body.contains("1.2.3.4"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `Content-Length 超上限直接 413 - 不能让未鉴权的对端把内存吃光`() {
+        // 原来这里是 `ByteArray(length)` —— 未鉴权的远端只要发一个
+        // `Content-Length: 2000000000` 的头，就能让 App 直接 OOM 崩掉。
+        val (server, port) = startServer { HttpReply.text(200, "ok") }
+        try {
+            val (code, _, _) = rawExchange(
+                port,
+                "POST /api/pair/request HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+                    "Content-Length: 999999999\r\n\r\n",
+            )
+            assertEquals(413, code)
         } finally {
             server.stop()
         }

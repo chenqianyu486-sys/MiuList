@@ -2274,6 +2274,16 @@
   color: var(--ink);
 }
 
+/* 还没拿到配对码时的占位。
+ * 别沿用上面那套 22px 粗体大字 —— 那个字号是在暗示「这里应该有个码」，
+ * 而实际上码要等手机的公钥到了才有，空框只会让人以为坏了。 */
+.pair-code-row--pending strong {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+
 .pair-code-hint {
   margin-left: auto;
   font-size: 9.5px;

@@ -15,7 +15,7 @@ import type { SnapshotFilePayload, Task } from './types';
 const HANDLE_KEY = 'miulist.snapshotHandle.v1';
 
 const PICKER_TYPES = [
-  { description: 'MiuList 快照', accept: { 'application/json': ['.json'] } },
+  { description: 'MiuList 备份', accept: { 'application/json': ['.json'] } },
 ];
 
 /** 这次导入到底带进来了什么。用来**说清楚**，而不是只说「已导入」。 */
@@ -36,7 +36,7 @@ export type SnapshotSummary = {
  * 用户看到的是「课表怎么没了」，却没人在哪一步弄丢的。
  */
 function summaryText(summary: SnapshotSummary | undefined): string {
-  if (!summary) return '已导入快照';
+  if (!summary) return '已导入备份';
   const parts = [`${summary.tasks} 条待办`];
   if (summary.courses) parts.push(`${summary.courses} 门课`);
   if (summary.exams) parts.push(`${summary.exams} 场考试`);
@@ -282,7 +282,7 @@ export async function restoreSnapshotFileOnBoot(): Promise<void> {
   } catch (error) {
     console.warn('MiuList: 快照文件恢复失败', error);
     useAppStore.getState().setSnapshotFile({
-      error: '快照文件读不出来，可以在「同步 → 快照」里重新选择。',
+      error: '备份文件读不出来，可以在「同步 → 本机文件」里重新选择。',
     });
   }
 }
@@ -309,7 +309,7 @@ export async function pickSnapshotFile(): Promise<boolean> {
     const raw = await readPayload(picked);
     const result = applySnapshotPayload(raw, 'import');
     if (!result.applied) {
-      useAppStore.getState().pushToast('这个文件不是有效的 MiuList 快照。', 'error');
+      useAppStore.getState().pushToast('这个文件不是有效的 MiuList 备份。', 'error');
       return false;
     }
     handle = picked;
@@ -326,14 +326,14 @@ export async function pickSnapshotFile(): Promise<boolean> {
   } catch (error: any) {
     if (error?.name === 'AbortError') return false;
     console.warn('MiuList: 选择快照失败', error);
-    useAppStore.getState().pushToast('读不了这个快照文件。', 'error');
+    useAppStore.getState().pushToast('读不了这个备份文件。', 'error');
     return false;
   }
 }
 
 export async function createSnapshotFile(): Promise<boolean> {
   if (!supported()) {
-    useAppStore.getState().pushToast('当前浏览器不支持直接写文件，请用「导出 JSON」。', 'error');
+    useAppStore.getState().pushToast('当前浏览器不支持直接写文件，请用「导出备份」。', 'error');
     return false;
   }
   try {
@@ -360,14 +360,14 @@ export async function createSnapshotFile(): Promise<boolean> {
   } catch (error: any) {
     if (error?.name === 'AbortError') return false;
     console.warn('MiuList: 创建快照失败', error);
-    useAppStore.getState().pushToast('创建快照文件失败。', 'error');
+    useAppStore.getState().pushToast('创建备份文件失败。', 'error');
     return false;
   }
 }
 
 export async function writeSnapshotNow(manual: boolean): Promise<boolean> {
   if (!handle) {
-    if (manual) useAppStore.getState().pushToast('先选择一个快照文件。', 'error');
+    if (manual) useAppStore.getState().pushToast('先选择一个备份文件。', 'error');
     return false;
   }
   if (writing) return false;
@@ -391,12 +391,12 @@ export async function writeSnapshotNow(manual: boolean): Promise<boolean> {
       lastSavedAt: payload.savedAt,
       error: null,
     });
-    if (manual) useAppStore.getState().pushToast('快照已保存', 'success');
+    if (manual) useAppStore.getState().pushToast('备份已保存', 'success');
     return true;
   } catch (error) {
     console.warn('MiuList: 写快照失败', error);
-    useAppStore.getState().setSnapshotFile({ error: '快照写不进去，文件可能被移动或权限被收回。' });
-    if (manual) useAppStore.getState().pushToast('快照写不进去。', 'error');
+    useAppStore.getState().setSnapshotFile({ error: '备份写不进去，文件可能被移动或权限被收回。' });
+    if (manual) useAppStore.getState().pushToast('备份写不进去。', 'error');
     return false;
   } finally {
     writing = false;
@@ -431,10 +431,10 @@ export async function requestSnapshotPermission(): Promise<void> {
       lastSavedAt: unpack(raw)?.savedAt ?? null,
       error: null,
     });
-    useAppStore.getState().pushToast('快照文件已重新连接', 'success');
+    useAppStore.getState().pushToast('备份文件已重新连接', 'success');
   } catch (error) {
     console.warn('MiuList: 重新读取快照失败', error);
-    useAppStore.getState().setSnapshotFile({ error: '快照文件读不出来。' });
+    useAppStore.getState().setSnapshotFile({ error: '备份文件读不出来。' });
   }
 }
 
@@ -449,7 +449,7 @@ export function exportSnapshotJson(): void {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
-  useAppStore.getState().pushToast('已导出 JSON 快照', 'success');
+  useAppStore.getState().pushToast('已导出备份', 'success');
 }
 
 export async function importSnapshotJsonFile(file: File): Promise<boolean> {
@@ -458,14 +458,14 @@ export async function importSnapshotJsonFile(file: File): Promise<boolean> {
     const raw = JSON.parse(text);
     const result = applySnapshotPayload(raw, 'import');
     if (!result.applied) {
-      useAppStore.getState().pushToast('这个文件不是有效的 MiuList 快照。', 'error');
+      useAppStore.getState().pushToast('这个文件不是有效的 MiuList 备份。', 'error');
       return false;
     }
     useAppStore.getState().pushToast(`${summaryText(result.summary)}；连接手机后可同步。`, 'success');
     return true;
   } catch (error) {
     console.warn('MiuList: 导入快照失败', error);
-    useAppStore.getState().pushToast('导入失败：不是有效的 JSON 快照。', 'error');
+    useAppStore.getState().pushToast('导入失败：不是有效的 MiuList 备份文件。', 'error');
     return false;
   }
 }
@@ -486,5 +486,5 @@ export async function disconnectSnapshotFile(): Promise<void> {
     permission: null,
     error: null,
   });
-  useAppStore.getState().pushToast('已断开快照文件（磁盘上的文件没有删）');
+  useAppStore.getState().pushToast('已断开备份文件（磁盘上的文件没有删）');
 }

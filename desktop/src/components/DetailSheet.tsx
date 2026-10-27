@@ -36,7 +36,7 @@ export function DetailSheet() {
       open
       onClose={close}
       title={title}
-      subtitle={course ? '在手机上修改课程信息；这里只读。' : '考试信息来自手机快照。'}
+      subtitle={course ? '在手机上修改课程信息；这里只读。' : '考试信息来自手机。'}
       headerExtra={
         color ? (
           <span className="detail-color" style={{ background: accentBarColor(color) }} aria-hidden="true" />

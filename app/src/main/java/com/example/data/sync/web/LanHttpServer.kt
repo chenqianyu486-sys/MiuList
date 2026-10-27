@@ -7,9 +7,13 @@ import java.io.IOException
 import java.io.InputStream
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.InetSocketAddress
+import java.net.URI
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -29,6 +33,25 @@ class HttpRequest(
     /** 头名一律小写。 */
     val headers: Map<String, String>,
     val body: ByteArray,
+    /**
+     * **服务端自己观察到的对端地址**（`ip:port`）。
+     *
+     * 为什么必须是服务端观察的、而不是让客户端自报：
+     * 配对确认卡上要告诉用户「是谁在请求连接」——
+     * 那必须是一个**客户端无法伪造**的值。
+     * 自报的 `deviceName` 谁都能写成「我的电脑」。
+     */
+
+    val remoteAddress: String = "",
+    /**
+     * 对端 IP，**不含端口**。
+     *
+     * 限流必须按「来源 IP」而不是 `ip:port` —— 客户端每次新建连接的临时端口
+     * 都不同，拿 `ip:port` 当键等于给每次请求发一份新配额。
+     * 单独放一个字段，也避免从 `[IPv6]:port` 里用字符串截取拆地址。
+     */
+    val remoteHost: String = "",
+    val remotePort: Int = 0,
 ) {
     /**
      * 取一个请求头。**大小写不敏感。**
@@ -103,9 +126,10 @@ sealed class HttpReply {
  *
  * ## 并发模型
  *
- * 每个连接一个线程（`newCachedThreadPool`）。SSE 客户端会**占住**一个线程直到
- * 断开为止 —— 局域网里同时挂着三五个浏览器页面完全够用，而换成异步 IO
- * 只会让这份代码难读三倍。线程都是 daemon，进程退出时不会挂着。
+ * 每个连接交给一个**有界**工作线程池（核心 4 / 最大 32 / 队列 64）。
+ * SSE 客户端会**占住**一个线程直到断开为止 —— 局域网里同时挂着三五个
+ * 浏览器页面完全够用。池满时新连接会被拒绝并立即关闭，accept 循环继续。
+ * 线程都是 daemon，进程退出时不会挂着。
  *
  * ## 传输约定
  *
@@ -116,13 +140,35 @@ sealed class HttpReply {
 class LanHttpServer(
     private val port: Int = 0,
     private val handler: (HttpRequest) -> HttpReply,
+    /**
+     * **允许跨源访问本服务的 Origin 白名单。**
+     *
+     * 为什么要有它：原来的实现是「**无条件回显请求的 Origin**」，
+     * 那等于对**互联网上的任意网页**开放这个局域网接口 ——
+     * 而其中 `/api/pair/request` 是免鉴权的，恶意网页可以直接凭空
+     * 造出一条配对请求，骗用户在手机上点「允许」。
+     *
+     * 白名单里通常有：网页端的 `null`（file:// 单文件）、本机开发用的
+     * `localhost` / `127.0.0.1`，以及手机自己的各个局域网地址。
+     *
+     * **带 Origin 头但不在白名单的请求会被直接 403 掉**，
+     * 不只是「不给 CORS 响应头」——
+     * 后者只能挡住「读取响应」，挡不住「把请求发出去」。
+     */
+    private val allowedOrigins: () -> Set<String> = { emptySet() },
+    /**
+     * 工作线程池：**有界**。
+     *
+     * 核心 4 / 最大 32 / 队列 64。队列满了就**拒绝** ——
+     * 被拒绝的连接必须在这里就地关掉，且不能让 accept 循环退出。
+     *
+     * 允许注入是为了单测能用一个很小的池制造拒绝；生产路径始终用
+     * [newWorkerPool] 造出来的同一套有界参数。
+     */
+    private val workers: ThreadPoolExecutor = newWorkerPool(),
 ) {
     private val running = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
-    private val workers = Executors.newCachedThreadPool { r ->
-        Thread(r, "miulist-web").apply { isDaemon = true }
-    }
-
     @Volatile
     var boundPort: Int = -1
         private set
@@ -142,7 +188,16 @@ class LanHttpServer(
                     // stop() 关闭 socket 会让 accept 抛出来，这是正常退出路径。
                     if (running.get()) continue else break
                 }
-                workers.execute { serve(client) }
+                try {
+                    workers.execute { serve(client) }
+                } catch (_: RejectedExecutionException) {
+                    // 池子满了，**就在这里**把连接关掉。
+                    //
+                    // 不能指望上层 catch：异常发生在这个 accept 线程里，
+                    // 一路抛出去只会结束整个监听循环；而 client 还没交给
+                    // 任何工作线程，不关就是泄漏。服务因此变慢，但不会停摆。
+                    closeQuietly(client)
+                }
             }
         }, "miulist-web-accept").apply { isDaemon = true }.start()
         return boundPort
@@ -160,7 +215,29 @@ class LanHttpServer(
             socket.use {
                 socket.soTimeout = READ_TIMEOUT_MS
                 val input = BufferedInputStream(socket.getInputStream())
-                val request = parseRequest(input) ?: return
+                val peer = peerAddress(socket)
+                val request = try {
+                    parseRequest(input, peer)
+                } catch (e: BodyTooLargeException) {
+                    writeFull(socket, null, HttpReply.json(413, """{"error":"请求体太大"}"""))
+                    return
+                } ?: return
+
+                // ── 跨源来源闸门 ────────────────────────────────────
+                //
+                // 浏览器发起的**跨源**请求一定带 `Origin` 头；
+                // 同源请求、以及 curl / 原生客户端则不带。
+                // 所以「带 Origin 且不在白名单」= 一律拒绝。
+                //
+                // 注意这不是「不给 CORS 响应头」那种软处理 ——
+                // 那种只挡得住「读响应」，挡不住「把请求发出去」，
+                // 而 `/api/pair/request` 恰恰是**不需要读响应**就能生效的。
+                val origin = request.header("origin")
+                if (origin != null && !isOriginAllowed(origin)) {
+                    writeFull(socket, request, HttpReply.json(403, """{"error":"不允许的来源"}"""))
+                    return
+                }
+
                 val reply = try {
                     handler(request)
                 } catch (e: Exception) {
@@ -176,9 +253,70 @@ class LanHttpServer(
         }
     }
 
+    /** 对端地址：结构化保存 IP 与端口，确认卡再自己拼 `ip:port`。 */
+    private data class Peer(val host: String, val port: Int) {
+        /** 展示用。IPv6 加方括号，否则 `::1:8080` 分不清哪段是端口。 */
+        val label: String
+            get() = if (host.contains(':')) "[$host]:$port" else "$host:$port"
+    }
+
+    private fun peerAddress(socket: Socket): Peer {
+        // `getRemoteSocketAddress()` 的静态类型是 SocketAddress，
+        // 它**没有** port —— 得先转成 InetSocketAddress 才拿得到。
+        val addr = socket.remoteSocketAddress as? InetSocketAddress
+        return Peer(
+            host = addr?.address?.hostAddress ?: "?",
+            port = addr?.port ?: 0,
+        )
+    }
+
+    private fun closeQuietly(socket: Socket) {
+        try {
+            socket.close()
+        } catch (_: IOException) {
+            // 已经关了 / 对端先断了，都不影响 accept 循环。
+        }
+    }
+
+    /**
+     * 这个 Origin 准不准跨源访问本服务。
+     *
+     * ## 白名单里为什么有 `null`
+     *
+     * 桌面端是**本地单文件 HTML**，双击打开就是 `file://` ——
+     * 浏览器给这种页面发请求时，Origin 头是字符串 `null`。
+     * 不放行它，桌面端就彻底连不上手机了。
+     *
+     * **残余风险**：沙箱 iframe（`sandbox` 且不给 `allow-same-origin`）
+     * 的 Origin 也是 `null`，所以它仍能发请求。
+     * 这一条挡不住，但**数据接口全都要求签名**，
+     * 拿不到密钥就只能读到「有台设备在等配对」这类无害信息。
+     *
+     * ## 为什么 localhost 任意端口都放行
+     *
+     * `npm run dev` 起的本地服务器端口是变的。放行 localhost 不会让
+     * 互联网上的网页冒充成 localhost —— Origin 头是浏览器写的，
+     * 网页没法声明自己来自 localhost。
+     */
+    private fun isOriginAllowed(origin: String): Boolean {
+        if (origin == "null") return true
+        // 本机开发服务器：允许 localhost / 127.0.0.1 的**任意端口**（包括省略端口）。
+        // 必须解析后比对 host，不能用 startsWith —— 那会把
+        // `http://localhost.evil.example` 也放进白名单。
+        if (isLocalHttpOrigin(origin)) return true
+        return allowedOrigins().any { it.equals(origin, ignoreCase = true) }
+    }
+
+    private fun isLocalHttpOrigin(origin: String): Boolean {
+        val uri = runCatching { URI(origin) }.getOrNull() ?: return false
+        if (!uri.scheme.equals("http", ignoreCase = true)) return false
+        val host = uri.host?.lowercase() ?: return false
+        return host == "localhost" || host == "127.0.0.1"
+    }
+
     // ── 请求解析 ────────────────────────────────────────────────
 
-    private fun parseRequest(input: InputStream): HttpRequest? {
+    private fun parseRequest(input: InputStream, peer: Peer): HttpRequest? {
         val requestLine = readLine(input) ?: return null
         if (requestLine.isBlank()) return null
         val parts = requestLine.split(' ')
@@ -198,12 +336,20 @@ class LanHttpServer(
         val path = rawTarget.substringBefore('?')
         val query = parseQuery(rawTarget.substringAfter('?', ""))
 
-        val length = headers["content-length"]?.toIntOrNull() ?: 0
-        val body = if (length > 0) {
-            val buf = ByteArray(length)
+        val length = headers["content-length"]?.toLongOrNull() ?: 0L
+        // **先查上限，再分配。**
+        //
+        // 原来这里是 `ByteArray(length)` —— 一个未鉴权���远端只要发一个
+        // `Content-Length: 2000000000` 的头，就能让 App 直接 OOM 崩掉。
+        // 声明多长就给多少的写法在这里等于「把内存交给对端处置」。
+        if (length < 0L || length > MAX_BODY_BYTES) {
+            throw BodyTooLargeException()
+        }
+        val body = if (length > 0L) {
+            val buf = ByteArray(length.toInt())
             var read = 0
             while (read < length) {
-                val n = input.read(buf, read, length - read)
+                val n = input.read(buf, read, (length - read).toInt())
                 if (n < 0) break
                 read += n
             }
@@ -212,8 +358,20 @@ class LanHttpServer(
             ByteArray(0)
         }
 
-        return HttpRequest(method, path, query, headers, body)
+        return HttpRequest(
+            method,
+            path,
+            query,
+            headers,
+            body,
+            remoteAddress = peer.label,
+            remoteHost = peer.host,
+            remotePort = peer.port,
+        )
     }
+
+    /** 请求体超过上限。单独一个类型，便于上层回 413 而不是 500。 */
+    private class BodyTooLargeException : IOException("请求体太大")
 
     private fun readLine(input: InputStream): String? {
         val buf = ByteArrayOutputStream(128)
@@ -248,14 +406,14 @@ class LanHttpServer(
 
     // ── 响应 ────────────────────────────────────────────────────
 
-    private fun writeFull(socket: Socket, request: HttpRequest, reply: HttpReply.Full) {
+    private fun writeFull(socket: Socket, request: HttpRequest?, reply: HttpReply.Full) {
         val out = BufferedOutputStream(socket.getOutputStream())
         val head = StringBuilder()
         head.append("HTTP/1.1 ").append(reply.status).append(' ').append(statusText(reply.status)).append("\r\n")
         head.append("Content-Type: ").append(reply.contentType).append("\r\n")
         head.append("Content-Length: ").append(reply.body.size).append("\r\n")
         head.append("Connection: close\r\n")
-        appendCors(head, request)
+        if (request != null) appendCors(head, request)
         for ((k, v) in reply.headers) head.append(k).append(": ").append(v).append("\r\n")
         head.append("\r\n")
         out.write(head.toString().toByteArray(Charsets.ISO_8859_1))
@@ -327,6 +485,8 @@ class LanHttpServer(
      */
     private fun appendCors(head: StringBuilder, request: HttpRequest) {
         val origin = request.header("origin") ?: return
+        // 白名单外的 Origin **不回显** —— 上游已经 403 掉了，这里只是兜底。
+        if (!isOriginAllowed(origin)) return
         head.append("Access-Control-Allow-Origin: ").append(origin).append("\r\n")
         head.append("Access-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS\r\n")
         head.append("Access-Control-Allow-Headers: ")
@@ -349,12 +509,26 @@ class LanHttpServer(
         if (request.header("access-control-request-private-network") == "true") {
             head.append("Access-Control-Allow-Private-Network: true\r\n")
         }
-        head.append("Vary: Origin\r\n")
+        head.append("Vary: Origin, Access-Control-Request-Private-Network\r\n")
     }
 
     companion object {
         private const val READ_TIMEOUT_MS = 30_000
         private const val MAX_LINE_BYTES = 16 * 1024
+
+        /** 生产用有界池。队列满时 [ThreadPoolExecutor.execute] 抛拒绝异常。 */
+        private fun newWorkerPool(): ThreadPoolExecutor =
+            ThreadPoolExecutor(
+                4, 32, 60L, TimeUnit.SECONDS, LinkedBlockingQueue(64),
+            ) { r -> Thread(r, "miulist-web").apply { isDaemon = true } }
+
+        /**
+         * 请求体上限（8 MB）。
+         *
+         * 8 MB 足够装下最坏情况下的整机快照（课表 + 考试 + 待办），
+         * 而未鉴权的对端没法用一个头就把手机内存吃光。
+         */
+        const val MAX_BODY_BYTES = 8L * 1024 * 1024
 
         /**
          * CORS 预检放行的请求头。

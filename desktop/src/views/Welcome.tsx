@@ -88,7 +88,7 @@ export function Welcome() {
 
   const skipSetup = () => {
     state.skipSetup();
-    state.pushToast('已跳过初始配置。需要时在「同步与设置」里连接手机或导入快照。');
+    state.pushToast('已跳过初始配置。需要时在「同步与设置」里连接手机或导入文件。');
   };
 
   if (state.base && !state.secret) {
@@ -116,16 +116,16 @@ export function Welcome() {
             <p className="welcome-lead">
               {scanMode ? (
                 <>
-                  电脑已经生成配对码。用手机相机扫页面上的二维码，在 MiuList 里点「允许」即可 ——
-                  <strong>只扫这一次码</strong>。
-                  配对方向是手机扫电脑，电脑不需要摄像头；之后待办自动同步，课表各留一份，
+                  用手机相机扫页面上的二维码，在 MiuList 里点「允许」即可 ——
+                  <strong>只扫这一次码</strong>，电脑不需要摄像头。
+                  之后待办自动同步，课表各留一份，
                   手机不在时这一端仍然能看、能改。
                 </>
               ) : (
                 <>
                   电脑已经把配对请求发给手机了。手机上会弹出<strong>一张确认卡</strong>，
                   核对上面的配对码后点「允许」即可 —— <strong>全程不用摄像头</strong>。
-                  地址只填这一次；之后待办自动同步，课表各留一份，
+                  之后待办自动同步，课表各留一份，
                   手机不在时这一端仍然能看、能改。
                 </>
               )}
@@ -182,7 +182,7 @@ export function Welcome() {
                   换地址
                 </Button>
                 <Button variant="ghost" icon={FileJson2} onClick={() => inputRef.current?.click()}>
-                  导入快照
+                  导入文件
                 </Button>
                 {state.phoneReachable ? (
                   <span className="welcome-live">
@@ -197,7 +197,7 @@ export function Welcome() {
             )}
 
             <p className="welcome-footnote">
-              <ShieldCheck size={14} /> 配对密钥只在二维码和浏览器里；JSON 快照不包含它。
+              <ShieldCheck size={14} /> 数据只在你自己的设备之间流动。
             </p>
             <button type="button" className="welcome-skip-link" onClick={skipSetup}>
               手机不在身边？先跳过配对，直接进入应用
@@ -232,7 +232,7 @@ export function Welcome() {
           <Brand />
           <div className="welcome-kicker">
             <span>单文件</span>
-            <span>本机快照</span>
+            <span>数据存本机</span>
             <span>与手机对等</span>
             <span className="is-accent">
               <Smartphone size={11} aria-hidden="true" /> 配对：手机扫电脑
@@ -244,7 +244,7 @@ export function Welcome() {
             带到电脑上。
           </h1>
           <p className="welcome-lead">
-            打开一个 HTML，浏览器就是你的桌面端。数据留在本机，手机不在也能看、能改；
+            打开一个网页，浏览器就是你的桌面端。数据留在本机，手机不在也能看、能改；
             连上手机后待办自动同步，课表则是这台电脑上独立的一份。
           </p>
 
@@ -297,11 +297,11 @@ export function Welcome() {
             type="button"
             className="welcome-skip"
             onClick={skipSetup}
-            aria-label="跳过初始配置，直接开始。电脑端可以独立使用，之后可以在同步与设置里连接手机或导入快照。"
+            aria-label="跳过初始配置，直接开始。电脑端可以独立使用，之后可以在同步与设置里连接手机或导入文件。"
           >
             <span className="welcome-skip-copy">
               <strong>跳过初始配置，直接开始</strong>
-              <em>电脑端可以独立使用；之后在「同步与设置」里连接手机或导入快照</em>
+              <em>电脑端可以独立使用；之后在「同步与设置」里连接手机或导入文件</em>
             </span>
             <span className="welcome-skip-arrow" aria-hidden="true">
               <ArrowRight size={18} />
@@ -310,14 +310,14 @@ export function Welcome() {
 
           <div className="welcome-links">
             <button type="button" onClick={() => inputRef.current?.click()}>
-              <FileJson2 size={15} /> 已有 JSON 快照？导入
+              <FileJson2 size={15} /> 已有 JSON 文件？导入
             </button>
             <span className="welcome-dot">·</span>
             <span>手机和电脑需在同一个 Wi-Fi</span>
           </div>
 
           <p className="welcome-footnote">
-            <ShieldCheck size={14} /> 推荐 Chrome / Edge；快照不含配对密钥，密钥只留在浏览器里。
+            <ShieldCheck size={14} /> 推荐 Chrome / Edge；数据保存在本机，不会上传。
           </p>
           <input
             ref={inputRef}

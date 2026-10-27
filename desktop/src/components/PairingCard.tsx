@@ -61,14 +61,17 @@ export function PairingCard({
    */
   const payload = !waiting
     ? ''
-    : pair.publicKey
-      ? `miulist://pair?v=4&k=${encodeURIComponent(pair.publicKey)}&r=${encodeURIComponent(
-          pair.requestId!,
-        )}`
-      : `miulist://pair?v=3&s=${encodeURIComponent(pair.secret ?? '')}&r=${encodeURIComponent(
-          pair.requestId!,
-        )}`;
-  const code = pair.code ?? '';
+    : `miulist://pair?v=5&k=${encodeURIComponent(pair.publicKey ?? '')}&r=${encodeURIComponent(
+        pair.requestId!,
+      )}`;
+  /**
+   * 配对码（协议 v3.2：双方公钥的转录哈希）。
+   *
+   * **一开始是没有的** —— 码要等**手机那边的公钥**到了才算得出来
+   * （H(A‖B) 里 B 是手机的公钥）。所以刚发请求时只有占位文案，
+   * 拿到手机公钥之后才把 6 位码亮出来让用户核对。
+   */
+  const code = pair.code || '';
 
   const copy = async () => {
     if (!state.base) return;
@@ -124,13 +127,24 @@ export function PairingCard({
               <p className="pair-sub">手机上会弹出一张确认卡，上面有同一个配对码。</p>
             </div>
           )}
-          <div className="pair-code-row">
-            <span>配对码</span>
-            <strong>{code}</strong>
-            <span className="pair-code-hint">
-              {mode === 'scan' ? '手机扫电脑 · 同一 Wi-Fi' : '和手机上显示的一致即可'}
-            </span>
-          </div>
+          {code ? (
+            <div className="pair-code-row">
+              <span>配对码</span>
+              <strong>{code}</strong>
+              <span className="pair-code-hint">
+                {mode === 'scan' ? '手机扫电脑 · 同一 Wi-Fi' : '和手机上显示的一致即可'}
+              </span>
+            </div>
+          ) : (
+            // **码还没算出来**：协议 v3.2 的码是「双方公钥」的哈希，
+            // 手机那边的公钥要等 `/api/pair/status` 回包才有。
+            // 这时候别摆一个空框 —— 说清楚在等什么。
+            <div className="pair-code-row pair-code-row--pending">
+              <span>配对码</span>
+              <strong>等待手机回应…</strong>
+              <span className="pair-code-hint">手机回应后就会显示在这里</span>
+            </div>
+          )}
           {!state.secret ? (
             <label className="field pair-passcode">
               <span>手机上设了同步密码？在这里填同样的 4 位数字</span>
@@ -179,7 +193,7 @@ export function PairingCard({
           <div>
             <p>{pair.message || '还没有配对成功。'}</p>
             <p className="pair-sub">
-              确认手机上的「更多 → 网页同步 → 局域网服务」已经打开，再试一次。
+              确认手机上的「更多 → 网页同步」已经打开，再试一次。
             </p>
           </div>
         </div>
@@ -221,8 +235,7 @@ export function PairingCard({
       ) : null}
 
       <p className="pair-footnote">
-        配对密钥由两端<strong>各自协商出来，从不过网</strong>；二维码里只有公钥。
-        快照文件不会包含密钥。
+        数据只在你的设备之间直接传输，<strong>不经过任何服务器</strong>。
       </p>
     </div>
   );

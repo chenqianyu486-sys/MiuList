@@ -98,8 +98,10 @@ const SCENES = {
   tasks: [`clickText('清单')`],
   /** 同步面板的「连接」分区 —— 新的「课表与考试」卡片在这里。 */
   sync: [`document.querySelector('.side-status')?.click()`],
-  /** 同步面板的「快照」分区。 */
-  snapshot: [`document.querySelector('.side-status')?.click()`, `clickTab('快照')`],
+  /** 同步面板的「本机文件」分区。 */
+  snapshot: [`document.querySelector('.side-status')?.click()`, `clickTab('本机文件')`],
+  /** 同步面板的「关于」分区。 */
+  about: [`document.querySelector('.side-status')?.click()`, `clickTab('关于')`],
   /**
    * 同步面板的「连接」分区，滚到「从学在浙大拉课表」那张卡。
    *
@@ -455,6 +457,26 @@ async function main() {
       await sleep(500);
       paired = await evaluate(cdp, sessionId, 'window.__miu.paired()');
       if (paired) break;
+    }
+    if (!paired) {
+      /**
+       * 兜底：**切到「只填地址」那条路**。
+       *
+       * 默认那条路是「手机扫电脑的码」：网页端**故意不带公钥**发请求
+       * （手机在用户扫码之前不该弹确认卡），公钥是跟着二维码深链走的 ——
+       * 真机上那一步由手机扫码完成，而 **mock 不会扫码**，于是这条路永远停在半路。
+       *
+       * 「只填地址」那条路把公钥**跟着请求一起发过去**，mock 收到就自动批准 ——
+       * 等价于「手机上有人点了允许」。而且两端仍然各自算配对码并互相核对，
+       * 所以「码对不对得上」这件事照样被验到。
+       */
+      const switched = await evaluate(cdp, sessionId, `clickText('不扫码，直接让手机确认')`);
+      if (switched !== 'ok') throw new Error('切不到「不扫码，直接让手机确认」那条路');
+      for (let i = 0; i < 40; i++) {
+        await sleep(500);
+        paired = await evaluate(cdp, sessionId, 'window.__miu.paired()');
+        if (paired) break;
+      }
     }
     check('配对成功（mock 自动批准）', paired === true);
     if (!paired) throw new Error('没配上对，后面的验证没意义');

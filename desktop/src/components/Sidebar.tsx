@@ -88,8 +88,8 @@ export function Sidebar() {
             <button
               type="button"
               className="side-icon-btn has-file"
-              title="本机 JSON 快照"
-              aria-label="本机 JSON 快照"
+              title="本机备份文件"
+              aria-label="本机备份文件"
               onClick={() => openSync('snapshot')}
             >
               <FileJson2 size={18} />

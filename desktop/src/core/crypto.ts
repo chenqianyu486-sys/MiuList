@@ -15,6 +15,7 @@ export const {
   utf8Bytes,
   dhGenerateKeypair,
   dhPublicKey,
+  dhValidatePublicKey,
   dhSharedSecret,
   pairCodeOf,
 } = crypto as {
@@ -41,8 +42,19 @@ export const {
   dhGenerateKeypair: () => { priv: Uint8Array; pub: Uint8Array };
   /** 由私钥算公钥。 */
   dhPublicKey: (priv: Uint8Array) => Uint8Array;
+  /**
+   * 校验对端公钥是否合法（协议 v3.2 起强制）。
+   *
+   * 退化公钥（0 / 1 / p-1）会让共享密钥变成**全世界都知道的常量**，
+   * 所以拿到对端公钥的第一件事就是查它。
+   */
+  dhValidatePublicKey: (pub: Uint8Array) => boolean;
   /** 算出共享密钥（32 字节）。 */
   dhSharedSecret: (priv: Uint8Array, peerPub: Uint8Array) => Uint8Array;
-  /** 公钥的 6 位配对码（用户核对用）。 */
-  pairCodeOf: (pub: Uint8Array) => string;
+  /**
+   * 双方公钥的 6 位配对码（用户核对用）。
+   *
+   * `pubA` = 发起方（电脑）的公钥，`pubB` = 响应方（手机）的公钥 —— 顺序不能反。
+   */
+  pairCodeOf: (pubA: Uint8Array, pubB: Uint8Array) => string;
 };

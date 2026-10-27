@@ -137,7 +137,7 @@ class WebSyncApi(
 
     private fun health(): HttpReply = json(
         200,
-        """{"ok":true,"app":"MiuList","protocol":3,"pairing":4,"appVersion":"${esc(appVersion())}","deviceName":"${esc(deviceName())}","serverTime":${System.currentTimeMillis()}}""",
+        """{"ok":true,"app":"MiuList","protocol":3,"pairing":5,"appVersion":"${esc(appVersion())}","deviceName":"${esc(deviceName())}","serverTime":${System.currentTimeMillis()}}""",
     )
 
     /**
@@ -165,7 +165,33 @@ class WebSyncApi(
             ?.takeIf { it.isNotBlank() }
             ?.let { runCatching { WebCrypto.fromBase64Url(it) }.getOrNull() }
             ?.takeIf { it.size == WebDh.KEY_BYTES }
-        val req = pairing.request(requestId, deviceName, publicKey)
+
+        // ── 限流与容量 ──────────────────────────────────────────
+        //
+        // 这个接口**免鉴权**：局域网里任何设备都能调它。
+        // 不限流的话，用户会被反复弹出来的确认卡打断，
+        // 而每条请求都要生成一对 DH 密钥，白烧 CPU；
+        // 内存里的待确认表也会一直涨。
+        //
+        // **限流键是纯 IP**：客户端每次连接的临时端口都不同，
+        // 拿 `ip:port` 当键等于每次请求都换一份配额。
+        val sourceHost = request.remoteHost.ifBlank { request.remoteAddress }
+        // 容量上限只针对**新请求** —— 同一条 requestId 重复到达
+        // （比如网页端重发、或者深链那条路又补了一次）不该被误伤。
+        if (!pairing.hasPending(requestId) && !pairing.canAcceptMore()) {
+            return json(503, """{"error":"待确认的配对请求太多了，先处理掉已有的再试"}""")
+        }
+        // 检查与记录必须原子完成，否则并发请求会一起越过配额。
+        if (!pairing.tryAcquireRequestSlot(sourceHost)) {
+            return json(429, """{"error":"申请太频繁了，稍后再试"}""")
+        }
+
+        val req = pairing.request(
+            requestId = requestId,
+            deviceName = deviceName,
+            peerPublicKey = publicKey,
+            sourceAddress = request.remoteAddress,
+        )
         // 拿到密钥材料了才弹确认卡 —— 否则用户看到的是一张「有个请求」，
         // 却连配对码都算不出来（公钥还没到）。
         if (req.hasKeyMaterial) onPairingReady(req)
@@ -251,6 +277,10 @@ class WebSyncApi(
                 append(""","revision":${revisionProvider()}}""")
             }
             encrypted(auth.device, body)
+        } catch (e: SnapshotGuardException) {
+            // 这是「护栏主动拒绝了整份替换」，不是数据库写失败 ——
+            // 用户需要知道数据**是被保护下来的**，而不是再试一次就好。
+            encryptedError(auth.device, "已阻止可能清空数据的替换：${e.message ?: ""}")
         } catch (e: Exception) {
             encryptedError(auth.device, "落库失败：${e.message ?: ""}")
         }
@@ -306,7 +336,15 @@ class WebSyncApi(
                         password = req.password,
                         year = req.year,
                         term = req.term,
-                        remember = req.remember ?: true,
+                        // **远端提交的凭据一律不写回手机的 Keystore。**
+                        //
+                        // 原来这里是 `req.remember ?: true` —— 也就是说，
+                        // 一台已配对的设备能让手机把它带来的学号密码**存进**
+                        // 这台手机的凭据存储里，把用户自己的绑定顶掉。
+                        //
+                        // 现在远端带来的凭据只用于**这一次**登录，
+                        // 用完即弃；要免密，用户自己在 App 里绑定那个账号。
+                        remember = false,
                     )
                 }
             ) {

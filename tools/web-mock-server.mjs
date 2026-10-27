@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* MiuList 网页端的本地 mock 服务（协议 v3 / 配对 v3.1）。
+/* MiuList 网页端的本地 mock 服务（协议 v3 / 配对 v3.2）。
  *
  * 用途：不开手机也能把网页端跑起来 —— 开发时调样式、截图验收时出图。
  *
@@ -11,8 +11,9 @@
  * mock 就照着这个来：网页端 POST 来的公钥它接着，
  * 算出一把共享密钥，然后按 `--no-auto-approve` 决定批不批。
  *
- * 老协议（把 secret 从二维码搬过去）也留着：`--secret <base64url>` +
- * 网页端 URL 上带 `?devsecret=<同一个值>`。那是给**旧网页端**用的。
+ * 老协议（把 secret 从二维码搬过去）也留着：`--secret <base64url>`。
+ * 桌面端**已经不走**那条路了（v3.2 起强制核对配对码），留它只是为了
+ * `--legacy-pairing` 能模拟一台旧手机、验版本闸门。
  *
  * 密码学直接 import 网页端那份 `web/crypto.js` ——
  * 这样 mock 与手机端的算法**不可能**对不齐（那是「配对过了但一直解密失败」的元凶）。
@@ -61,8 +62,10 @@ const PASSCODE = arg('--passcode', '');
  * 配对 secret。
  *
  * `--secret <base64url>` 给一把固定的；`--auto-secret` 自己随机生成一把
- * 并把它打印出来（这样网页端可以带 `?devsecret=<打印出来的值>`，
- * 两边就算得出同一套密钥）。
+ * 并把它打印出来。
+ *
+ * 这把 secret 是**给老协议（v3）用的**：桌面端从 v3.2 起不再走那条路，
+ * 所以它现在只服务于 `--legacy-pairing`（模拟一台只认老协议的手机）。
  *
  * 两个都不给 = **故意配不成**：悄悄跳过鉴权会让「配对成功但连不上」
  * 这类问题变成玄学。
@@ -88,13 +91,13 @@ const NO_AUTO_APPROVE = argv.includes('--no-auto-approve');
 /**
  * 模拟**旧版手机**的配对协议（v3）。
  *
- * 新协议（v3.1）是 DH 协商：网页端把**公钥**发过来，两端各自算出同一把密钥。
- * 而「手机扫电脑的码」那条路里，**公钥走二维码**——mock 不会扫码，
- * 于是那条路在 mock 上走不通（扫码时公钥根本不过网）。
+ * 现在的协议是 **v3.2**：DH 协商 + **双方公钥的转录绑定**（配对码 = H(A‖B)），
+ * 网页端与手机必须同一版才可能算出同一个码。
  *
- * `--legacy-pairing` 让 mock 报 `pairing: 3`，网页端就退回老协议
- * （secret 从二维码搬过去，`?devsecret=` 配对）——
- * 与 `--no-timetable` 是同一个思路：**模拟一个旧版本的手机**。
+ * `--legacy-pairing` 让 mock 报 `pairing: 3`，桌面端会**直接拒绝配对**，
+ * 并提示「手机版本太旧，需要支持配对协议 v3.2 的版本」。
+ * 与 `--no-timetable` 是同一个思路：**模拟一个旧版本的手机**，
+ * 用来验桌面端的版本闸门与提示文案。
  */
 const LEGACY_PAIRING = argv.includes('--legacy-pairing');
 
@@ -415,7 +418,7 @@ const DEVICE_ID = 'mock-device';
 let keys = null;
 let secretBytes = null;
 /**
- * 待批准的配对（DH 协议 v3.1）。
+ * 待批准的配对（DH 协议 v3.2）。
  *
  * 网页端带着自己的**公钥**来，mock 拿它算出一把共享密钥 ——
  * 两边都有 secret，而它**从不过网**。
@@ -627,10 +630,11 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (p === '/api/health') {
-      // `pairing: 4` —— 网页端据此知道这台「手机」支持 **DH 协商**
-      // （公钥过网、密钥各自算），而不是老协议「把 secret 从二维码搬过去」。
-      // `--legacy-pairing` 时报 3，网页端就退回老协议（见那个开关的说明）。
-      return json(res, 200, { ok: true, app: 'MiuList', appVersion: '1.0.4', protocol: 3, pairing: LEGACY_PAIRING ? 3 : 4, deviceName: 'Mock 手机', serverTime: Date.now() });
+      // `pairing: 5` —— 网页端据此知道这台「手机」支持 **DH 协商**
+      // （公钥过网、密钥各自算）**外加 v3.2 的转录绑定配对码**（H(A‖B)）。
+      // `--legacy-pairing` 时报 3，网页端会直接拒绝配对并提示版本太旧
+      // （见那个开关的说明）。
+      return json(res, 200, { ok: true, app: 'MiuList', appVersion: '1.0.4', protocol: 3, pairing: LEGACY_PAIRING ? 3 : 5, deviceName: 'Mock 手机', serverTime: Date.now() });
     }
 
     // ── 调试：换掉这台「手机」的课表 ────────────────────────────
@@ -664,7 +668,7 @@ const server = http.createServer(async (req, res) => {
       let body = {};
       try { body = JSON.parse(raw.toString('utf8') || '{}'); } catch (_) { /* 坏体当空 */ }
 
-      // ── 新协议（v3.1）：DH 协商 ────────────────────────────────
+      // ── 新协议（v3.2）：DH 协商 ────────────────────────────────
       //
       // 网页端带着自己的**公钥**来。它是公钥不是秘密 ——
       // mock 拿它跟自己的一对临时密钥算出同一把共享密钥，
@@ -681,8 +685,9 @@ const server = http.createServer(async (req, res) => {
           priv: keypair.priv,
           pub: keypair.pub,
           secret: shared,
-          // 配对码是**电脑那个公钥**的哈希 —— 手机那边算的也是这个。
-          code: pairCodeOf(peerPub),
+          // 配对码 = H(A‖B)：A = 电脑的公钥（对端），B = mock 自己的公钥。
+          // **顺序与手机端一致** —— 反了两端就永远对不上。
+          code: pairCodeOf(peerPub, keypair.pub),
           approved: !NO_AUTO_APPROVE,
         };
         keys = deriveKeys(shared, PASSCODE);
@@ -709,11 +714,11 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      // ── 新协议（v3.1），但**公钥还没到** ─────────────────────
+      // ── 新协议（v3.2），但**公钥还没到** ─────────────────────
       //
       // 「手机扫电脑的码」那条路：网页端**故意不带**公钥 ——
       // 手机在用户扫码之前不该弹确认卡，否则「扫码」就不是那一步了。
-      // 公钥是跟着**二维码深链**走的（`miulist://pair?v=4&k=…`），
+      // 公钥是跟着**二维码深链**走的（`miulist://pair?v=5&k=…`），
       // 手机扫到才收得到。
       //
       // 所以在新协议里，「请求里没有 publicKey」是一种**正常状态**，
@@ -724,7 +729,7 @@ const server = http.createServer(async (req, res) => {
         priv: null,
         pub: null,
         secret: null,
-        // 公钥还没到 → 配对码还**算不出来**（配对码是对方公钥的哈希）。
+        // 公钥还没到 → 配对码还**算不出来**（码是双方公钥的哈希，缺一边都不行）。
         code: null,
         approved: false,
       };
@@ -734,7 +739,7 @@ const server = http.createServer(async (req, res) => {
     /**
      * **mock 专用**：把电脑的公钥「送」过来，模拟「手机扫了那张二维码」。
      *
-     * 真机上这一步是**深链**干的（`miulist://pair?v=4&k=<公钥>&r=<requestId>`），
+     * 真机上这一步是**深链**干的（`miulist://pair?v=5&k=<公钥>&r=<requestId>`），
      * 走的是视觉通道 —— mock 不会扫码，所以给它开一个同款入口。
      *
      * 为什么要留这个口子：没有它，mock 就**只能**测「只填地址」那条路，
@@ -760,7 +765,8 @@ const server = http.createServer(async (req, res) => {
         pendingPair.priv = keypair.priv;
         pendingPair.pub = keypair.pub;
         pendingPair.secret = shared;
-        pendingPair.code = pairCodeOf(peerPub);
+        // 配对码 = H(A‖B)：A = 电脑的公钥（对端），B = mock 自己的公钥。
+        pendingPair.code = pairCodeOf(peerPub, keypair.pub);
         keys = deriveKeys(shared, PASSCODE);
       }
       return json(res, 200, {
@@ -919,8 +925,8 @@ server.listen(PORT, HOST, () => {
   for (const a of addrs) console.log(`[miulist-mock] 局域网: http://${a}:${PORT}/`);
   console.log(`[miulist-mock] 静态目录: ${WEB_DIR}`);
   if (SECRET) {
-    console.log(`[miulist-mock] devsecret = ${SECRET}`);
-    console.log(`[miulist-mock] 网页端要带上：?devsecret=${SECRET}`);
+    console.log(`[miulist-mock] secret = ${SECRET}`);
+    console.log('[miulist-mock] 这把是给老协议（v3）用的 —— 桌面端 v3.2 走 DH 协商，不带它');
   } else {
     console.log('[miulist-mock] 未给 --secret：配对会失败（这是有意的，别偷偷跳过鉴权）');
   }

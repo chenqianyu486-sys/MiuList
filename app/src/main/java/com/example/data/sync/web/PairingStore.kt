@@ -38,6 +38,22 @@ import kotlin.math.abs
 class PairingStore(
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val idGenerator: () -> String = { WebCrypto.base64Url(WebCrypto.randomBytes(9)) },
+    /**
+     * 设备因**空闲超时**被踢掉时的回调。
+     *
+     * 之所以要有：只在内存里删掉，只是「这一轮进程里失效」——
+     * 密钥还在 Keystore 加密存储里，进程一重启它又被装回来。
+     * 真正的撤销必须连**持久化那份**一起删。
+     */
+    private val onDeviceExpired: (String) -> Unit = {},
+    /**
+     * 设备成功验签、`lastSeenAt` 被推进后的回调。
+     *
+     * 不能只在退出时保存：进程可能被系统直接回收，那条路根本没有机会执行。
+     * 调用方（`WebSyncService`）负责把时间写进 SharedPreferences；
+     * 这里按 [LAST_SEEN_PERSIST_INTERVAL_MS] 节流，避免每个请求都落盘。
+     */
+    private val onDeviceSeen: (PairedDevice) -> Unit = {},
 ) {
 
     enum class State { PENDING, APPROVED, DENIED, EXPIRED }
@@ -72,16 +88,33 @@ class PairingStore(
         var sharedSecret: ByteArray? = null,
         /** 老协议：secret 本身（二维码带来的）。 */
         var legacySecret: ByteArray? = null,
+        /**
+         * **服务端观察到的对端地址**（`ip:port`）。
+         *
+         * 确认卡上要告诉用户「是谁在请求连接」—— 用它，而不是客户端自报的
+         * `deviceName`：自报的名字谁都能写成「我的电脑」，
+         * 而这个地址是从 TCP 连接上读出来的，**客户端伪造不了**。
+         */
+        val sourceAddress: String = "",
     ) {
         /**
          * **配对码**：给用户肉眼核对的两端一致的 6 位码。
          *
-         * - 新协议：公钥的哈希（两端一开始就有同一个公钥，立刻能算）；
+         * - 新协议（v3.2）：**双方公钥的转录绑定哈希** `H(A‖B)`；
          * - 老协议：`requestId` 的前 6 位（老网页端显示的就是这个）。
+         *
+         * 新协议下两端都能算这个码：电脑有 A 与手机回的 B，
+         * 手机有 A 与自己的 B。中间人换掉任何一个，两端就对不上。
          */
         val pairCode: String
-            get() = peerPublicKey?.let { WebDh.pairCode(it) }
-                ?: requestId.take(6).uppercase()
+            get() {
+                val a = peerPublicKey
+                if (a != null) {
+                    val b = ephemeralPublic ?: return ""
+                    return WebDh.pairCode(a, b)
+                }
+                return requestId.take(6).uppercase()
+            }
 
         /** 这条请求现在**配不配得成** —— 没有密钥材料就还不成。 */
         val hasKeyMaterial: Boolean
@@ -118,12 +151,25 @@ class PairingStore(
         val pairCode: String? = null,
     )
 
+    /**
+     * 保护下面几份可变状态。
+     *
+     * 配对请求来自 HTTP 工作线程，批准/撤销来自 UI 线程；`pending` 里的
+     * [PendingRequest] 字段也会被两边读写。这里只做**最小范围**同步：
+     * 所有入口在同一把锁下改/读这几份表，回调在锁外执行。
+     */
+    private val lock = Any()
     private val pending = LinkedHashMap<String, PendingRequest>()
     private val devices = LinkedHashMap<String, PairedDevice>()
 
     /** deviceId → (nonce → 用掉的时间)。用来挡重放。 */
     private val usedNonces = HashMap<String, HashMap<String, Long>>()
 
+    /** 来源 IP → 最近的申请时刻。用来限流（见 [tryAcquireRequestSlot]）。 */
+    private val requestHits = HashMap<String, ArrayDeque<Long>>()
+
+    /** deviceId → 上次把 lastSeenAt 回调给持久化层的时间。 */
+    private val lastSeenNotifiedAt = HashMap<String, Long>()
     // ── 申请与批准 ─────────────────────────────────────────────
 
     /**
@@ -132,30 +178,86 @@ class PairingStore(
      * @param requestId `requestIdOf(secret)`（老协议），或一个随机 id（新协议）。
      * @param peerPublicKey 电脑的 DH 公钥。**给了它，手机就能自己算出共享密钥** ——
      *   这条「只填地址」的路就是这样走通的：过网的只有公钥。
+     * @param sourceAddress 服务端观察到的对端地址。**客户端伪造不了**，
+     *   所以它才是确认卡上能安全展示的「是谁在请求连接」。
      */
     fun request(
         requestId: String,
         deviceName: String = "",
         peerPublicKey: ByteArray? = null,
-    ): PendingRequest {
-        purgeExpired()
+        sourceAddress: String = "",
+        legacySecret: ByteArray? = null,
+    ): PendingRequest = synchronized(lock) {
+        purgeExpiredLocked()
         val now = clock()
         val existing = pending[requestId]
         if (existing != null && existing.state == State.PENDING) {
             // **补公钥**：两条通道（HTTP 请求 / 二维码深链）谁先到都行 ——
             // 先到的那条只带 requestId，后到的那条把公钥补上。
-            if (peerPublicKey != null) attachPeerKey(existing, peerPublicKey)
-            return existing
+            if (peerPublicKey != null) attachPeerKeyLocked(existing, peerPublicKey)
+            // 老协议：secret 从二维码那条路补进来。已经有共享密钥时不覆盖。
+            if (legacySecret != null && existing.sharedSecret == null && existing.legacySecret == null) {
+                existing.legacySecret = legacySecret
+            }
+            // 返回快照而不是表里的可变对象：调用方（HTTP/UI 线程）之后读到的
+            // 字段不会再被另一条线程改掉。密钥材料字段只在锁内赋值一次。
+            return@synchronized existing.copy()
         }
         val req = PendingRequest(
             requestId = requestId,
             requestedAt = now,
             expiresAt = now + CODE_TTL_MS,
             deviceName = deviceName,
+            sourceAddress = sourceAddress,
         )
-        if (peerPublicKey != null) attachPeerKey(req, peerPublicKey)
+        if (peerPublicKey != null) attachPeerKeyLocked(req, peerPublicKey)
+        if (legacySecret != null && req.sharedSecret == null) req.legacySecret = legacySecret
         pending[requestId] = req
-        return req
+        req.copy()
+    }
+
+    /**
+     * 原子地「检查并记录一次申请」。
+     *
+     * `/api/pair/request` 是**免鉴权**的 —— 局域网里任何设备都能调它。
+     * 不限流的后果不是「多几条记录」，而是：
+     *
+     * - 用户被**反复弹确认卡**打断；
+     * - 每条请求都要生成一对 DH 密钥，白烧 CPU；
+     * - 内存里的 pending 表一直涨。
+     *
+     * **检查和记录必须在同一把锁里完成**：拆成
+     * `if (!isRateLimited()) recordRequest()` 的话，并发请求会同时看到
+     * 「还没超限」，然后一起写进去。
+     *
+     * @param sourceAddress 来源 **IP**（不带端口；端口每次连接都变）。
+     * @return true = 本次申请已记入配额；false = 已超限，调用方应回 429。
+     */
+    fun tryAcquireRequestSlot(sourceAddress: String): Boolean = synchronized(lock) {
+        if (sourceAddress.isBlank()) return@synchronized true
+        val now = clock()
+        pruneRateHitsLocked(now)
+        val hits = requestHits.getOrPut(sourceAddress) { ArrayDeque() }
+        if (hits.size >= MAX_REQUESTS_PER_SOURCE) return@synchronized false
+        hits.addLast(now)
+        true
+    }
+
+    /** 仅供测试/诊断：当前还在限流表里的来源数量。 */
+    internal fun rateLimitSourceCount(): Int = synchronized(lock) {
+        pruneRateHitsLocked(clock())
+        requestHits.size
+    }
+
+    /**
+     * 现在还能不能接一条新的待确认请求。
+     *
+     * 超过上限就**拒绝新的** —— 已有的那些不受影响，
+     * 否则用户正要点「允许」的那条会被后来的挤掉。
+     */
+    fun canAcceptMore(): Boolean = synchronized(lock) {
+        purgeExpiredLocked()
+        pending.values.count { it.state == State.PENDING } < MAX_PENDING_REQUESTS
     }
 
     /**
@@ -164,11 +266,14 @@ class PairingStore(
      * 为什么「当场」：共享密钥一旦定下来，配对码也就定下来了 ——
      * 界面要立刻把它显示出来让用户核对。
      */
-    private fun attachPeerKey(req: PendingRequest, peerPublicKey: ByteArray) {
+    private fun attachPeerKeyLocked(req: PendingRequest, peerPublicKey: ByteArray) {
         // 已经有密钥材料就不覆盖：同一请求重复到达时，保留第一次协商的结果
         // （换了公钥就换了一把密钥，两端会对不上）。
         if (req.peerPublicKey != null) return
         if (peerPublicKey.size != WebDh.KEY_BYTES) return
+        // **退化公钥一律拒收**：公钥 = 1 会让共享密钥变成公开常量
+        // （详见 [WebDh.validatePublicKey]）。
+        runCatching { WebDh.validatePublicKey(peerPublicKey) }.getOrElse { return }
         val (priv, pub) = WebDh.generateKeypair()
         req.peerPublicKey = peerPublicKey
         req.ephemeralPrivate = priv
@@ -189,18 +294,18 @@ class PairingStore(
         secret: ByteArray? = null,
         passcode: String = "",
         deviceName: String = "",
-    ): PairedDevice? {
-        purgeExpired()
-        val req = pending[requestId] ?: return null
-        if (req.state != State.PENDING) return null
+    ): PairedDevice? = synchronized(lock) {
+        purgeExpiredLocked()
+        val req = pending[requestId] ?: return@synchronized null
+        if (req.state != State.PENDING) return@synchronized null
         if (clock() > req.expiresAt) {
             req.state = State.EXPIRED
-            return null
+            return@synchronized null
         }
         // 新协议：共享密钥已经协商好了。
         // 老协议：secret 由二维码带来，这时才校验摘要。
-        val effective = req.sharedSecret ?: secret ?: req.legacySecret ?: return null
-        if (req.sharedSecret == null && requestIdOf(effective) != requestId) return null
+        val effective = req.sharedSecret ?: secret ?: req.legacySecret ?: return@synchronized null
+        if (req.sharedSecret == null && requestIdOf(effective) != requestId) return@synchronized null
 
         val deviceId = idGenerator()
         val now = clock()
@@ -215,14 +320,14 @@ class PairingStore(
         req.state = State.APPROVED
         req.deviceId = deviceId
         req.deviceName = device.deviceName
-        return device
+        device
     }
 
-    fun deny(requestId: String): Boolean {
-        val req = pending[requestId] ?: return false
-        if (req.state != State.PENDING) return false
+    fun deny(requestId: String): Boolean = synchronized(lock) {
+        val req = pending[requestId] ?: return@synchronized false
+        if (req.state != State.PENDING) return@synchronized false
         req.state = State.DENIED
-        return true
+        true
     }
 
     /**
@@ -232,10 +337,10 @@ class PairingStore(
      * 抓到这条请求的人知道「有个设备在等」，但没有 secret，
      * 拿不到 token、也算不出签名。
      */
-    fun status(requestId: String): Status {
-        purgeExpired()
-        val req = pending[requestId] ?: return Status(State.EXPIRED)
-        return Status(
+    fun status(requestId: String): Status = synchronized(lock) {
+        purgeExpiredLocked()
+        val req = pending[requestId] ?: return@synchronized Status(State.EXPIRED)
+        Status(
             state = req.state,
             deviceId = req.deviceId,
             deviceName = req.deviceName.takeIf { it.isNotBlank() },
@@ -246,17 +351,24 @@ class PairingStore(
 
     // ── 设备 ───────────────────────────────────────────────────
 
-    fun device(deviceId: String): PairedDevice? = devices[deviceId]
+    /** 这条待确认请求还在不在（且还等着确认）。 */
+    fun hasPending(requestId: String): Boolean = synchronized(lock) {
+        purgeExpiredLocked()
+        pending[requestId]?.state == State.PENDING
+    }
 
-    fun pairedDevices(): List<PairedDevice> = devices.values.toList()
+    fun device(deviceId: String): PairedDevice? = synchronized(lock) { devices[deviceId] }
 
-    fun revoke(deviceId: String): Boolean {
+    fun pairedDevices(): List<PairedDevice> = synchronized(lock) { devices.values.toList() }
+
+    fun revoke(deviceId: String): Boolean = synchronized(lock) {
         usedNonces.remove(deviceId)
-        return devices.remove(deviceId) != null
+        lastSeenNotifiedAt.remove(deviceId)
+        devices.remove(deviceId) != null
     }
 
     /** 进程重启后恢复（密钥本身要由调用方从加密存储里读出来）。 */
-    fun restore(list: List<PairedDevice>) {
+    fun restore(list: List<PairedDevice>) = synchronized(lock) {
         for (d in list) devices[d.deviceId] = d
     }
 
@@ -282,25 +394,45 @@ class PairingStore(
         signature: String,
         body: ByteArray,
     ): Boolean {
-        val device = devices[deviceId] ?: return false
-        val now = clock()
-        if (now - device.lastSeenAt > IDLE_TIMEOUT_MS) {
-            devices.remove(deviceId)
-            return false
+        var expiredId: String? = null
+        var seen: PairedDevice? = null
+        val ok = synchronized(lock) {
+            val device = devices[deviceId] ?: return@synchronized false
+            val now = clock()
+            if (now - device.lastSeenAt > IDLE_TIMEOUT_MS) {
+                devices.remove(deviceId)
+                usedNonces.remove(deviceId)
+                lastSeenNotifiedAt.remove(deviceId)
+                // **连持久化那份一起删** —— 只删内存里的，进程一重启它又被装回来，
+                // 于是「半小时空闲自动失效」这句话是假的。
+                expiredId = deviceId
+                return@synchronized false
+            }
+            if (abs(now - ts) > TS_WINDOW_MS) return@synchronized false
+            if (nonce.isBlank()) return@synchronized false
+
+            val used = usedNonces.getOrPut(deviceId) { HashMap() }
+            used.entries.removeAll { now - it.value > TS_WINDOW_MS }
+            if (used.containsKey(nonce)) return@synchronized false
+
+            val expected = WebCrypto.signRequest(device.keys, method, path, ts, nonce, body)
+            if (!constantTimeEquals(expected, signature)) return@synchronized false
+
+            used[nonce] = now
+            device.lastSeenAt = now
+            // 约 60 秒落盘一次：既不漏掉「持续活跃」，也不让每个请求都写 SharedPreferences。
+            // 60 秒远小于 30 分钟空闲超时，进程被直接回收时最多丢掉这一小段。
+            val lastNotified = lastSeenNotifiedAt[deviceId]
+            if (lastNotified == null || now - lastNotified >= LAST_SEEN_PERSIST_INTERVAL_MS) {
+                lastSeenNotifiedAt[deviceId] = now
+                seen = device.copy()
+            }
+            true
         }
-        if (abs(now - ts) > TS_WINDOW_MS) return false
-        if (nonce.isBlank()) return false
-
-        val used = usedNonces.getOrPut(deviceId) { HashMap() }
-        used.entries.removeAll { now - it.value > TS_WINDOW_MS }
-        if (used.containsKey(nonce)) return false
-
-        val expected = WebCrypto.signRequest(device.keys, method, path, ts, nonce, body)
-        if (!constantTimeEquals(expected, signature)) return false
-
-        used[nonce] = now
-        device.lastSeenAt = now
-        return true
+        // 回调放在锁外：它们可能碰 SharedPreferences / Keystore，不该拖住验签路径。
+        expiredId?.let(onDeviceExpired)
+        seen?.let(onDeviceSeen)
+        return ok
     }
 
     // ── 工具 ───────────────────────────────────────────────────
@@ -314,15 +446,35 @@ class PairingStore(
     fun requestIdOf(secret: ByteArray): String =
         WebCrypto.base64Url(WebCrypto.sha256(secret).copyOfRange(0, 16))
 
-    private fun purgeExpired() {
+    private fun purgeExpiredLocked() {
         val now = clock()
-        pending.entries.removeAll { (id, req) ->
+        pending.entries.removeAll { (_, req) ->
             if (req.state == State.PENDING && now > req.expiresAt) {
                 req.state = State.EXPIRED
                 true
             } else {
                 false
             }
+        }
+        // 已处理完的请求（已批准 / 已拒绝 / 已过期）**不留着**。
+        //
+        // 留着没有用途，却会一直占着内存；而这些记录里还有共享密钥
+        // 与一次性私钥 —— 过期之后继续留着它们没有道理。
+        pending.entries.removeAll { (_, req) ->
+            req.state != State.PENDING && now > req.requestedAt + CODE_TTL_MS
+        }
+        pruneRateHitsLocked(now)
+    }
+
+    /** 丢掉限流窗口外的记录，顺带清掉窗口内已经没有记录的来源。 */
+    private fun pruneRateHitsLocked(now: Long) {
+        val iterator = requestHits.entries.iterator()
+        while (iterator.hasNext()) {
+            val hits = iterator.next().value
+            while (hits.isNotEmpty() && now - hits.first() > RATE_WINDOW_MS) {
+                hits.removeFirst()
+            }
+            if (hits.isEmpty()) iterator.remove()
         }
     }
 
@@ -343,5 +495,27 @@ class PairingStore(
 
         /** 设备空闲多久算失效。半小时没来请求就当它走了。 */
         const val IDLE_TIMEOUT_MS = 30 * 60 * 1000L
+
+        /**
+         * `lastSeenAt` 的落盘节流：约 60 秒最多写一次。
+         *
+         * 比 [IDLE_TIMEOUT_MS] 短得多，所以进程随时被回收，持久化时间
+         * 也不会陈旧到把一台仍活跃的设备误判为空闲。
+         */
+        const val LAST_SEEN_PERSIST_INTERVAL_MS = 60 * 1000L
+
+        /** 同一个来源在 [RATE_WINDOW_MS] 内最多能申请几次配对。 */
+        const val MAX_REQUESTS_PER_SOURCE = 5
+
+        /** 限流窗口（1 分钟）。 */
+        const val RATE_WINDOW_MS = 60 * 1000L
+
+        /**
+         * 同时最多保留几条待确认请求。
+         *
+         * 超过就拒绝新的 —— 一来控制内存，二来避免手机上堆满
+         * 陌生设备弹出来的确认卡。
+         */
+        const val MAX_PENDING_REQUESTS = 8
     }
 }

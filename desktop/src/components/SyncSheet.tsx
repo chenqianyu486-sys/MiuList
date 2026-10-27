@@ -59,7 +59,7 @@ import { Button, cx } from './ui';
 
 const TABS: { id: SyncTab; label: string; icon: typeof Link2 }[] = [
   { id: 'connection', label: '连接', icon: Link2 },
-  { id: 'snapshot', label: '快照', icon: FileJson2 },
+  { id: 'snapshot', label: '本机文件', icon: FileJson2 },
   { id: 'appearance', label: '外观', icon: Palette },
   { id: 'about', label: '关于', icon: Info },
 ];
@@ -74,7 +74,7 @@ export function SyncSheet() {
       open={open}
       onClose={close}
       title="同步与设置"
-      subtitle="手机、本机快照与毛玻璃外观。"
+      subtitle="手机、本机数据与毛玻璃外观。"
       wide
     >
       <div className="sheet-tabs" role="tablist" aria-label="设置分区">
@@ -268,7 +268,7 @@ function ConnectionPanel() {
           </div>
           {!state.phoneReachable ? (
             <p className="inline-warn">
-              这个地址暂时连不上。确认手机上的「局域网服务」已打开，或者换一个地址。
+              这个地址暂时连不上。确认手机上的「网页同步」已打开，或者换一个地址。
             </p>
           ) : null}
           <PairingCard compact onChangeAddress={() => setEditing(true)} />
@@ -357,7 +357,7 @@ function ConnectionPanel() {
         <ShieldCheck size={16} />
         <p>
           待办在两端之间自动同步；<strong>课表与考试各留一份</strong>，不会跟着同步跑。
-          配对后可在「课表与考试」里手动搬运。配对密钥只在本机，快照文件不含它。手机 App 继续当接口服务端，协议不变。
+          配对后可在「课表与考试」里手动搬运。
         </p>
       </div>
     </div>
@@ -431,7 +431,7 @@ function SchedulePanel() {
       <p className="field-hint">
         {localCourses
           ? '「用手机的」会覆盖这台电脑上的课表与考试；「推给手机」会覆盖手机上的。两者都只动配置，不动待办。'
-          : '这台电脑还没有课表：先「用手机的课表和考试」搬一份过来，或者导入一份 JSON 快照。'}
+          : '这台电脑还没有课表：先「用手机的课表和考试」搬一份过来，或者导入一份备份文件。'}
       </p>
     </div>
   );
@@ -686,8 +686,8 @@ function SnapshotPanel() {
             <FileJson2 size={18} />
           </span>
           <div>
-            <h3>本机 JSON 快照</h3>
-            <p>课程、待办与考试落在本机文件里；不含配对密钥。</p>
+            <h3>本机备份文件</h3>
+            <p>课程、待办与考试都存在这台电脑上。</p>
           </div>
         </div>
 
@@ -732,17 +732,17 @@ function SnapshotPanel() {
               </Button>
             </div>
             <p className="field-hint">
-              自动保存有 0.8 秒防抖；关闭浏览器前最后一秒的改动建议点一下「立即保存」。
+              改动会稍等一下再自动保存；关浏览器前的改动，建议点一下「立即保存」。
             </p>
           </div>
         ) : (
           <div className="file-empty">
             <p>
-              还没有绑定快照文件。绑定后每次编辑会自动写入；也可以先保存到新文件。
+              还没有绑定备份文件。绑定后每次编辑都会自动写入；也可以先存成新文件。
             </p>
             {!file.supported ? (
               <p className="inline-warn">
-                当前浏览器不支持直接读写本机文件，请用下面的「导出 / 导入 JSON」。Chrome / Edge 支持自动写入。
+                当前浏览器不支持直接读写本机文件，请用下面的「导出 / 导入」。Chrome / Edge 支持自动保存。
               </p>
             ) : null}
             <div className="file-actions">
@@ -753,7 +753,7 @@ function SnapshotPanel() {
                 loading={busy}
                 onClick={() => void run(() => pickSnapshotFile())}
               >
-                绑定已有快照
+                绑定已有文件
               </Button>
               <Button
                 variant="soft"
@@ -779,10 +779,10 @@ function SnapshotPanel() {
         </div>
         <div className="file-actions">
           <Button variant="soft" icon={FileJson2} onClick={exportSnapshotJson}>
-            导出 JSON
+            导出备份
           </Button>
           <Button variant="ghost" icon={Upload} onClick={() => inputRef.current?.click()}>
-            导入 JSON
+            导入备份
           </Button>
           <input
             ref={inputRef}
@@ -800,15 +800,15 @@ function SnapshotPanel() {
           />
         </div>
         <p className="field-hint">
-          导入会替换当前本地快照，但不会删除浏览器里的配对密钥；如果文件带有手机地址，也会一并记住。
+          导入会替换这台电脑上的数据，已经配对的手机不受影响。
         </p>
       </div>
 
       <div className="panel-note">
         <ShieldCheck size={16} />
         <p>
-          快照文件是明文的：它包含课程与待办，但<strong>不包含</strong>配对 secret 和同步密码。密钥只存在浏览器的
-          localStorage；清掉浏览器数据后需要重新扫码配对。请把快照当作个人数据文件保管。
+          备份文件是明文的：它包含课程与待办，但<strong>不包含</strong>配对凭证和同步密码。
+          请把它当作个人数据文件保管。
         </p>
       </div>
     </div>
@@ -893,25 +893,23 @@ function AboutPanel() {
         <img src={appIcon} alt="" className="about-icon" />
         <div>
           <h3>MiuList · 电脑网页端</h3>
-          <p>单文件静态前端 · 本机 JSON 快照 · 与手机对等同步</p>
+          <p>打开网页就能用 · 数据存在本机 · 与手机同步</p>
         </div>
-        <span className="about-version">1.0.8</span>
+        <span className="about-version">1.0.9</span>
       </div>
       <div className="panel-card glass-soft">
         <h3 className="about-heading">它是什么</h3>
         <p className="about-text">
-          这是 MiuList 的电脑网页端：打开 HTML 就能看课表、清单和考试，手机不在也能改。手机 App
-          继续当接口服务端，配对协议、加密和冲突处理都没有变。
+          这是 MiuList 的电脑网页端：打开网页就能看课表、清单和考试，手机不在也能改。
         </p>
         <h3 className="about-heading">数据在哪</h3>
         <p className="about-text">
-          浏览器 localStorage 是实时数据；绑定的 JSON 文件是这一端的镜像。配对 secret
-          仅在浏览器里，文件不含它。两边都持有一份完整快照，同步时按方向合并。
+          数据存在这台电脑上，绑定的备份文件是它的一份副本。两边各有一份完整数据，同步时合并。
         </p>
         <h3 className="about-heading">当前这份</h3>
         <div className="about-facts">
-          <span>协议</span>
-          <strong>v3 · 挑战-应答签名 · ChaCha20 + HMAC</strong>
+          <span>连接</span>
+          <strong>同一 Wi-Fi 直连</strong>
           <span>手机</span>
           <strong>{snapshot.deviceName || '未连接'}</strong>
           <span>周课表</span>

@@ -4,12 +4,12 @@ import {
   open as openSealed,
   randomBytes,
   seal,
-  sha256,
   signRequest,
   toBase64Url,
   utf8Bytes,
   dhGenerateKeypair,
   dhSharedSecret,
+  dhValidatePublicKey,
   pairCodeOf,
 } from './crypto';
 // 配对的纯逻辑（地址归一化、要不要再要一张配对码）与协议一样只有一份：
@@ -72,6 +72,16 @@ let pairAttempts = 0;
  * store 里的东西会被快照文件、localStorage 带着走，密钥不该进去。
  */
 let pairPriv: Uint8Array | null = null;
+/**
+ * 配对用的临时 DH **公钥**（= 自己的 A）。
+ *
+ * 协议 v3.2 的配对码是「双方公钥的转录哈希 H(A‖B)」，
+ * 所以算码时需要**自己**的公钥也在手上 —— 只存私钥是不够的。
+ *
+ * 公钥不是秘密（它就是要摆给手机看的），但它跟私钥同生共死：
+ * 换一条路重来就一起换掉，免得算出上一轮的码。
+ */
+let pairPub: Uint8Array | null = null;
 let sse: EventSource | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let autoTimer: ReturnType<typeof setTimeout> | null = null;
@@ -174,7 +184,10 @@ async function api(path: string, options: ApiOptions = {}): Promise<any> {
       requestBody = seal(sessionKeys, rawBody) as unknown as BodyInit;
     }
   }
-  if (auth && !plain) {
+  // 「这次请求带没带签名」—— 签名头只在 auth && !plain 时才加。
+  // 响应处理那边要靠它判断「这个响应**必须**是密文」。
+  const signed = auth && !plain;
+  if (signed) {
     if (!sessionKeys) throw new ApiError('还没有配对', 401);
     Object.assign(headers, authHeaders(method, path, rawBody));
   }
@@ -197,14 +210,40 @@ async function api(path: string, options: ApiOptions = {}): Promise<any> {
   }
 
   if (res.status === 401) {
-    const error = new ApiError('配对已失效或签名不对，需要重新扫码', 401);
+    const error = new ApiError('配对已失效，需要重新扫码配对。', 401);
     error.unauthorized = true;
     throw error;
   }
 
   const text = await res.text();
   let payload: any = text;
-  if (res.headers.get('X-ML-Enc')) {
+  const isEncrypted = Boolean(res.headers.get('X-ML-Enc'));
+  // **带签名的请求，响应必须是密文**（协议 v3.2 起强制）。
+  //
+  // 为什么：签名只能证明「请求是我发的」，证明不了「回包真是手机发的」。
+  // 以前缺 X-ML-Enc 就按明文 JSON 收下，等于**明文通道**一直开着 ——
+  // 冒名的服务器或中间人可以随便回一份明文 JSON，被当成手机的数据合并进来。
+  //
+  // 免签名的请求（/api/health、/api/pair/*）本来就该是明文 JSON，不受这条约束。
+  if (signed && !isEncrypted) {
+    // **两种情况都中止** —— 安全性质不因状态码而放松。
+    //
+    // 但话要说准：4xx/5xx 的**明文**错误是手机自己发的
+    // （303 来源不允许 / 413 请求体太大 / 404 没有这个接口），
+    // 传输层错误本来就没有 X-ML-Enc。它一律说成「中间人拦截」，
+    // 用户会去查错方向 —— 真正要拦的只有「200 却不是密文」那一种。
+    if (res.ok) {
+      throw new ApiError('返回的数据没有加密，已中止同步。', 500);
+    }
+    let detail = '';
+    try {
+      detail = JSON.parse(text)?.error || '';
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(detail || `请求失败（${res.status}）`, res.status);
+  }
+  if (isEncrypted) {
     try {
       payload = new TextDecoder().decode(openSealed(sessionKeys, fromBase64Url(text)));
     } catch {
@@ -212,7 +251,7 @@ async function api(path: string, options: ApiOptions = {}): Promise<any> {
       // 密钥 = secret + 同步密码 派生出来的，而 secret 两端是一样的
       // （都来自那张二维码），所以差异只可能出在**同步密码**上。
       throw new ApiError(
-        '密钥对不上 —— 手机上若设了同步密码，在配对处填同样的 4 位数字后重新配对',
+        '配对没成功 —— 如果手机上设了同步密码，在配对处填同样的 4 位数字后重新配对。',
         500,
       );
     }
@@ -230,7 +269,7 @@ async function api(path: string, options: ApiOptions = {}): Promise<any> {
   try {
     return JSON.parse(payload);
   } catch {
-    throw new ApiError('响应不是合法 JSON', 500);
+    throw new ApiError('返回的数据读不懂，已中止同步。', 500);
   }
 }
 
@@ -489,27 +528,27 @@ export async function requestPairCode(force = false, mode: PairMode = 'scan'): P
         pair: {
           status: 'error',
           mode,
-          message: '这个地址上没有 MiuList 服务。确认手机开着「局域网服务」。',
+          message: '这个地址上没有 MiuList 服务。确认手机上的「网页同步」已经打开。',
         },
       });
-      toast('这个地址上没有 MiuList 服务。确认手机开着「局域网服务」。', 'error');
+      toast('这个地址上没有 MiuList 服务。确认手机上的「网页同步」已经打开。', 'error');
       return;
     }
-    // 旧版手机（配对协议 v3）只会「把 secret 从二维码搬过去」，
-    // 没有「只填地址」那条路 —— 那就老老实实退回扫码。
+    // **版本闸门**：协议 v3.2 的配对码是「双方公钥的转录哈希 H(A‖B)」，
+    // 网页端与手机必须**同一版**才可能算出同一个码。
+    // 旧版手机（v3 把 secret 从二维码搬过去、v3.1 只算 H(A)）一律拒绝 ——
+    // 继续走老协议就等于把「两端算出来的码对不上」这件事放过去。
     const pairingProtocol = Number((health as any)?.pairing ?? 3);
-    if (pairingProtocol < 4) {
-      if (mode === 'link') {
-        set({
-          pair: {
-            status: 'error',
-            mode: 'scan',
-            message: '手机版本太旧，只能扫码配对 —— 把手机上的 MiuList 更新一下。',
-          },
-        });
-        return;
-      }
-      await startLegacyPairing(mode);
+    if (pairingProtocol < 5) {
+      set({
+        pair: {
+          status: 'error',
+          mode,
+          message:
+            '手机版本太旧，请更新 MiuList App 后再配对。',
+        },
+      });
+      toast('手机版本太旧，请更新 MiuList App 后再配对', 'error');
       return;
     }
     await startDhPairing(mode);
@@ -521,7 +560,7 @@ export async function requestPairCode(force = false, mode: PairMode = 'scan'): P
 }
 
 /**
- * 新协议（v3.1）：**DH 协商**。
+ * 新协议（v3.2）：**DH 协商**。
  *
  * 密钥是两端各自算出来的，**从不过网** —— 过网的只有公钥。
  */
@@ -529,10 +568,8 @@ async function startDhPairing(mode: PairMode): Promise<void> {
   const keypair = dhGenerateKeypair();
   const requestId = toBase64Url(randomBytes(16));
   const publicKey = toBase64Url(keypair.pub);
-  // 配对码是**公钥**的哈希：电脑算得出自己的，手机收到公钥也算得出同一个。
-  // 用户拿两个码一对，就知道「手机上要连的」是不是眼前这台电脑。
-  const code = pairCodeOf(keypair.pub);
   pairPriv = keypair.priv;
+  pairPub = keypair.pub;
 
   const body: Record<string, unknown> = { requestId, deviceName: '电脑网页端' };
   // 「只填地址」那条路：公钥跟着请求走。
@@ -547,40 +584,23 @@ async function startDhPairing(mode: PairMode): Promise<void> {
     plain: true,
     timeoutMs: 8000,
   });
-  set({ pair: { status: 'waiting', requestId, code, mode, publicKey } });
-  pollPair({ requestId, code, mode, publicKey });
-}
-
-/**
- * 旧协议（v3）：secret 从二维码搬到手机上。
- *
- * 只在**手机还是旧版**时走 —— 新手机也认这条路（为了兼容旧网页端）。
- */
-async function startLegacyPairing(mode: PairMode): Promise<void> {
-  const devSecret = devParam('devsecret');
-  const secretBytes = devSecret ? fromBase64Url(devSecret) : randomBytes(32);
-  const secret = toBase64Url(secretBytes);
-  const requestId = toBase64Url(sha256(secretBytes).slice(0, 16));
-  await api('/api/pair/request', {
-    method: 'POST',
-    body: { requestId, deviceName: '电脑网页端' },
-    auth: false,
-    plain: true,
-    timeoutMs: 8000,
-  });
-  // 旧网页端显示的就是 requestId 的前 6 位 —— 手机那边也显示一样的。
-  const code = requestId.slice(0, 6).toUpperCase();
-  set({ pair: { status: 'waiting', requestId, secret, code, mode } });
-  pollPair({ requestId, secret, code, mode });
+  // **配对码这里还拿不到**：v3.2 的码是「双方公钥」的哈希，
+  // 手机的公钥要等 `/api/pair/status` 回包里才有。
+  // 所以先空着，等轮询拿到对端公钥再补上（见 pollPair）。
+  set({ pair: { status: 'waiting', requestId, code: null, mode, publicKey } });
+  pollPair({ requestId, mode, publicKey });
 }
 
 /** 一次配对的现场。 */
 type PairAttempt = {
   requestId: string;
-  /** 旧协议：secret 本身。新协议：null（走 DH 协商）。 */
-  secret?: string;
-  /** 配对码（用户核对用）。 */
-  code: string;
+  /**
+   * 配对码（用户核对用）。
+   *
+   * **一开始是空的**：v3.2 的码要等手机的公钥才知道。
+   * 真正拿去核对的是「自己算出来的那个」，不是手机报上来的。
+   */
+  code?: string | null;
   mode: PairMode;
   /** 新协议：电脑的 DH 公钥（base64url），二维码里带的就是它。 */
   publicKey?: string;
@@ -601,7 +621,6 @@ function pollPair(attempt: PairAttempt): void {
         pair: {
           status: 'expired',
           requestId: attempt.requestId,
-          secret: attempt.secret,
           code: attempt.code,
           mode: attempt.mode,
           message: '配对码过期了，或手机一直没响应。',
@@ -614,37 +633,52 @@ function pollPair(attempt: PairAttempt): void {
         `/api/pair/status?requestId=${encodeURIComponent(attempt.requestId)}`,
         { auth: false, timeoutMs: 6000 },
       );
+      // **手机的公钥一到就能算出码了**：v3.2 的码是 H(自己 ‖ 对方)。
+      // 先把它显示出来，用户可以早点跟手机屏幕上的码对上，
+      // 不用等到批准那一刻才知道对不对。
+      const expected = pairCodeFromStatus(res);
+      // **重新读一次状态**：上面那次 await 期间用户可能已经取消了配对，
+      // 拿旧状态回写会把「已取消」复活成「还在等」。
+      const latest = get().pair;
+      if (
+        expected &&
+        latest.status === 'waiting' &&
+        latest.requestId === attempt.requestId &&
+        latest.code !== expected
+      ) {
+        attempt.code = expected;
+        set({ pair: { ...latest, code: expected } });
+      }
       if (res?.state === 'approved' && res.deviceId) {
         stopPairPolling();
-        const secret = attempt.secret ?? resolveDhSecret(res, attempt);
-        if (!secret) {
-          stopPairPolling();
+        const result = resolveDhSecret(res);
+        if (!result) {
           set({
             pair: {
               status: 'error',
               requestId: attempt.requestId,
-              code: attempt.code,
+              code: expected ?? attempt.code,
               mode: attempt.mode,
-              message: '配对码对不上 —— 可能有人在中间拦截，别点「允许」。',
+              message: '配对码对不上，已中止配对。请确认扫的是这台设备上的码。',
             },
           });
           toast('配对码对不上，已中止配对', 'error');
           return;
         }
         set({
-          secret,
+          secret: result.secret,
           deviceId: res.deviceId,
           pair: {
             status: 'approved',
             requestId: attempt.requestId,
-            secret,
-            code: attempt.code,
+            secret: result.secret,
+            code: result.code,
             mode: attempt.mode,
           },
           phoneReachable: true,
         });
-        persistSession(secret, res.deviceId);
-        initKeys(secret);
+        persistSession(result.secret, res.deviceId);
+        initKeys(result.secret);
         stopEvents();
         connectEvents();
         ensurePolling();
@@ -656,7 +690,6 @@ function pollPair(attempt: PairAttempt): void {
           pair: {
             status: res.state,
             requestId: attempt.requestId,
-            secret: attempt.secret,
             code: attempt.code,
             mode: attempt.mode,
             message: res.state === 'expired' ? '配对码过期了，换一个再扫。' : '手机那边拒绝了。',
@@ -670,28 +703,73 @@ function pollPair(attempt: PairAttempt): void {
 }
 
 /**
- * 拿手机回的公钥算出共享密钥 —— **顺便核对配对码**。
+ * 从 `/api/pair/status` 的回包里算出「**电脑这边**的配对码」。
+ *
+ * 码 = H(A‖B)：A = 自己的公钥（电脑），B = 对端的公钥（手机）。
+ * **顺序不能反** —— 手机那边也是按这个顺序算的，反了就永远对不上。
+ *
+ * 手机的公钥没到就返回 null（此时还算不出码），公钥不合法也返回 null ——
+ * 宁可不出码，也不能给一个假的。
+ */
+function pairCodeFromStatus(res: any): string | null {
+  const peerPubB64 = res?.publicKey;
+  if (!peerPubB64 || typeof peerPubB64 !== 'string' || !pairPub) return null;
+  try {
+    const peerPub = fromBase64Url(peerPubB64);
+    // 退化公钥（0 / 1 / p-1）会让共享密钥变成公开常量，先查掉。
+    dhValidatePublicKey(peerPub);
+    return pairCodeOf(pairPub, peerPub);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 拿手机回的公钥算出共享密钥 —— **强制核对配对码**。
  *
  * ## 为什么核对码这么重要
  *
- * 配对码是**电脑那个公钥**的哈希。手机报上来的码必须跟电脑自己算的
+ * 配对码是「双方公钥的转录哈希 H(A‖B)」。手机报上来的码必须跟电脑自己算的
  * 一个字不差：对不上，说明有人在中间把公钥换掉了 ——
  * 这时宁可配不成，也不能拿一把来路不明的密钥去加密数据。
  *
- * @returns secret（base64url）；对不上时返回 null。
+ * ## 为什么是「强制」
+ *
+ * 以前写的是「有码才比」—— 响应里**缺** `pairCode` 字段时整段校验被跳过，
+ * 等于给中间人留了一条「不带这个字段就绕过」的后门。
+ * 现在**缺码与不等码都中止**。
+ *
+ * @returns 成功时是 `{ secret, code }`；任何一处对不上就返回 null。
  */
-function resolveDhSecret(res: any, attempt: PairAttempt): string | null {
+function resolveDhSecret(res: any): { secret: string; code: string } | null {
   const peerPubB64 = res?.publicKey;
-  if (!peerPubB64 || !pairPriv) return null;
-  if (res?.pairCode && res.pairCode !== attempt.code) return null;
-  const peerPub = fromBase64Url(peerPubB64);
-  return toBase64Url(dhSharedSecret(pairPriv, peerPub));
+  if (!peerPubB64 || typeof peerPubB64 !== 'string') return null;
+  if (!pairPriv || !pairPub) return null;
+  let peerPub: Uint8Array;
+  try {
+    peerPub = fromBase64Url(peerPubB64);
+    // 先查公钥 —— 退化公钥会让共享密钥变成**全世界都知道的常量**。
+    dhValidatePublicKey(peerPub);
+  } catch {
+    return null;
+  }
+  // A = 自己（电脑），B = 对端（手机）。
+  const expected = pairCodeOf(pairPub, peerPub);
+  // **强制比对**：缺码即中止，不等即中止。
+  if (!res.pairCode) return null;
+  if (res.pairCode !== expected) return null;
+  try {
+    return { secret: toBase64Url(dhSharedSecret(pairPriv, peerPub)), code: expected };
+  } catch {
+    return null;
+  }
 }
 
 export function cancelPair(): void {
   stopPairPolling();
-  // 私钥也一起扔掉 —— 换一条路重来时不该留着上一把。
+  // 私钥与公钥一起扔掉 —— 换一条路重来时不该留着上一把。
   pairPriv = null;
+  pairPub = null;
   set({ pair: { status: 'idle' } });
 }
 
@@ -721,7 +799,7 @@ export async function connectBase(
   persistBase(base);
   const health = await probePhone();
   if (!health) {
-    toast('这个地址上没有 MiuList 服务。确认手机开着「局域网服务」。', 'error');
+    toast('这个地址上没有 MiuList 服务。确认手机上的「网页同步」已经打开。', 'error');
     return false;
   }
   const s = get();
@@ -1226,7 +1304,7 @@ export async function syncConfigPush(): Promise<void> {
   const s = get();
   if (!s.base || !s.secret || !s.deviceId) return;
   if (!(s.snapshot.courses?.length || 0)) {
-    toast('本页还没有课程。先导入一份 JSON 快照，或用手机的课表。', 'error');
+    toast('本页还没有课程。先导入一份备份文件，或用手机的课表。', 'error');
     return;
   }
   set({ syncing: true, syncError: null });
@@ -1469,7 +1547,7 @@ function bindGlobalEvents(): void {
     }
   });
   window.addEventListener('miulist:storage-error', () => {
-    toast('浏览器本地存储写不下了，快照可能没保存。', 'error');
+    toast('浏览器本地存储写不下了，数据可能没保存。', 'error');
   });
 }
 
@@ -1514,7 +1592,11 @@ export async function boot(): Promise<void> {
     }
   } else if (s.base && !s.secret) {
     const health = await probePhone();
-    if (health && devParam('devsecret') && get().pair.status === 'idle') {
+    // 地址有了但还没配对 → 这里**只登记一条配对请求**，让手机知道有人想连。
+    // 扫码模式（默认）不会在这里带公钥，手机上因此还不会出现确认卡；
+    // 要等用户扫码、把二维码里的公钥交给 App，手机拿到密钥材料后才会弹。
+    // 「只填地址」模式才会在这次请求里直接带公钥。
+    if (health && get().pair.status === 'idle') {
       await requestPairCode();
     }
   }

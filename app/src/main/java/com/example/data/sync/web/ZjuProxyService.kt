@@ -64,6 +64,27 @@ class ZjuProxyService(
         // 半填比不填更容易出事 —— 拿旧密码配新学号会得到一个看不懂的失败。
         val useSaved = !hasCredentials
 
+        if (!useSaved) {
+            // **远端带来的学号必须与这台手机上已绑定的账号一致。**
+            //
+            // 不一致意味着：网页端（或冒充网页端的东西）在借这台手机
+            // 去登**另一个**账号。后果有两样：
+            //
+            // - 用户自己在 App 里绑定的那个账号会被顶掉；
+            // - 反复拿别人的学号去试，能把**那个账号**刷到锁定
+            //   （浙大明确有「密码错误次数过多」的锁定状态）。
+            //
+            // 手机上还没绑过账号时不拦 —— 那是「第一次用网页端」的正常情况。
+            val savedId = secureStorage.getStudentId()?.trim()
+            if (!savedId.isNullOrBlank() && savedId != studentId!!.trim()) {
+                return ZjuProxy.Outcome.Failed(
+                    kind = "ACCOUNT",
+                    reason = "网页端带来的学号与这台手机上已绑定的账号不一致，已拒绝",
+                    localDataIntact = true,
+                )
+            }
+        }
+
         val option = resolveTerm(year, term)
             ?: return ZjuProxy.Outcome.Failed(
                 kind = "TERM",

@@ -295,6 +295,50 @@ class SnapshotApplierTest {
         )
     }
 
+    // ── 整份替换的护栏（协议 v3.2 起） ─────────────────────────
+    //
+    // 「以对方为准」会**先清空**本机的课程、考试与待办，再灌远端那份。
+    // 一台已配对设备（或者拿到了密钥的人）发一个空快照过来，本机的数据就没了。
+    //
+    // 判据：远端比本机少「**超过 20 条**且**超过一半**」就拒绝整份替换。
+    // 两个条件取「与」而不是「或」—— 小数据集（几条待办）不该被误伤。
+
+    @Test
+    fun `整份替换时远端少得太多会被拒绝 - 本机的数据要保住`() = runBlocking {
+        repeat(30) { seedTask("local-$it", "本机第 $it 条", updatedAt = 100L) }
+
+        val error = runCatching {
+            applier.apply(WebSnapshotDto(tasks = emptyList()), SyncMode.REPLACE)
+        }.exceptionOrNull()
+
+        assertNotNull("远端 0 条、本机 30 条 —— 这不是同一份数据的两个版本，必须拒绝", error)
+        assertTrue("必须是护栏抛的错", error is SnapshotGuardException)
+        assertEquals("本机的待办一条都不许少", 30, container.taskRepository.getAllTasksOnce().size)
+    }
+
+    @Test
+    fun `小数据集不误伤 - 少几条是正常的`() = runBlocking {
+        seedTask("local-1", "本机第 1 条", updatedAt = 100L)
+        seedTask("local-2", "本机第 2 条", updatedAt = 100L)
+
+        // 少 1 条：既没超过 20 条，也没超过一半 → 放行。
+        applier.apply(
+            WebSnapshotDto(tasks = listOf(remoteTask("local-1", "本机第 1 条", updatedAt = 100L))),
+            SyncMode.REPLACE,
+        )
+
+        assertEquals(1, container.taskRepository.getAllTasksOnce().size)
+    }
+
+    @Test
+    fun `merge 模式不受护栏限制 - 增量同步本来就不删东西`() = runBlocking {
+        repeat(30) { seedTask("local-$it", "本机第 $it 条", updatedAt = 100L) }
+
+        applier.apply(WebSnapshotDto(tasks = emptyList()), SyncMode.MERGE)
+
+        assertEquals("merge 不该动本机的任何一条", 30, container.taskRepository.getAllTasksOnce().size)
+    }
+
     /** 远端带着课程列表却**没带标记**：那也不能替换本机的课表。 */
     @Test
     fun `远端带着课程但没标记时 - 本机课表不动 - 对不上的待办就是未关联`() = runBlocking {

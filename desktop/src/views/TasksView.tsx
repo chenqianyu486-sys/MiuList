@@ -265,7 +265,7 @@ export function TasksView() {
           <div className="aside-card glass-soft">
             <div className="aside-card-head">
               <FileJson2 size={16} />
-              <span>本机快照</span>
+              <span>本机备份</span>
             </div>
             {state.snapshotFile.active ? (
               <>
@@ -276,14 +276,14 @@ export function TasksView() {
                     : '编辑后会自动保存'}
                 </p>
                 <Button variant="ghost" onClick={() => openSync('snapshot')}>
-                  管理等快照
+                  管理备份文件
                 </Button>
               </>
             ) : (
               <>
-                <p className="aside-note">可选择一份 JSON 文件，让数据自动落盘；不含配对密钥。</p>
+                <p className="aside-note">选一份文件，之后每次改动都会自动写进去。</p>
                 <Button variant="soft" onClick={() => openSync('snapshot')}>
-                  选择快照文件
+                  选择备份文件
                 </Button>
               </>
             )}

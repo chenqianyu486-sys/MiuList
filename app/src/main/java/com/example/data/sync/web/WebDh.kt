@@ -75,8 +75,8 @@ object WebDh {
      */
     private const val PAIR_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
-    /** 配对码的标签。**必须与网页端逐字相同。** */
-    private const val PAIR_CODE_LABEL = "miulist-paircode-v3.1"
+    /** 配对码的标签。**必须与网页端逐字相同**（协议 v3.2）。 */
+    private const val PAIR_CODE_LABEL = "miulist-paircode-v3.2"
 
     /**
      * 生成一对临时密钥。
@@ -109,25 +109,62 @@ object WebDh {
     fun sharedSecret(priv: ByteArray, peerPub: ByteArray): ByteArray {
         require(priv.size == PRIV_BYTES) { "私钥必须是 $PRIV_BYTES 字节" }
         require(peerPub.size == KEY_BYTES) { "公钥必须是 $KEY_BYTES 字节" }
+        validatePublicKey(peerPub)
         val shared = BigInteger(1, peerPub).modPow(BigInteger(1, priv), P)
+        // 兜底：共享值同样不能是 1 或 p-1（正常情况下前面那步已经挡住了）。
+        require(shared > BigInteger.ONE && shared < P - BigInteger.ONE) { "共享密钥退化，配对中止" }
         return WebCrypto.sha256(toFixedBytes(shared, KEY_BYTES))
     }
 
     /**
-     * **配对码**：公钥的 6 位短码，给用户肉眼核对。
+     * **公钥合法性校验**（协议 v3.2 起强制）。
      *
-     * 为什么是公钥的哈希而不是共享密钥的哈希：共享密钥要等两端都拿到
-     * 对方公钥才算得出来 —— 那时配对已经成了，再拿它核对就晚了。
-     * 而**公钥一开始双方就有了**：电脑显示二维码时就能算出自己的码，
-     * 手机扫到公钥时算出同一个码。
+     * ## 为什么必须查
      *
-     * 于是这个码真正挡住的是「有人在中间换了公钥」：
-     * 电脑显示 `7K2M9Q`，手机上却是 `B4XR8T` —— 用户一看就知道不对。
+     * 只查长度（256 字节）是不够的 —— 下面几个值长度都对，
+     * 却会让共享密钥退化成**全世界都知道的常量**：
      *
-     * @param pub 公钥（256 字节）
+     * | 对端公钥 | 共享值 S | 后果 |
+     * |---|---|---|
+     * | `0` | 无意义 | 无法协商 |
+     * | `1` | `1` | secret = sha256(定长的 1)，谁都能算出来 |
+     * | `p-1` | `p-1` | 同上 |
+     *
+     * ## 为什么只查这一条就够了
+     *
+     * group 14 的 p 是**安全素数**（p 与 (p-1)/2 都是素数，RFC 3526 §3），
+     * 这个群里的子群只有阶 1 与阶 2 两种 —— 也就是「1」与「p-1」本身。
+     * 把这两个（以及 0）排除掉，就不存在别的「小阶公钥」可用。
      */
-    fun pairCode(pub: ByteArray): String {
-        val digest = WebCrypto.sha256(PAIR_CODE_LABEL.toByteArray(Charsets.UTF_8) + pub)
+    fun validatePublicKey(pub: ByteArray) {
+        require(pub.size == KEY_BYTES) { "公钥必须是 $KEY_BYTES 字节" }
+        val v = BigInteger(1, pub)
+        require(v > BigInteger.ONE && v < P - BigInteger.ONE) {
+            "公钥不在合法范围（退化公钥会让共享密钥变成公开常量）"
+        }
+    }
+
+    /**
+     * **配对码**：两端公钥的 6 位短码，给用户肉眼核对。
+     *
+     * ## 为什么是「双方公钥」的哈希（协议 v3.2 改过）
+     *
+     * v3.1 的配对码是 `H(A)` —— **只有发起方（电脑）的公钥**。
+     * 它能证明「我看到的 A 跟你看到的一样」，但**证明不了对面是谁**：
+     * 因为对面报上来的本来就是从 A 算出来的码。
+     *
+     * v3.2 改成 `H(A‖B)`（A = 电脑公钥，B = 手机公钥）—— **转录绑定**。
+     * 两端各自都拿得到 A 与 B，所以都能算；一旦中间人换掉其中任何一个，
+     * 两端算出来的码就对不上。
+     *
+     * **顺序不能反** —— 与 `web/crypto.js` 里的 `pairCodeOf(pubA, pubB)` 一致。
+     *
+     * @param pubA 发起方（电脑）的公钥（256 字节）
+     * @param pubB 响应方（手机）的公钥（256 字节）
+     */
+    fun pairCode(pubA: ByteArray, pubB: ByteArray): String {
+        require(pubA.size == KEY_BYTES && pubB.size == KEY_BYTES) { "公钥必须是 $KEY_BYTES 字节" }
+        val digest = WebCrypto.sha256(PAIR_CODE_LABEL.toByteArray(Charsets.UTF_8) + pubA + pubB)
         val sb = StringBuilder(6)
         for (i in 0 until 6) {
             sb.append(PAIR_ALPHABET[(digest[i].toInt() and 0xff) % 32])

@@ -157,9 +157,6 @@ class MainActivity : ComponentActivity() {
         WebSyncViewModelFactory((application as MiuListApplication).container)
     }
 
-    /** 深链带回来的配对码，等界面把它显示出来。 */
-    private var pendingPairingCode: String? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -172,7 +169,10 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 局域网配对的深链：`miulist://pair?v=3&s=<secret>&r=<requestId>`。
+     * 局域网配对的深链：
+     *
+     * - `miulist://pair?v=5&k=<公钥>&r=<requestId>` —— 协议 v3.2（DH 协商）；
+     * - `miulist://pair?v=3&s=<secret>&r=<requestId>` —— 老协议，仍然认。
      *
      * 走深链而不是让网页端直接调接口，是因为**授权必须发生在手机上**：
      * 局域网里任何设备都能访问这个服务，光有配对码不构成授权。
@@ -199,7 +199,8 @@ class MainActivity : ComponentActivity() {
         val publicKey = data.getQueryParameter("k")?.trim().orEmpty()
         val secret = data.getQueryParameter("s")?.trim().orEmpty()
         if (publicKey.isEmpty() && secret.isEmpty()) return
-        pendingPairingCode = requestId
+        // 扫码深链这条路拿不到来源地址（服务端根本没见到这条 TCP 连接），
+        // 所以 sourceAddress 留空 —— 界面上会显示「来源未知」并加警告。
         webSyncViewModel.offerPairing(requestId, secret, publicKey)
     }
 }
@@ -600,8 +601,8 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
         ?: remember { MutableStateFlow(WebSyncUiState()) }
     ).collectAsStateWithLifecycle()
 
-    LaunchedEffect(webSyncState.pendingPairing) {
-        if (webSyncState.pendingPairing) webSyncVisible = true
+    LaunchedEffect(webSyncState.pendingPairings) {
+        if (webSyncState.pendingPairings.isNotEmpty()) webSyncVisible = true
     }
     LaunchedEffect(webSyncState.message) {
         webSyncState.message?.let {
@@ -1236,15 +1237,13 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                 addresses = webSyncState.addresses,
                 port = webSyncState.port,
                 pairedDevices = webSyncState.pairedDevices,
-                pendingPairing = webSyncState.pendingPairing,
-                pendingPairCode = webSyncState.pendingPairCode,
-                pendingDeviceName = webSyncState.pendingDeviceName,
+                pendingPairings = webSyncState.pendingPairings,
                 hasPasscode = webSyncState.hasPasscode,
                 localLatestEditAt = webSyncState.localLatestEditAt,
                 remoteLatestEditAt = webSyncState.remoteLatestEditAt,
                 onToggleService = { enabled -> webSyncViewModel.setServiceEnabled(enabled) },
-                onApprove = { webSyncViewModel.approve() },
-                onDeny = { webSyncViewModel.deny() },
+                onApprove = { requestId -> webSyncViewModel.approve(requestId) },
+                onDeny = { requestId -> webSyncViewModel.deny(requestId) },
                 onRevoke = { deviceId -> webSyncViewModel.revoke(deviceId) },
                 onRequestSync = { direction -> webSyncViewModel.requestSync(direction) },
                 onSetPasscode = { passcode -> webSyncViewModel.setPasscode(passcode) },

@@ -34,7 +34,8 @@ class WebDhTest {
     private val pubB =
         "Rn64Z7aPzX3ybA11oK1pAQEDNHvcwEHOhRtHFWb7RcghLds9cjyFxPwCYIgJiB1VpE1hfKMPL1If1__svnZWdfIqFeNt7sKvlPO3ELXF5-R323Y2oHzjvbFS7N2nICYdDSSTFQjRA9-qfCYIRB6aXZdXyBGZG0PQM1dPe6wdO4jRFhkoCA8MFwYCiAY76MGCkABekSOJo5oSOpFxE476KAUj7bFxDKjEg31JAcshWs7AwS1ZFLE7EHmZNzc5kwkER8uJYGVQsyDUCWlSmSyS3mBMCNhkl4HolhLhdcZWizUCIaI9ocYRPVSdi5ROnxY5HRKCXcVg4HpNDqF64jNyEQ"
     private val shared = "mOILLb-KxF2Ne3O_syKW6Qh43qhW0KXTO5Dh7Xk1vEQ"
-    private val codeA = "CJXWBZ"
+    /** 协议 v3.2 的配对码向量：H(A‖B)，与 `web/crypto.test.mjs` 同一组。 */
+    private val pairCodeAB = "GPP7WE"
 
     @Test
     fun `模数是 2048 位安全素数`() {
@@ -61,10 +62,49 @@ class WebDhTest {
 
     @Test
     fun `配对码与网页端一致 - 且不含容易混淆的字母`() {
-        val code = WebDh.pairCode(b64(pubA))
-        assertEquals(codeA, code)
+        // 协议 v3.2：配对码是 **H(A‖B)**（双方公钥的转录绑定），
+        // 与 `web/crypto.test.mjs` 里那组向量逐字对上。
+        val code = WebDh.pairCode(b64(pubA), b64(pubB))
+        assertEquals(pairCodeAB, code)
         assertEquals(6, code.length)
         assertTrue(!code.contains('I') && !code.contains('L') && !code.contains('O') && !code.contains('U'))
+    }
+
+    @Test
+    fun `配对码与公钥顺序有关 - 换序就是另一个码`() {
+        assertNotEquals(WebDh.pairCode(b64(pubA), b64(pubB)), WebDh.pairCode(b64(pubB), b64(pubA)))
+    }
+
+    @Test
+    fun `退化公钥一律被拒 - 否则共享密钥会变成公开常量`() {
+        // 值 1：共享值会退化成 1，secret = sha256(定长的 1)，谁都能算出来。
+        val one = ByteArray(WebDh.KEY_BYTES).also { it[it.lastIndex] = 1 }
+        val zero = ByteArray(WebDh.KEY_BYTES)
+        // p-1：同样会退化。
+        val pMinus1 = WebDh.groupPrimeHex().let { hex ->
+            val p = java.math.BigInteger(hex, 16).subtract(java.math.BigInteger.ONE)
+            val out = ByteArray(WebDh.KEY_BYTES)
+            val raw = p.toByteArray()
+            System.arraycopy(raw, maxOf(0, raw.size - WebDh.KEY_BYTES), out, WebDh.KEY_BYTES - minOf(raw.size, WebDh.KEY_BYTES), minOf(raw.size, WebDh.KEY_BYTES))
+            out
+        }
+        for (bad in listOf(one, zero, pMinus1)) {
+            try {
+                WebDh.validatePublicKey(bad)
+                throw AssertionError("退化公钥必须被拒")
+            } catch (e: IllegalArgumentException) {
+                // 预期之内
+            }
+        }
+        // 长度不对的也要拒
+        try {
+            WebDh.validatePublicKey(ByteArray(10))
+            throw AssertionError("长度不对的公钥必须被拒")
+        } catch (e: IllegalArgumentException) {
+            // 预期之内
+        }
+        // 正常公钥要能过
+        WebDh.validatePublicKey(b64(pubA))
     }
 
     @Test

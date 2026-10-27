@@ -18,6 +18,7 @@ import {
   sha256, hmacSha256, chacha20, deriveKeys, seal, open,
   toBase64Url, fromBase64Url, randomBytes, utf8Bytes, concatBytes,
   dhGenerateKeypair, dhPublicKey, dhSharedSecret, pairCodeOf, dhGroup,
+  dhValidatePublicKey,
 } from './crypto.js';
 
 let failures = 0;
@@ -189,7 +190,8 @@ console.log('DH（RFC 3526 group 14）');
     pubB:
       'Rn64Z7aPzX3ybA11oK1pAQEDNHvcwEHOhRtHFWb7RcghLds9cjyFxPwCYIgJiB1VpE1hfKMPL1If1__svnZWdfIqFeNt7sKvlPO3ELXF5-R323Y2oHzjvbFS7N2nICYdDSSTFQjRA9-qfCYIRB6aXZdXyBGZG0PQM1dPe6wdO4jRFhkoCA8MFwYCiAY76MGCkABekSOJo5oSOpFxE476KAUj7bFxDKjEg31JAcshWs7AwS1ZFLE7EHmZNzc5kwkER8uJYGVQsyDUCWlSmSyS3mBMCNhkl4HolhLhdcZWizUCIaI9ocYRPVSdi5ROnxY5HRKCXcVg4HpNDqF64jNyEQ',
     shared: 'mOILLb-KxF2Ne3O_syKW6Qh43qhW0KXTO5Dh7Xk1vEQ',
-    codeA: 'CJXWBZ',
+    // 协议 v3.2：配对码是 H(A‖B) 的前 6 位（**转录绑定**）——Kotlin 侧必须逐字对上。
+    pairCodeAB: 'GPP7WE',
   };
 
   const privA = fromBase64Url(V.privA);
@@ -209,9 +211,13 @@ console.log('DH（RFC 3526 group 14）');
   check('共享密钥与向量一致', toBase64Url(s1) === V.shared);
   check('共享密钥是 32 字节', s1.length === 32);
 
-  check('配对码与向量一致', pairCodeOf(pubA) === V.codeA);
-  check('配对码是 6 个字符', pairCodeOf(pubA).length === 6);
-  check('配对码不含容易混淆的 I L O U', !/[ILOU]/.test(pairCodeOf(pubA)));
+  check('配对码与向量一致（H(A‖B)）', pairCodeOf(pubA, pubB) === V.pairCodeAB);
+  check('配对码是 6 个字符', pairCodeOf(pubA, pubB).length === 6);
+  check('配对码不含容易混淆的 I L O U', !/[ILOU]/.test(pairCodeOf(pubA, pubB)));
+  check(
+    '配对码与公钥顺序有关（换序即不同码）',
+    pairCodeOf(pubA, pubB) !== pairCodeOf(pubB, pubA),
+  );
 
   // 随机生成的一对：两端算出的共享密钥必须一致
   const a = dhGenerateKeypair();
@@ -222,6 +228,37 @@ console.log('DH（RFC 3526 group 14）');
   );
   check('随机公钥是 256 字节', a.pub.length === 256 && b.pub.length === 256);
   check('不同密钥对算出的密钥不同', toBase64Url(dhSharedSecret(a.priv, b.pub)) !== toBase64Url(dhSharedSecret(a.priv, a.pub)));
+
+  // ── 退化公钥必须被拒（协议 v3.2） ──────────────────────────
+  //
+  // 这几个值长度都是 256 字节，但会让共享密钥退化成**公开常量**：
+  // 公钥 = 1 → S = 1 → secret = sha256(定长的 1)，谁都能算出来。
+  const rejects = (pub) => {
+    try {
+      dhValidatePublicKey(pub);
+      return false;
+    } catch {
+      return true;
+    }
+  };
+  const zeroPub = new Uint8Array(256);
+  const onePub = new Uint8Array(256);
+  onePub[255] = 1;
+  const P = BigInt('0x' + dhGroup.pHex);
+  const toFixed = (v) => {
+    const out = new Uint8Array(256);
+    let x = v;
+    for (let i = 255; i >= 0; i--) { out[i] = Number(x & 0xffn); x >>= 8n; }
+    return out;
+  };
+  check('全零公钥被拒', rejects(zeroPub));
+  check('值为 1 的公钥被拒', rejects(onePub));
+  check('p-1 被拒', rejects(toFixed(P - 1n)));
+  check('长度不对的公钥被拒', rejects(new Uint8Array(255)));
+  check('合法公钥通过校验', dhValidatePublicKey(a.pub) === true);
+  check('退化公钥不能算出共享密钥', rejects(onePub) && !(() => {
+    try { dhSharedSecret(a.priv, onePub); return true; } catch { return false; }
+  })());
 }
 
 console.log(failures === 0 ? '\n全部通过' : `\n${failures} 条失败`);

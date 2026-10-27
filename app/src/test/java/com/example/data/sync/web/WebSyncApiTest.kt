@@ -39,7 +39,13 @@ class WebSyncApiTest {
     /** 假的「手机代跑学在浙大」。真实现要网络与 Keystore，接口层不该依赖那些。 */
     private val zjuProxy = FakeZjuProxy()
 
-    private fun setUpApi(): WebSyncApi {
+    private fun setUpApi(
+        snapshotApplier: suspend (WebSnapshotDto, SyncMode) -> SnapshotApplier.Report = { dto, mode ->
+            appliedMode = mode
+            appliedSnapshot = dto
+            SnapshotApplier.Report(tasks = dto.tasks.size, appliedUids = dto.tasks.map { it.syncUid })
+        },
+    ): WebSyncApi {
         pairing = PairingStore(clock = { now }, idGenerator = { "dev-1" })
         val req = pairing.request(pairing.requestIdOf(secret), "网页端")
         device = pairing.approve(req.requestId, secret, passcode = "", deviceName = "网页端")!!
@@ -78,11 +84,7 @@ class WebSyncApiTest {
             revisionProvider = { 7L },
             deviceName = { "测试手机" },
             appVersion = { "1.0.4" },
-            snapshotApplier = { dto, mode ->
-                appliedMode = mode
-                appliedSnapshot = dto
-                SnapshotApplier.Report(tasks = dto.tasks.size, appliedUids = dto.tasks.map { it.syncUid })
-            },
+            snapshotApplier = snapshotApplier,
             zjuProxy = zjuProxy,
         )
     }
@@ -152,6 +154,85 @@ class WebSyncApiTest {
             HttpRequest("POST", "/api/pair/request", emptyMap(), emptyMap(), "{}".toByteArray())
         )
         assertEquals(400, statusOf(reply))
+    }
+
+    private fun pairRequest(
+        api: WebSyncApi,
+        requestId: String,
+        host: String,
+        port: Int,
+    ): Int = statusOf(
+        api.handle(
+            HttpRequest(
+                method = "POST",
+                path = "/api/pair/request",
+                query = emptyMap(),
+                headers = emptyMap(),
+                body = """{"requestId":"$requestId"}""".toByteArray(),
+                remoteAddress = "$host:$port",
+                remoteHost = host,
+                remotePort = port,
+            )
+        )
+    )
+
+    @Test
+    fun `同一 IP 换临时端口仍受同一份限流配额约束`() {
+        val api = setUpApi()
+        repeat(PairingStore.MAX_REQUESTS_PER_SOURCE) { i ->
+            assertEquals(
+                "第 ${i + 1} 次应当放行",
+                200,
+                pairRequest(api, "same-ip-$i", "192.168.1.5", 40000 + i),
+            )
+        }
+        assertEquals(
+            "端口变了不该换来新配额",
+            429,
+            pairRequest(api, "same-ip-over", "192.168.1.5", 50000),
+        )
+    }
+
+    @Test
+    fun `不同 IP 不互相影响 - 窗口过后恢复`() {
+        val api = setUpApi()
+        repeat(PairingStore.MAX_REQUESTS_PER_SOURCE) { i ->
+            assertEquals(200, pairRequest(api, "ip-a-${i.toString().padStart(3, '0')}", "192.168.1.5", 40000 + i))
+        }
+        assertEquals(429, pairRequest(api, "ip-a-over", "192.168.1.5", 50000))
+        assertEquals("另一个 IP 有它自己的配额", 200, pairRequest(api, "ip-b-000", "192.168.1.6", 40000))
+
+        now += PairingStore.RATE_WINDOW_MS + 1
+        assertEquals("窗口过了应恢复", 200, pairRequest(api, "ip-a-again", "192.168.1.5", 50001))
+    }
+
+    @Test
+    fun `并发申请不能绕过限流`() {
+        val api = setUpApi()
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(16)
+        try {
+            val start = java.util.concurrent.CountDownLatch(1)
+            val tasks = (0 until 32).map { i ->
+                pool.submit<Int> {
+                    start.await()
+                    pairRequest(api, "concurrent-$i", "192.168.1.9", 45000 + i)
+                }
+            }
+            start.countDown()
+            val codes = tasks.map { it.get(5, java.util.concurrent.TimeUnit.SECONDS) }
+            assertEquals(
+                "并发下只有配额内的请求能成功",
+                PairingStore.MAX_REQUESTS_PER_SOURCE,
+                codes.count { it == 200 },
+            )
+            assertEquals(
+                "其余必须是 429，不能一起越过限制",
+                32 - PairingStore.MAX_REQUESTS_PER_SOURCE,
+                codes.count { it == 429 },
+            )
+        } finally {
+            pool.shutdownNow()
+        }
     }
 
     @Test
@@ -264,6 +345,47 @@ class WebSyncApiTest {
         )
         assertEquals(false, appliedSnapshot?.hasCourses)
         assertEquals(false, appliedSnapshot?.hasExams)
+    }
+
+    @Test
+    fun `数量护栏异常与真实落库异常返回不同提示`() {
+        val guarded = setUpApi(
+            snapshotApplier = { _, _ -> throw SnapshotGuardException("远端待办太少") },
+        )
+        val guardedBody = applyAdapter.toJson(
+            WebApplyRequest(mode = "replace", snapshot = WebSnapshotDto(tasks = emptyList())),
+        )
+        val guardedReply = guarded.handle(
+            signedRequest(
+                guarded,
+                method = "POST",
+                path = "/api/snapshot/apply",
+                body = guardedBody.toByteArray(),
+                encryptBody = true,
+            )
+        )
+        val guardedText = guardedReply.decrypt()
+        assertTrue(guardedText, guardedText.contains("已阻止可能清空数据的替换"))
+        assertFalse("护栏拒绝不是落库失败", guardedText.contains("落库失败"))
+
+        val failed = setUpApi(
+            snapshotApplier = { _, _ -> throw IllegalStateException("database is locked") },
+        )
+        val failedBody = applyAdapter.toJson(
+            WebApplyRequest(mode = "replace", snapshot = WebSnapshotDto(tasks = emptyList())),
+        )
+        val failedReply = failed.handle(
+            signedRequest(
+                failed,
+                method = "POST",
+                path = "/api/snapshot/apply",
+                body = failedBody.toByteArray(),
+                encryptBody = true,
+            )
+        )
+        val failedText = failedReply.decrypt()
+        assertTrue(failedText, failedText.contains("落库失败"))
+        assertFalse("真实落库异常不能冒充护栏提示", failedText.contains("已阻止可能清空数据的替换"))
     }
 
     @Test
@@ -396,7 +518,12 @@ class WebSyncApiTest {
         assertEquals("secret", call.password)
         assertEquals("2026-2027", call.year)
         assertEquals(0, call.term)
-        assertTrue(call.remember)
+        // **远端带来的凭据一律不写回手机的 Keystore**（协议 v3.2）。
+        //
+        // 原来这里是 `assertTrue(call.remember)`：页网端说「记住它」就记住。
+        // 那等于一台已配对的设备能把它带来的学号密码
+        // **存进这台手机的凭据存储里**，把用户自己绑定的那个账号顶掉。
+        assertFalse("远端带来的凭据不许写回 Keystore", call.remember)
         val plain = reply.decrypt()
         assertTrue(plain.contains("\"ok\":true"))
         assertTrue(plain.contains("\"courseCount\":5"))

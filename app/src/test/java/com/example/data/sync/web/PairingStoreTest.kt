@@ -27,9 +27,10 @@ class PairingStoreTest {
 
     private val secret = ByteArray(32) { it.toByte() }
 
-    private fun store() = PairingStore(
+    private fun store(onExpired: (String) -> Unit = {}) = PairingStore(
         clock = { now },
         idGenerator = { "dev-${idSeq++}" },
+        onDeviceExpired = onExpired,
     )
 
     private fun requestIdOf(s: ByteArray = secret) = PairingStore().requestIdOf(s)
@@ -145,8 +146,8 @@ class PairingStoreTest {
         assertTrue("拿到公钥就算「配得成」了", req.hasKeyMaterial)
         assertNotNull("共享密钥要算出来", req.sharedSecret)
         assertEquals(
-            "配对码必须是**公钥**的哈希 —— 电脑那边算出来的是同一个",
-            WebDh.pairCode(pub),
+            "配对码必须是**双方公钥**的哈希 —— 电脑那边算出来的是同一个",
+            WebDh.pairCode(pub, req.ephemeralPublic!!),
             req.pairCode,
         )
         // 共享密钥 = sha256(公钥协商出来的值)
@@ -185,7 +186,7 @@ class PairingStoreTest {
 
         assertEquals(PairingStore.State.PENDING, status.state)
         assertNotNull("手机要把自己的公钥回给电脑", status.publicKey)
-        assertEquals(WebDh.pairCode(pub), status.pairCode)
+        assertEquals(WebDh.pairCode(pub, status.publicKey!!), status.pairCode)
     }
 
     @Test
@@ -200,7 +201,7 @@ class PairingStoreTest {
         val again = store.request("req-dh-0004", "网页端", pub)
 
         assertTrue(again.hasKeyMaterial)
-        assertEquals(WebDh.pairCode(pub), again.pairCode)
+        assertEquals(WebDh.pairCode(pub, again.ephemeralPublic!!), again.pairCode)
         assertNotNull(store.approve("req-dh-0004"))
     }
 
@@ -211,6 +212,184 @@ class PairingStoreTest {
 
         assertFalse(req.hasKeyMaterial)
         assertNull(store.approve("req-dh-0005"))
+    }
+
+    @Test
+    fun `退化公钥一律拒收 - 否则共享密钥会变成公开常量`() {
+        val store = store()
+        // 256 字节、值 1：共享值会退化成 1，secret 谁都能自己算出来。
+        val degenerate = ByteArray(WebDh.KEY_BYTES).also { it[it.lastIndex] = 1 }
+        val req = store.request("req-dh-0006", "网页端", degenerate)
+
+        assertFalse("退化公钥不能算成「配得成」", req.hasKeyMaterial)
+        assertNull(store.approve("req-dh-0006"))
+    }
+
+    @Test
+    fun `同一个来源申请太频繁会被限流 - 免鉴权接口不能被刷`() {
+        val store = store()
+        repeat(PairingStore.MAX_REQUESTS_PER_SOURCE) {
+            assertTrue(store.tryAcquireRequestSlot("192.168.1.5"))
+        }
+        assertFalse("超过配额之后要限流", store.tryAcquireRequestSlot("192.168.1.5"))
+        assertTrue("别的来源不受影响", store.tryAcquireRequestSlot("192.168.1.6"))
+    }
+
+    @Test
+    fun `限流窗口过后恢复 - 窗口外的记录会被清掉`() {
+        val store = store()
+        repeat(PairingStore.MAX_REQUESTS_PER_SOURCE) {
+            assertTrue(store.tryAcquireRequestSlot("192.168.1.5"))
+        }
+        assertFalse(store.tryAcquireRequestSlot("192.168.1.5"))
+        assertEquals(1, store.rateLimitSourceCount())
+
+        now += PairingStore.RATE_WINDOW_MS + 1
+
+        assertTrue("窗口过了就该恢复", store.tryAcquireRequestSlot("192.168.1.5"))
+        // 清理发生在新一次的检查里：旧记录被丢掉，只剩刚记下的这一条。
+        assertEquals(1, store.rateLimitSourceCount())
+    }
+
+    @Test
+    fun `窗口内没有记录的来源会从限流表里移除`() {
+        val store = store()
+        store.tryAcquireRequestSlot("192.168.1.5")
+        store.tryAcquireRequestSlot("192.168.1.6")
+        assertEquals(2, store.rateLimitSourceCount())
+
+        now += PairingStore.RATE_WINDOW_MS + 1
+        // 一次检查会先清掉所有过期来源；本次记录让表里只剩当前这个。
+        store.tryAcquireRequestSlot("192.168.1.7")
+        assertEquals(1, store.rateLimitSourceCount())
+    }
+
+    @Test
+    fun `并发申请也不能绕过限流 - 检查与记录必须是原子的`() {
+        val store = store()
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(16)
+        try {
+            val start = java.util.concurrent.CountDownLatch(1)
+            val tasks = (0 until 32).map {
+                pool.submit<Boolean> {
+                    start.await()
+                    store.tryAcquireRequestSlot("192.168.1.5")
+                }
+            }
+            start.countDown()
+            val accepted = tasks.count { it.get(5, java.util.concurrent.TimeUnit.SECONDS) }
+            assertEquals(
+                "并发下最多只能放行配额内的请求",
+                PairingStore.MAX_REQUESTS_PER_SOURCE,
+                accepted,
+            )
+        } finally {
+            pool.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `待确认的请求有上限 - 超了就拒绝新的`() {
+        val store = store()
+        repeat(PairingStore.MAX_PENDING_REQUESTS) {
+            store.request("req-cap-$it", "网页端")
+        }
+        assertFalse("到上限之后不能再接新的", store.canAcceptMore())
+    }
+
+    @Test
+    fun `设备空闲到期会连持久化那份一起清掉`() {
+        var expired: String? = null
+        val store = store { expired = it }
+        val device = store.approve(store.request(requestIdOf()).requestId, secret)!!
+        val ts = now
+        val nonce = "n1"
+        val sig = WebCrypto.signRequest(device.keys, "GET", "/api/snapshot", ts, nonce, ByteArray(0))
+
+        now += PairingStore.IDLE_TIMEOUT_MS + 1
+        assertFalse(store.verify(device.deviceId, "GET", "/api/snapshot", ts, nonce, sig, ByteArray(0)))
+        assertEquals("到期必须回调，把持久化的密钥也删掉", device.deviceId, expired)
+    }
+
+    @Test
+    fun `活跃时间更新后会持久化 - 且按约 60 秒节流`() {
+        val persisted = HashMap<String, Long>()
+        val store = PairingStore(
+            clock = { now },
+            idGenerator = { "dev-seen" },
+            onDeviceSeen = { persisted[it.deviceId] = it.lastSeenAt },
+        )
+        val device = store.approve(store.request(requestIdOf()).requestId, secret)!!
+        fun verifyNow(nonce: String): Boolean {
+            val sig = WebCrypto.signRequest(device.keys, "GET", "/api/snapshot", now, nonce, ByteArray(0))
+            return store.verify(device.deviceId, "GET", "/api/snapshot", now, nonce, sig, ByteArray(0))
+        }
+
+        assertTrue(verifyNow("seen-1"))
+        assertEquals("第一次活跃必须落盘", now, persisted[device.deviceId])
+
+        now += 30_000
+        assertTrue(verifyNow("seen-2"))
+        assertEquals("窗口内的第二次请求不该再写盘", now - 30_000, persisted[device.deviceId])
+
+        now += 31_000
+        assertTrue(verifyNow("seen-3"))
+        assertEquals("超过 60 秒后要写最新值", now, persisted[device.deviceId])
+    }
+
+    @Test
+    fun `重启后使用持久化的活跃时间 - 仍活跃的设备不会被误删`() {
+        val persisted = HashMap<String, Long>()
+        val store = PairingStore(
+            clock = { now },
+            idGenerator = { "dev-restart" },
+            onDeviceSeen = { persisted[it.deviceId] = it.lastSeenAt },
+        )
+        val device = store.approve(store.request(requestIdOf()).requestId, secret)!!
+        val pairedAt = device.pairedAt
+
+        // 配对后 20 分钟仍在用：lastSeenAt 推进到此刻，并落盘。
+        now += 20 * 60 * 1000L
+        val seenSig = WebCrypto.signRequest(device.keys, "GET", "/api/snapshot", now, "seen", ByteArray(0))
+        assertTrue(store.verify(device.deviceId, "GET", "/api/snapshot", now, "seen", seenSig, ByteArray(0)))
+        assertEquals(now, persisted[device.deviceId])
+
+        // 又过了 20 分钟进程重启。按 lastSeenAt 只空闲 20 分钟，仍应有效；
+        // 若错误地用 pairedAt，就会以为已空闲 40 分钟而把它删掉。
+        now += 20 * 60 * 1000L
+        assertTrue("测试前提：按配对时间算已经超过 30 分钟", now - pairedAt > PairingStore.IDLE_TIMEOUT_MS)
+        val reborn = store()
+        reborn.restore(listOf(device.copy(lastSeenAt = persisted[device.deviceId]!!)))
+        val sig = WebCrypto.signRequest(device.keys, "GET", "/api/snapshot", now, "after-restart", ByteArray(0))
+        assertTrue(
+            "持久化的是活跃时间，不是配对时间 —— 重启后不能误删正在用的设备",
+            reborn.verify(device.deviceId, "GET", "/api/snapshot", now, "after-restart", sig, ByteArray(0)),
+        )
+    }
+
+    @Test
+    fun `真正超过 30 分钟空闲仍正常过期 - 重启也一样`() {
+        var expired: String? = null
+        val persisted = HashMap<String, Long>()
+        val store = PairingStore(
+            clock = { now },
+            idGenerator = { "dev-idle" },
+            onDeviceExpired = { expired = it },
+            onDeviceSeen = { persisted[it.deviceId] = it.lastSeenAt },
+        )
+        val device = store.approve(store.request(requestIdOf()).requestId, secret)!!
+        val sig = WebCrypto.signRequest(device.keys, "GET", "/api/snapshot", now, "n1", ByteArray(0))
+        assertTrue(store.verify(device.deviceId, "GET", "/api/snapshot", now, "n1", sig, ByteArray(0)))
+
+        now += PairingStore.IDLE_TIMEOUT_MS + 1
+        val reborn = PairingStore(
+            clock = { now },
+            onDeviceExpired = { expired = it },
+        )
+        reborn.restore(listOf(device.copy(lastSeenAt = persisted[device.deviceId]!!)))
+        val laterSig = WebCrypto.signRequest(device.keys, "GET", "/api/snapshot", now, "n2", ByteArray(0))
+        assertFalse(reborn.verify(device.deviceId, "GET", "/api/snapshot", now, "n2", laterSig, ByteArray(0)))
+        assertEquals("真正空闲超时仍要清掉持久化密钥", device.deviceId, expired)
     }
 
     // ── 请求认证 ────────────────────────────────────────────────

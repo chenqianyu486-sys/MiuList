@@ -46,7 +46,18 @@ class WebSyncService(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO),
 ) : SyncEventBroadcaster {
 
-    val pairing = PairingStore()
+    val pairing = PairingStore(
+        // 设备空闲到期 → **连持久化的密钥一起删**。
+        // 只删内存里那份的话，进程一重启它又被装回来，
+        // 「半小时空闲自动失效」就成了句空话。
+        onDeviceExpired = { deviceId ->
+            container.secureAccountStorage.removeSyncDeviceKeys(deviceId)
+            removeDevicePrefs(deviceId)
+        },
+        // 成功验签推进 lastSeenAt 后**及时落盘**（PairingStore 内部已做 60 秒节流）。
+        // 只存活跃时间，不重复写密钥。
+        onDeviceSeen = { device -> persistLastSeen(device) },
+    )
 
     private val revision = AtomicLong(1L)
     private val sinks = CopyOnWriteArraySet<HttpReply.EventSink>()
@@ -62,15 +73,24 @@ class WebSyncService(
     val port: Int get() = server?.boundPort ?: -1
 
     /**
-     * 正在等用户确认的配对请求（二维码里带来的 secret 与它的摘要）。
+     * 正在等用户确认的配对请求。
      *
-     * **用 StateFlow 而不是普通属性**：待确认的这条是在 **HTTP 处理线程**里
-     * 被塞进来的（深链到达时），而界面若只在打开弹层时读一次，
-     * 用户**已经开着弹层**时就看不到「有一台设备请求连接」——
-     * 于是那台电脑会一直转圈，直到配对码过期。
+     * **用 StateFlow 而不是普通属性**：待确认的这些是在 **HTTP 处理线程**里
+     * 被塞进来的（HTTP 请求或深链到达时），而界面若只在打开弹层时读一次，
+     * 用户**已经开着弹层**时就看不到「有一台设备请求连接」。
+     *
+     * ## 为什么是**列表**而不是单条
+     *
+     * 原来是单槽：后来的请求会**顶掉**先来的。
+     * 那等于给了一条现成的钓鱼路径 —— 攻击者发一条深链，
+     * 你电脑上那条真的请求就被换成他的，手机上只剩一张卡，
+     * 用户根本看不出换过，还以为那就是自己的电脑。
+     *
+     * 改成列表之后：真电脑的和陌生设备会**同时出现**，
+     * 用户看得见「怎么来了两个」，也就有机会拒掉那个不认识的。
      */
-    private val _pendingPairing = MutableStateFlow<PendingPairing?>(null)
-    val pendingPairing: StateFlow<PendingPairing?> = _pendingPairing.asStateFlow()
+    private val _pendingPairings = MutableStateFlow<List<PendingPairing>>(emptyList())
+    val pendingPairings: StateFlow<List<PendingPairing>> = _pendingPairings.asStateFlow()
 
     /** 一次待批准的配对。 */
     data class PendingPairing(
@@ -78,13 +98,20 @@ class WebSyncService(
         /**
          * 老协议（v3）：secret 本身（base64url）。
          *
-         * 新协议（v3.1）是 null —— 共享密钥在手机上跟电脑**各自协商**出来，
+         * 新协议（v3.2）是 null —— 共享密钥在手机上跟电脑**各自协商**出来，
          * 根本不需要有一份「从对面搬过来」的 secret。
          */
         val secretBase64: String?,
         val deviceName: String,
         /** **配对码**：两端一致的 6 位码，用户照着核对。 */
         val pairCode: String,
+        /**
+         * **服务端观察到的来源地址**（`ip:port`）。
+         *
+         * 确认卡上给用户看的就是它 —— 客户端自报的 `deviceName` 谁都能写成
+         * 「我的电脑」，而这个地址是从 TCP 连接上读出来的，伪造不了。
+         */
+        val sourceAddress: String,
     )
 
     init {
@@ -134,11 +161,14 @@ class WebSyncService(
             ),
             // 有一条配对请求拿到公钥了 → 界面该弹那张确认卡了。
             onPairingReady = { req ->
-                _pendingPairing.value = PendingPairing(
-                    requestId = req.requestId,
-                    secretBase64 = null,
-                    deviceName = req.deviceName.ifBlank { "网页端" },
-                    pairCode = req.pairCode,
+                addPending(
+                    PendingPairing(
+                        requestId = req.requestId,
+                        secretBase64 = null,
+                        deviceName = req.deviceName.ifBlank { "网页端" },
+                        pairCode = req.pairCode,
+                        sourceAddress = req.sourceAddress,
+                    )
                 )
             },
         )
@@ -176,7 +206,15 @@ class WebSyncService(
      */
     private fun openServer(api: WebSyncApi): LanHttpServer? {
         for (candidate in PORT_CANDIDATES) {
-            val http = LanHttpServer(port = candidate, handler = api::handle)
+            val http = LanHttpServer(
+                port = candidate,
+                handler = api::handle,
+                // **跨源白名单**：只放行手机自己的各个局域网地址
+                // （以及 LanHttpServer 里统一放行的 null / localhost）。
+                // 白名单外的 Origin 会被直接 403 —— 挡的不只是「读响应」，
+                // 连「把请求发出去」也挡了。
+                allowedOrigins = { selfOrigins() },
+            )
             try {
                 http.start()
                 return http
@@ -186,6 +224,13 @@ class WebSyncService(
             }
         }
         return null
+    }
+
+    /** 本服务允许跨源访问的 Origin —— 手机自己的各个局域网地址。 */
+    private fun selfOrigins(): Set<String> {
+        val p = port
+        if (p <= 0) return emptySet()
+        return lanAddresses().map { "http://$it:$p" }.toSet()
     }
 
     fun stop() {
@@ -207,7 +252,7 @@ class WebSyncService(
      *
      * 两种形态：
      *
-     * - **深链** `miulist://pair?v=4&k=<公钥>&r=<requestId>`
+     * - **深链** `miulist://pair?v=5&k=<公钥>&r=<requestId>`
      *   （老版是 `s=<secret>`）—— 走二维码那条路；
      * - **HTTP 请求** `/api/pair/request` 带 `publicKey`
      *   —— 走「只填地址」那条路。
@@ -223,6 +268,7 @@ class WebSyncService(
         secretBase64: String? = null,
         publicKeyBase64: String? = null,
         deviceName: String = "网页端",
+        sourceAddress: String = "",
     ): Boolean {
         if (requestId.isBlank()) return false
         val publicKey = publicKeyBase64
@@ -241,20 +287,43 @@ class WebSyncService(
         // 「找不到这个请求」直接返回 null —— 用户点了「允许」却什么都没发生。
         //
         // 补上它，批准与否就只取决于**用户点了什么**，而不取决于两个通道谁先到。
-        val req = pairing.request(requestId, deviceName, publicKey)
-        if (secretBase64 != null && publicKey == null) {
-            req.legacySecret = runCatching { WebCrypto.fromBase64Url(secretBase64) }.getOrNull()
+        val legacySecret = if (secretBase64 != null && publicKey == null) {
+            runCatching { WebCrypto.fromBase64Url(secretBase64) }.getOrNull()
+        } else {
+            null
         }
+        val req = pairing.request(
+            requestId = requestId,
+            deviceName = deviceName,
+            peerPublicKey = publicKey,
+            sourceAddress = sourceAddress,
+            legacySecret = legacySecret,
+        )
         // **没有密钥材料就还不算「可以配了」** —— 界面算不出配对码，
         // 用户看到一张没有码的确认卡只会更困惑。
         if (!req.hasKeyMaterial) return false
-        _pendingPairing.value = PendingPairing(
-            requestId = requestId,
-            secretBase64 = secretBase64,
-            deviceName = deviceName,
-            pairCode = req.pairCode,
+        addPending(
+            PendingPairing(
+                requestId = requestId,
+                secretBase64 = secretBase64,
+                deviceName = deviceName,
+                pairCode = req.pairCode,
+                sourceAddress = req.sourceAddress.ifBlank { sourceAddress },
+            )
         )
         return true
+    }
+
+    /**
+     * 把一条待确认请求并进列表。
+     *
+     * 同一条只留一条 —— 后到的补上缺的字段（比如先是深链来了、
+     * 后是 HTTP 请求带着公钥来了）。
+     */
+    private fun addPending(item: PendingPairing) {
+        _pendingPairings.value = _pendingPairings.value
+            .filterNot { it.requestId == item.requestId }
+            .let { it + item }
     }
 
     /**
@@ -263,8 +332,8 @@ class WebSyncService(
      * 批准时会用协商出来的密钥派生（**同步密码会混进去**），
      * 并把这台设备记下来。
      */
-    fun approvePending(): Boolean {
-        val pending = _pendingPairing.value ?: return false
+    fun approvePending(requestId: String): Boolean {
+        val pending = _pendingPairings.value.firstOrNull { it.requestId == requestId } ?: return false
         val secret = pending.secretBase64?.let {
             runCatching { WebCrypto.fromBase64Url(it) }.getOrNull()
         }
@@ -276,23 +345,25 @@ class WebSyncService(
             passcode = container.secureAccountStorage.getSyncPasscode().orEmpty(),
             deviceName = pending.deviceName,
         )
-        _pendingPairing.value = null
+        _pendingPairings.value = _pendingPairings.value.filterNot { it.requestId == requestId }
         if (device != null) persistDevice(device)
         return device != null
     }
 
-    fun denyPending(): Boolean {
-        val pending = _pendingPairing.value ?: return false
-        pairing.deny(pending.requestId)
-        _pendingPairing.value = null
-        return true
+    fun denyPending(requestId: String): Boolean {
+        val ok = pairing.deny(requestId)
+        _pendingPairings.value = _pendingPairings.value.filterNot { it.requestId == requestId }
+        return ok
     }
 
     fun pairedDevices(): List<PairingStore.PairedDevice> = pairing.pairedDevices()
 
     fun revoke(deviceId: String): Boolean {
         val ok = pairing.revoke(deviceId)
-        if (ok) container.secureAccountStorage.removeSyncDeviceKeys(deviceId)
+        if (ok) {
+            container.secureAccountStorage.removeSyncDeviceKeys(deviceId)
+            removeDevicePrefs(deviceId)
+        }
         return ok
     }
 
@@ -466,6 +537,27 @@ class WebSyncService(
         prefs().edit()
             .putString(KEY_DEVICE_NAME_PREFIX + device.deviceId, device.deviceName)
             .putLong(KEY_DEVICE_PAIRED_PREFIX + device.deviceId, device.pairedAt)
+            .putLong(KEY_DEVICE_LASTSEEN_PREFIX + device.deviceId, device.lastSeenAt)
+            .apply()
+    }
+
+    /**
+     * 只更新活跃时间。
+     *
+     * 密钥与设备名没有变化，没必要每次验签都重写加密存储；
+     * 调用频率已由 [PairingStore] 按 60 秒节流。
+     */
+    private fun persistLastSeen(device: PairingStore.PairedDevice) {
+        prefs().edit()
+            .putLong(KEY_DEVICE_LASTSEEN_PREFIX + device.deviceId, device.lastSeenAt)
+            .apply()
+    }
+
+    private fun removeDevicePrefs(deviceId: String) {
+        prefs().edit()
+            .remove(KEY_DEVICE_NAME_PREFIX + deviceId)
+            .remove(KEY_DEVICE_PAIRED_PREFIX + deviceId)
+            .remove(KEY_DEVICE_LASTSEEN_PREFIX + deviceId)
             .apply()
     }
 
@@ -491,7 +583,16 @@ class WebSyncService(
                 keys = keys,
                 deviceName = prefs().getString(KEY_DEVICE_NAME_PREFIX + deviceId, null) ?: "网页端",
                 pairedAt = prefs().getLong(KEY_DEVICE_PAIRED_PREFIX + deviceId, 0L),
-                lastSeenAt = System.currentTimeMillis(),
+                // **用持久化的「上次活跃时间」，不是当前时间。**
+                //
+                // 原来这里写的是 `System.currentTimeMillis()` ——
+                // 于是每次进程重启，每台设备都拿到一份全新的 30 分钟租约，
+                // 「半小时空闲自动失效」这句话从来就没成立过：
+                // 只要手机每天开一次，那台设备就永远有效。
+                //
+                // 改成读回上次活跃时间，跨重启也照样会到期。
+                lastSeenAt = prefs().getLong(KEY_DEVICE_LASTSEEN_PREFIX + deviceId, 0L)
+                    .let { if (it <= 0L) System.currentTimeMillis() else it },
             )
         }
         pairing.restore(restored)
@@ -501,6 +602,7 @@ class WebSyncService(
         private const val KEY_REMOTE_LATEST_EDIT = "remote_latest_edit_at"
         private const val KEY_DEVICE_NAME_PREFIX = "device_name_"
         private const val KEY_DEVICE_PAIRED_PREFIX = "device_paired_"
+        private const val KEY_DEVICE_LASTSEEN_PREFIX = "device_lastseen_"
 
         /**
          * 局域网服务监听端口的候选。

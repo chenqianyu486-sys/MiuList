@@ -11,6 +11,15 @@ import com.example.data.model.CourseKeys
 import com.example.data.model.SlotWithWeeks
 import com.example.data.repository.CourseRepository
 
+/**
+ * 整份替换被**数量护栏**拦下。
+ *
+ * 单独一个类型，是为了让上层能把它和「落库失败」区分开：
+ * 前者是「我**故意**没做这次替换」，后者是「做的时候出错了」。
+ * 两种情况给用户看的提示不该混为一谈。
+ */
+class SnapshotGuardException(message: String) : Exception(message)
+
 /** 同步模式。 */
 enum class SyncMode(val wire: String) {
     /**
@@ -86,7 +95,68 @@ class SnapshotApplier(
         val hasConflict: Boolean get() = keptUids.isNotEmpty()
     }
 
+    /**
+     * 整份替换前的**数量护栏**。
+     *
+     * 判据：课程 / 考试 / 待办三条里，任何一条远端比本机少
+     * **超过阈值**就拒绝整份替换。
+     *
+     * 阈值取「绝对值 [MAX_DROP_ALLOWANCE] 条」与「相对 50%」里
+     * **更宽松**的那个 —— 这样只有几条数据的小数据集不会误伤，
+     * 而「本机 200 条、远端 0 条」这种明显不是同一份数据的会被挡住。
+     */
+    private suspend fun guardAgainstMassDeletion(remote: WebSnapshotDto) {
+        fun tooFew(local: Int, incoming: Int): Boolean {
+            if (local <= 0) return false
+            if (incoming >= local) return false
+            val drop = local - incoming
+            return drop > MAX_DROP_ALLOWANCE && drop * 2 > local
+        }
+
+        if (remote.hasCourses) {
+            val local = courseRepo.getAllCoursesOnce().size
+            if (tooFew(local, remote.courses.size)) {
+                throw SnapshotGuardException(
+                    "远端只有 ${remote.courses.size} 门课，本机有 $local 门 —— " +
+                        "整份替换会清掉本机的课表，已拒绝"
+                )
+            }
+        }
+        if (remote.hasExams) {
+            val local = db.examDao().countExams()
+            if (tooFew(local, remote.exams.size)) {
+                throw SnapshotGuardException(
+                    "远端只有 ${remote.exams.size} 场考试，本机有 $local 场 —— " +
+                        "整份替换会清掉本机的考试，已拒绝"
+                )
+            }
+        }
+        val localTasks = db.taskDao().countTasks()
+        if (tooFew(localTasks, remote.tasks.size)) {
+            throw SnapshotGuardException(
+                "远端只有 ${remote.tasks.size} 条待办，本机有 $localTasks 条 —— " +
+                    "整份替换会清掉本机的待办，已拒绝"
+            )
+        }
+    }
+
+    companion object {
+        /** 整份替换时，允许「少掉」的绝对条数。 */
+        const val MAX_DROP_ALLOWANCE = 20
+    }
     suspend fun apply(remote: WebSnapshotDto, mode: SyncMode): Report = db.withTransaction {
+        // ── 整份替换的护栏 ──────────────────────────────────────
+        //
+        // 「以对方为准」会**先清空**本机的课程、考试与待办，再灌远端那份。
+        // 一台已配对设备（或者拿到了密钥的人）发一个空快照过来，
+        // 本机的数据就没了。
+        //
+        // 所以在动手之前先数一遍：远端那份如果比本机少得多，
+        // 那就**不是同一份数据的两个版本**，更像「另一台设备刚开机、
+        // 什么都还没拉到」—— 这种情况下执行整份替换等于清空用户的数据。
+        if (mode == SyncMode.REPLACE) {
+            guardAgainstMassDeletion(remote)
+        }
         // ── 课程（先做：待办要按 courseKey 挂到课程 id 上） ──
         //
         // 这一端**没带**课表时：不替换本机的课表（两端各管各的），

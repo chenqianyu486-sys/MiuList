@@ -44,7 +44,7 @@ class WebSyncCopyLinkTest {
                 addresses = addresses,
                 port = 8765,
                 pairedDevices = emptyList(),
-                pendingPairing = false,
+                pendingPairings = emptyList(),
                 hasPasscode = false,
                 localLatestEditAt = 0L,
                 remoteLatestEditAt = 0L,

@@ -224,7 +224,7 @@ export function QrScanner() {
         </div>
 
         <p className="scanner-footnote">
-          摄像头只用于这一次找手机地址，不会保存画面。走这条路**只扫这一次码** ——
+          摄像头只用于这一次找手机地址，不会保存画面。走这条路<strong>只扫这一次码</strong> ——
           扫完地址码，手机上点一下「允许」就够了。
         </p>
       </div>

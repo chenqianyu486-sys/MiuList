@@ -23,17 +23,16 @@ data class WebSyncUiState(
     val port: Int = -1,
     val addresses: List<String> = emptyList(),
     val pairedDevices: List<PairingStore.PairedDevice> = emptyList(),
-    /** 有一台设备在等确认。 */
-    val pendingPairing: Boolean = false,
     /**
-     * **配对码**：两端一致的 6 位码。
+     * **正在等确认的配对请求**（可能不止一条）。
      *
-     * 用户要拿它跟电脑上显示的那一串比对 —— 这是「允许」之前
-     * 唯一能确认「对面确实是我眼前这台电脑」的办法。
+     * 服务层给的是**列表**语义：后来的请求不再顶掉先来的 ——
+     * 真电脑的和陌生设备会**同时出现**，用户才有机会发现「怎么来了两个」。
+     *
+     * 每条都带**服务端观察到的来源地址**（`sourceAddress`）：
+     * 那是客户端伪造不了的，比自报的设备名可靠。
      */
-    val pendingPairCode: String = "",
-    /** 在等确认的是哪台设备。 */
-    val pendingDeviceName: String = "",
+    val pendingPairings: List<WebSyncService.PendingPairing> = emptyList(),
     /** 本机最新的一次编辑发生在什么时候。 */
     val localLatestEditAt: Long = 0L,
     /** 网页端最近一次同步过来的快照的最新编辑时间。 */
@@ -57,38 +56,28 @@ class WebSyncViewModel(
         // 「有一台设备请求连接」可能**在弹层开着的时候**才出现 ——
         // 深链是在 HTTP 处理线程里到的，弹层开着不代表界面会重读一次状态。
         // 所以这里订阅服务上的那个流，而不是只在 refresh() 时读一次。
+        //
+        // 订阅的是**列表**：后来的请求不再顶掉先来的。
         viewModelScope.launch {
-            service.pendingPairing.collect { pending ->
-                _uiState.value = _uiState.value.copy(
-                    pendingPairing = pending != null,
-                    pendingPairCode = pending?.pairCode.orEmpty(),
-                    pendingDeviceName = pending?.deviceName.orEmpty(),
-                )
+            service.pendingPairings.collect { pending ->
+                _uiState.value = _uiState.value.copy(pendingPairings = pending)
             }
         }
     }
 
-    /** 待确认配对的那一块状态。 */
-    private fun pendingState(): Triple<Boolean, String, String> {
-        val pending = service.pendingPairing.value
-        return Triple(
-            pending != null,
-            pending?.pairCode.orEmpty(),
-            pending?.deviceName.orEmpty(),
-        )
-    }
+    /** 待确认配对的那一块状态（可能有多条）。 */
+    private fun pendingState(): List<WebSyncService.PendingPairing> =
+        service.pendingPairings.value
 
     /** 重新读一遍服务状态。打开弹层时调一次。 */
     fun refresh() {
-        val (pending, code, deviceName) = pendingState()
+        val pending = pendingState()
         _uiState.value = WebSyncUiState(
             running = service.isRunning,
             port = service.port,
             addresses = service.lanAddresses(),
             pairedDevices = service.pairedDevices(),
-            pendingPairing = pending,
-            pendingPairCode = code,
-            pendingDeviceName = deviceName,
+            pendingPairings = pending,
             localLatestEditAt = _uiState.value.localLatestEditAt,
             remoteLatestEditAt = service.remoteLatestEditAt,
             hasPasscode = service.syncPasscode().isNotEmpty(),
@@ -113,15 +102,13 @@ class WebSyncViewModel(
             service.stop()
             true
         }
-        val (pending, code, deviceName) = pendingState()
+        val pending = pendingState()
         _uiState.value = _uiState.value.copy(
             running = service.isRunning,
             port = service.port,
             addresses = if (enabled && ok) service.lanAddresses() else emptyList(),
             pairedDevices = service.pairedDevices(),
-            pendingPairing = pending,
-            pendingPairCode = code,
-            pendingDeviceName = deviceName,
+            pendingPairings = pending,
             message = if (enabled && !ok) "启动失败：端口可能被占用" else null,
         )
         refreshLocalLatestEdit()
@@ -135,13 +122,13 @@ class WebSyncViewModel(
      */
     fun requestSync(direction: SyncDirection) {
         if (!service.isRunning) {
-            _uiState.value = _uiState.value.copy(message = "局域网服务还没开")
+            _uiState.value = _uiState.value.copy(message = "网页同步还没打开")
             return
         }
         service.requestSync(direction)
         val text = when (direction) {
-            SyncDirection.PULL -> "已让网页端来拉手机上的数据"
-            SyncDirection.PUSH -> "已让网页端把它那边推过来"
+            SyncDirection.PULL -> "已让网页端以手机为准"
+            SyncDirection.PUSH -> "已让网页端以网页端为准"
             SyncDirection.MERGE -> "已让网页端合并两边"
         }
         _uiState.value = _uiState.value.copy(message = text)
@@ -156,32 +143,57 @@ class WebSyncViewModel(
      * @param requestId 这次配对的 id。
      * @param secretBase64 老协议：secret 本身（base64url）。**它只在这一刻存在于内存里。**
      * @param publicKeyBase64 新协议：电脑的 DH 公钥（base64url）。
+     * @param sourceAddress 服务端观察到的来源地址。**扫码深链那条路没有** —— 留空即可。
      */
     fun offerPairing(
         requestId: String,
         secretBase64: String = "",
         publicKeyBase64: String = "",
+        sourceAddress: String = "",
     ) {
         service.offerPairing(
             requestId = requestId,
             secretBase64 = secretBase64.ifBlank { null },
             publicKeyBase64 = publicKeyBase64.ifBlank { null },
+            sourceAddress = sourceAddress,
         )
         refresh()
     }
 
-    fun approve() {
-        val ok = service.approvePending()
+    /**
+     * 批准**某一条**待确认请求。
+     *
+     * @param requestId 要批准的那条的 id —— 不是「当前唯一那条」。
+     */
+    fun approve(requestId: String) {
+        // **先把这条记下来**：批准完它就从列表里没了，
+        // 失败时要告诉用户「是哪一张卡没批成」。
+        val target = pendingState().firstOrNull { it.requestId == requestId }
+        val ok = service.approvePending(requestId)
         refresh()
         _uiState.value = _uiState.value.copy(
-            message = if (ok) "已允许，网页端会自己连上" else "这个配对请求已经失效了",
+            message = if (ok) "已允许，网页端会自己连上" else "这个配对请求已经失效了${describe(target)}",
         )
     }
 
-    fun deny() {
-        service.denyPending()
+    /** 拒绝**某一条**待确认请求。 */
+    fun deny(requestId: String) {
+        service.denyPending(requestId)
         refresh()
         _uiState.value = _uiState.value.copy(message = "已拒绝")
+    }
+
+    /**
+     * 失败提示里的「是哪一条」：优先给**来源地址**（伪造不了），
+     * 没有就给设备名（自报的，至少还能认个脸）。
+     */
+    private fun describe(target: WebSyncService.PendingPairing?): String {
+        if (target == null) return ""
+        val address = target.sourceAddress.trim()
+        if (address.isNotEmpty()) return "（来源 $address）"
+        val name = target.deviceName.trim()
+        if (name.isNotEmpty()) return "（$name）"
+        return ""
     }
 
     fun revoke(deviceId: String) {

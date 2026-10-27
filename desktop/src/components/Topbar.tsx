@@ -37,7 +37,7 @@ export function Topbar() {
         {snapshotActive ? (
           <IconButton
             icon={FileJson2}
-            label="本机 JSON 快照"
+            label="本机备份文件"
             onClick={() => openSync('snapshot')}
             className="has-file"
           />
