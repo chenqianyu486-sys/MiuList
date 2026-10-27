@@ -1,17 +1,39 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, Copy, QrCode, RefreshCw, ScanLine, Smartphone } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useAppStore } from '../core/store';
 import { requestPairCode } from '../core/sync';
 import { Button, Spinner, cx } from './ui';
 
-export function PairingCard({ compact = false }: { compact?: boolean }) {
+export function PairingCard({
+  compact = false,
+  onChangeAddress,
+}: {
+  compact?: boolean;
+  onChangeAddress?: () => void;
+}) {
   const state = useAppStore();
   const pair = state.pair;
   const [copied, setCopied] = useState(false);
+  const autoRequested = useRef(false);
   const request = requestPairCode;
   const openScanner = state.openScanner;
   const pushToast = state.pushToast;
+
+  /**
+   * 配对码应由这台电脑主动生成：手机只负责扫。
+   *
+   * 地址已经记住时（刷新、回到这一页、从同步面板打开），不用再让用户点一次
+   * 「生成配对码」；进页面就把码画出来。请求失败会落到 error 状态，
+   * 不会在这里循环重试。
+   */
+  useEffect(() => {
+    if (autoRequested.current) return;
+    if (!state.base || state.secret) return;
+    if (pair.status !== 'idle') return;
+    autoRequested.current = true;
+    void request();
+  }, [state.base, state.secret, pair.status, request]);
 
   if (pair.status === 'approved') {
     return (
@@ -51,9 +73,10 @@ export function PairingCard({ compact = false }: { compact?: boolean }) {
       <div className="pair-intro">
         <span className="pair-step">02</span>
         <div>
-          <h3>在手机上确认</h3>
+          <h3>用手机扫这张配对码</h3>
           <p>
-            用手机相机扫这张配对码，或在 MiuList 的「网页同步」里扫码；手机上点「允许」即可。
+            手机相机扫码 → 在 MiuList 里点「允许」。配对方向是手机扫电脑，
+            电脑不需要摄像头。
           </p>
         </div>
       </div>
@@ -63,7 +86,7 @@ export function PairingCard({ compact = false }: { compact?: boolean }) {
           <div className="pair-qr">
             <QRCodeSVG
               value={payload}
-              size={compact ? 168 : 220}
+              size={compact ? 184 : 220}
               marginSize={2}
               level="M"
               bgColor="#FFFFFF"
@@ -74,15 +97,20 @@ export function PairingCard({ compact = false }: { compact?: boolean }) {
           <div className="pair-code-row">
             <span>配对码</span>
             <strong>{code}</strong>
-            <span className="pair-code-hint">手机和电脑需在同一个 Wi-Fi</span>
+            <span className="pair-code-hint">手机扫电脑 · 同一 Wi-Fi</span>
           </div>
           <div className="pair-actions">
             <Button variant="ghost" icon={RefreshCw} onClick={() => void request()}>
               换一个配对码
             </Button>
             <Button variant="ghost" icon={ScanLine} onClick={openScanner}>
-              重新扫地址
+              扫手机地址码
             </Button>
+            {onChangeAddress ? (
+              <Button variant="ghost" onClick={onChangeAddress}>
+                换手机地址
+              </Button>
+            ) : null}
           </div>
         </>
       ) : pair.status === 'requesting' ? (
@@ -104,8 +132,8 @@ export function PairingCard({ compact = false }: { compact?: boolean }) {
         <div className="pair-message">
           <QrCode size={20} />
           <div>
-            <p>地址已填好，下一步生成配对码。</p>
-            <p className="pair-sub">配对密钥只走二维码，不会经过网络。</p>
+            <p>地址已填好，这台电脑会生成配对码。</p>
+            <p className="pair-sub">配对由手机扫电脑完成，电脑不需要摄像头。</p>
           </div>
         </div>
       )}
@@ -129,11 +157,16 @@ export function PairingCard({ compact = false }: { compact?: boolean }) {
               扫描手机地址
             </Button>
           )}
+          {onChangeAddress ? (
+            <Button variant="ghost" onClick={onChangeAddress}>
+              换手机地址
+            </Button>
+          ) : null}
         </div>
       ) : null}
 
       <p className="pair-footnote">
-        配对码只用于建立这把钥匙；快照文件不会包含它。手机端继续当接口服务端；配对与同步协议不变。
+        配对密钥只走手机相机扫描，不经过网络；快照文件不会包含它。手机端继续当接口服务端；配对与同步协议不变。
       </p>
     </div>
   );

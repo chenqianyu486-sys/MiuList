@@ -35,12 +35,12 @@ export function QrScanner() {
   const processText = (text: string) => {
     if (handledRef.current) return;
     if (text.startsWith('miulist://pair')) {
-      setMessage('这是配对码，请扫手机「更多 → 网页同步」里的地址二维码。');
+      setMessage('这是手机扫的配对码；电脑这里只扫手机上的地址码。');
       return;
     }
     const base = normalizeBase(text);
     if (!base) {
-      setMessage('没认出有效地址；请对准手机上的地址二维码。');
+      setMessage('没认出有效地址；请对准手机上的地址码。');
       return;
     }
     handledRef.current = true;
@@ -162,11 +162,11 @@ export function QrScanner() {
 
   return createPortal(
     <div className="scanner-backdrop">
-      <div className="scanner-panel" role="dialog" aria-modal="true" aria-label="扫描手机二维码">
+      <div className="scanner-panel" role="dialog" aria-modal="true" aria-label="扫描手机地址码">
         <div className="scanner-head">
           <div>
-            <h2>扫描手机二维码</h2>
-            <p>对准手机「更多 → 网页同步」里的地址码。</p>
+            <h2>扫描手机地址码</h2>
+            <p>对准手机「更多 → 网页同步」里的地址码；配对码会由手机扫电脑。</p>
           </div>
           <button type="button" className="scanner-close" onClick={close} aria-label="关闭">
             <X size={18} />
@@ -193,7 +193,7 @@ export function QrScanner() {
             <div className="scanner-error">
               <CameraOff size={28} />
               <strong>摄像头没打开</strong>
-              <p>{error}。也可以上传手机二维码截图。</p>
+              <p>{error}。也可以上传手机地址码截图。</p>
             </div>
           )}
         </div>
@@ -202,7 +202,7 @@ export function QrScanner() {
 
         <div className="scanner-actions">
           <button type="button" className="scanner-upload" onClick={() => inputRef.current?.click()}>
-            <ImagePlus size={17} /> 上传二维码截图
+            <ImagePlus size={17} /> 上传地址码截图
           </button>
           <button type="button" className="scanner-cancel" onClick={close}>
             取消
@@ -221,7 +221,7 @@ export function QrScanner() {
         </div>
 
         <p className="scanner-footnote">
-          摄像头只在这一次扫描时使用，不会保存画面。配对码请用手机的摄像头扫电脑上的二维码。
+          摄像头只用于这一次找手机地址，不会保存画面。配对时方向反过来：手机扫电脑上的配对码。
         </p>
       </div>
     </div>,

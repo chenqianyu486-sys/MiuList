@@ -18,6 +18,7 @@ export const LS = {
   passcode: 'miulist.passcode',
   wallpaper: 'miulist.wallpaper',
   sidePinned: 'miulist.sidePinned',
+  setupSkipped: 'miulist.setupSkipped',
 } as const;
 
 const WALLPAPERS: WallpaperId[] = ['cloud', 'mint', 'dusk', 'sakura'];
@@ -135,6 +136,17 @@ export function persistAppearance(wallpaper: WallpaperId, pinned: boolean): void
   localStorage.setItem(LS.sidePinned, pinned ? '1' : '0');
 }
 
+/**
+ * 用户明确跳过初始配置后，就把欢迎页收起来。
+ *
+ * 网页端是能独立运行的一端：没有手机、没有导入快照，也可以先新建待办。
+ * 空快照不足以判断「用户想不想看欢迎页」，所以这个意图要单独记住。
+ */
+export function persistSetupSkipped(skipped: boolean): void {
+  if (skipped) localStorage.setItem(LS.setupSkipped, '1');
+  else localStorage.removeItem(LS.setupSkipped);
+}
+
 export type InitialData = {
   base: string;
   secret: string | null;
@@ -146,6 +158,7 @@ export type InitialData = {
   meta: Meta;
   wallpaper: WallpaperId;
   sidePinned: boolean;
+  setupSkipped: boolean;
 };
 
 export function loadInitialData(): InitialData {
@@ -186,6 +199,7 @@ export function loadInitialData(): InitialData {
     meta,
     wallpaper,
     sidePinned: localStorage.getItem(LS.sidePinned) === '1',
+    setupSkipped: localStorage.getItem(LS.setupSkipped) === '1',
   };
 }
 

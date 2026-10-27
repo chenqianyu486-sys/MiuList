@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { loadInitialData, persistAppearance } from './storage';
+import { loadInitialData, persistAppearance, persistSetupSkipped } from './storage';
 import type {
   ConflictState,
   DetailState,
@@ -39,6 +39,7 @@ export type AppStore = {
   pending: PendingMap;
   remoteBase: RemoteBase;
   meta: Meta;
+  setupSkipped: boolean;
   phoneReachable: boolean;
   phoneName: string;
   phoneVersion: string;
@@ -79,6 +80,7 @@ export type AppStore = {
   setSnapshotFile: (patch: Partial<SnapshotFileState>) => void;
   setPair: (pair: PairState) => void;
   setConflict: (conflict: ConflictState | null) => void;
+  skipSetup: () => void;
   pushToast: (message: string, kind?: ToastKind) => void;
   dismissToast: (id?: number) => void;
 };
@@ -93,6 +95,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   pending: initial.pending,
   remoteBase: initial.remoteBase,
   meta: initial.meta,
+  setupSkipped: initial.setupSkipped,
   phoneReachable: false,
   phoneName: initial.snapshot.deviceName || '',
   phoneVersion: initial.snapshot.appVersion || '',
@@ -147,6 +150,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set((state) => ({ snapshotFile: { ...state.snapshotFile, ...patch } })),
   setPair: (pair) => set({ pair }),
   setConflict: (conflict) => set({ conflict }),
+  skipSetup: () => {
+    persistSetupSkipped(true);
+    set({ setupSkipped: true });
+  },
 
   pushToast: (message, kind = 'info') => {
     const id = Date.now() + Math.random();

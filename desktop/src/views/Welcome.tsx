@@ -8,6 +8,7 @@ import {
   RefreshCw,
   ScanLine,
   ShieldCheck,
+  Smartphone,
   Sparkles,
   Wifi,
 } from 'lucide-react';
@@ -47,6 +48,11 @@ export function Welcome() {
     if (ok) void afterImport();
   };
 
+  const skipSetup = () => {
+    state.skipSetup();
+    state.pushToast('已跳过初始配置。需要时在「同步与设置」里连接手机或导入快照。');
+  };
+
   if (state.base && !state.secret) {
     return (
       <div className="welcome welcome--pairing">
@@ -55,15 +61,16 @@ export function Welcome() {
         <div className="welcome-card glass">
           <section className="welcome-pair-copy">
             <Brand />
-            <div className="welcome-step">02 / 在手机上确认</div>
+            <div className="welcome-step">02 / 手机扫电脑</div>
             <h1>
               最后一步，
               <br />
-              在手机上点允许。
+              用手机扫这张码。
             </h1>
             <p className="welcome-lead">
-              配对码只在你和手机之间走。确认后，两端的待办会开始同步；
-              课表各留一份，要搬的时候在「同步」里点一下。手机不在时，这一端仍然能看、能改。
+              电脑已经生成配对码。用手机相机扫页面上的二维码，在 MiuList 里点「允许」即可。
+              配对方向是手机扫电脑，电脑不需要摄像头；之后待办自动同步，课表各留一份，
+              手机不在时这一端仍然能看、能改。
             </p>
             <ol className="welcome-steps">
               <li>
@@ -72,7 +79,7 @@ export function Welcome() {
               </li>
               <li>
                 <span>2</span>
-                用手机相机扫右边的配对码
+                用手机相机扫电脑上的配对码
               </li>
               <li>
                 <span>3</span>
@@ -100,8 +107,8 @@ export function Welcome() {
               </form>
             ) : (
               <div className="welcome-actions-row">
-                <Button variant="primary" icon={ScanLine} onClick={openScanner}>
-                  重新扫描地址
+                <Button variant="soft" icon={ScanLine} onClick={openScanner}>
+                  扫手机地址码
                 </Button>
                 <Button
                   variant="ghost"
@@ -130,6 +137,10 @@ export function Welcome() {
             <p className="welcome-footnote">
               <ShieldCheck size={14} /> 配对密钥只在二维码和浏览器里；JSON 快照不包含它。
             </p>
+            <button type="button" className="welcome-skip-link" onClick={skipSetup}>
+              手机不在身边？先跳过配对，直接进入应用
+              <ArrowRight size={14} aria-hidden="true" />
+            </button>
             <input
               ref={inputRef}
               type="file"
@@ -161,6 +172,9 @@ export function Welcome() {
             <span>单文件</span>
             <span>本机快照</span>
             <span>与手机对等</span>
+            <span className="is-accent">
+              <Smartphone size={11} aria-hidden="true" /> 配对：手机扫电脑
+            </span>
           </div>
           <h1>
             把课程和待办，
@@ -177,8 +191,8 @@ export function Welcome() {
               <ScanLine size={24} />
             </span>
             <span>
-              <strong>扫描手机二维码</strong>
-              <em>手机：更多 → 网页同步 → 地址码</em>
+              <strong>扫描手机地址码</strong>
+              <em>只用来找到手机；配对码随后由手机扫电脑</em>
             </span>
             <span className="scan-tile-arrow">→</span>
           </button>
@@ -197,9 +211,24 @@ export function Welcome() {
               />
             </label>
             <Button variant="soft" type="submit" loading={busy}>
-              连接
+              继续
             </Button>
           </form>
+
+          <button
+            type="button"
+            className="welcome-skip"
+            onClick={skipSetup}
+            aria-label="跳过初始配置，直接开始。电脑端可以独立使用，之后可以在同步与设置里连接手机或导入快照。"
+          >
+            <span className="welcome-skip-copy">
+              <strong>跳过初始配置，直接开始</strong>
+              <em>电脑端可以独立使用；之后在「同步与设置」里连接手机或导入快照</em>
+            </span>
+            <span className="welcome-skip-arrow" aria-hidden="true">
+              <ArrowRight size={18} />
+            </span>
+          </button>
 
           <div className="welcome-links">
             <button type="button" onClick={() => inputRef.current?.click()}>

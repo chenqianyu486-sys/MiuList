@@ -1544,6 +1544,9 @@
 }
 
 .welcome-kicker span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 4px 9px;
   border-radius: var(--r-pill);
   border: 0;
@@ -1551,6 +1554,11 @@
   color: var(--ink-2);
   font-size: 9.5px;
   font-weight: 700;
+}
+
+.welcome-kicker span.is-accent {
+  background: rgba(188, 228, 114, 0.42);
+  color: var(--lime-dark);
 }
 
 .welcome-step {
@@ -1726,6 +1734,98 @@
   align-items: flex-end;
   gap: 8px;
   margin-top: 12px;
+}
+
+/* 独立使用：网页端不依赖手机，这条要像入口，而不是脚注。 */
+.welcome-skip {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px 12px 12px 16px;
+  border: 0;
+  border-radius: var(--r-lg);
+  background-color: var(--glass-coat);
+  background-image:
+    var(--grain),
+    linear-gradient(rgba(188, 228, 114, 0.28), rgba(188, 228, 114, 0.28)),
+    linear-gradient(var(--glass-tint), var(--glass-tint));
+  background-size: var(--grain-size), auto, auto;
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
+  box-shadow: var(--shadow-sm);
+  text-align: left;
+  transition:
+    transform 0.18s var(--ease),
+    box-shadow 0.18s var(--ease),
+    background-color 0.18s var(--ease);
+}
+
+.welcome-skip:hover {
+  transform: translateY(-1px);
+  background-color: rgba(255, 255, 255, 0.76);
+  box-shadow: var(--shadow-md);
+}
+
+.welcome-skip:active {
+  transform: translateY(0) scale(0.995);
+}
+
+.welcome-skip-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.welcome-skip-copy strong {
+  font-size: 13.5px;
+  font-weight: 750;
+  color: var(--ink);
+}
+
+.welcome-skip-copy em {
+  font-style: normal;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.welcome-skip-arrow {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--lime);
+  color: var(--lime-ink);
+  box-shadow: 0 8px 18px -12px rgba(112, 154, 54, 0.85);
+  transition: transform 0.18s var(--ease);
+}
+
+.welcome-skip:hover .welcome-skip-arrow {
+  transform: translateX(2px);
+}
+
+/* 配对页的退路：连接失败或不方便掏手机时，不必被困在这一步。 */
+.welcome-skip-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.welcome-skip-link:hover {
+  color: var(--lime-dark);
 }
 
 .welcome-links {
@@ -2499,12 +2599,14 @@
 
 .connection-chip {
   margin-left: auto;
+  flex: none;
   padding: 4px 8px;
   border-radius: var(--r-pill);
   background: var(--control-tint);
   color: var(--muted);
   font-size: 9.5px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .connection-chip.is-online {

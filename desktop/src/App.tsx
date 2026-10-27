@@ -15,6 +15,7 @@ export default function App() {
   const booted = useAppStore((s) => s.booted);
   const hasData = useAppStore((s) => snapshotHasData(s.snapshot));
   const secret = useAppStore((s) => s.secret);
+  const setupSkipped = useAppStore((s) => s.setupSkipped);
 
   useEffect(() => {
     void boot();
@@ -23,7 +24,7 @@ export default function App() {
   return (
     <div className="app-root">
       <Background />
-      {!booted ? <Splash /> : hasData || secret ? <Shell /> : <Welcome />}
+      {!booted ? <Splash /> : hasData || secret || setupSkipped ? <Shell /> : <Welcome />}
       <SyncSheet />
       <TaskEditor />
       <DetailSheet />

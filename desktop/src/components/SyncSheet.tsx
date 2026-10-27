@@ -12,6 +12,7 @@ import {
   RefreshCw,
   ScanLine,
   ShieldCheck,
+  Smartphone,
   Unplug,
   Upload,
   Wifi,
@@ -121,19 +122,9 @@ function ConnectForm({
 
   return (
     <form className="connect-form" onSubmit={submit}>
-      <button type="button" className="scan-tile" onClick={openScanner}>
-        <span className="scan-tile-icon">
-          <ScanLine size={24} />
-        </span>
-        <span>
-          <strong>扫描手机二维码</strong>
-          <em>手机：更多 → 网页同步 → 地址码</em>
-        </span>
-        <span className="scan-tile-arrow">→</span>
-      </button>
       <div className="connect-row">
         <label className="field grow">
-          <span>也可以手动填地址</span>
+          <span>第一次连接：填手机地址</span>
           <input
             value={address}
             onChange={(event) => setAddress(event.target.value)}
@@ -145,12 +136,23 @@ function ConnectForm({
           />
         </label>
         <Button variant="primary" type="submit" loading={busy}>
-          连接
+          继续
         </Button>
       </div>
       <p className="field-hint">
         地址在手机的「更多 → 网页同步」里，带复制按钮；手机和电脑要在同一个 Wi-Fi。
+        填好后电脑会显示配对码，由手机扫电脑完成配对，电脑不需要摄像头。
       </p>
+      <button type="button" className="scan-tile" onClick={openScanner}>
+        <span className="scan-tile-icon">
+          <ScanLine size={24} />
+        </span>
+        <span>
+          <strong>让电脑扫手机地址码</strong>
+          <em>只用来找到手机，不是配对码</em>
+        </span>
+        <span className="scan-tile-arrow">→</span>
+      </button>
       {onCancel ? (
         <Button variant="ghost" onClick={onCancel}>
           取消
@@ -200,8 +202,8 @@ function ConnectionPanel() {
               <Wifi size={18} />
             </span>
             <div>
-              <h3>连接手机</h3>
-              <p>扫描手机上的地址二维码，或手动填局域网地址。</p>
+              <h3>找到手机</h3>
+              <p>第一次只需告诉电脑手机地址；配对码随后由手机扫电脑生成。</p>
             </div>
           </div>
           <ConnectForm
@@ -209,6 +211,27 @@ function ConnectionPanel() {
             onDone={() => setEditing(false)}
             onCancel={state.base ? () => setEditing(false) : undefined}
           />
+        </div>
+      ) : !state.secret ? (
+        <div className="panel-card glass-soft">
+          <div className="panel-card-head">
+            <span className="panel-icon">
+              <Smartphone size={18} />
+            </span>
+            <div>
+              <h3>手机扫码配对</h3>
+              <p>电脑已记住手机地址。配对由手机扫下面的码完成，电脑不用摄像头。</p>
+            </div>
+            <span className={cx('connection-chip', state.phoneReachable && 'is-online')}>
+              {state.phoneReachable ? '手机在线' : '手机离线'}
+            </span>
+          </div>
+          {!state.phoneReachable ? (
+            <p className="inline-warn">
+              这个地址暂时连不上。确认手机上的「局域网服务」已打开，或者换一个地址。
+            </p>
+          ) : null}
+          <PairingCard compact onChangeAddress={() => setEditing(true)} />
         </div>
       ) : (
         <div className="panel-card glass-soft">
@@ -259,56 +282,41 @@ function ConnectionPanel() {
             <Button variant="ghost" onClick={() => setEditing(true)}>
               换地址
             </Button>
-            {state.secret ? (
+            <Button variant="ghost" onClick={() => void requestPairCode()}>
+              重新配对
+            </Button>
+            {disconnectArmed ? (
               <>
-                <Button variant="ghost" onClick={() => void requestPairCode()}>
-                  重新配对
+                <Button
+                  variant="danger"
+                  icon={Unplug}
+                  onClick={() => {
+                    setDisconnectArmed(false);
+                    disconnectPair();
+                  }}
+                >
+                  确认断开
                 </Button>
-                {disconnectArmed ? (
-                  <>
-                    <Button
-                      variant="danger"
-                      icon={Unplug}
-                      onClick={() => {
-                        setDisconnectArmed(false);
-                        disconnectPair();
-                      }}
-                    >
-                      确认断开
-                    </Button>
-                    <Button variant="ghost" onClick={() => setDisconnectArmed(false)}>
-                      取消
-                    </Button>
-                  </>
-                ) : (
-                  <Button variant="ghost" icon={Unplug} onClick={() => setDisconnectArmed(true)}>
-                    断开配对
-                  </Button>
-                )}
+                <Button variant="ghost" onClick={() => setDisconnectArmed(false)}>
+                  取消
+                </Button>
               </>
-            ) : null}
+            ) : (
+              <Button variant="ghost" icon={Unplug} onClick={() => setDisconnectArmed(true)}>
+                断开配对
+              </Button>
+            )}
           </div>
-
-          {!state.secret ? (
-            <>
-              {!state.phoneReachable ? (
-                <p className="inline-warn">
-                  这个地址暂时连不上。确认手机上的「局域网服务」已打开，或者换一个地址。
-                </p>
-              ) : null}
-              <PairingCard compact />
-            </>
-          ) : null}
         </div>
       )}
 
-      {state.base ? <SchedulePanel /> : null}
+      {state.base && state.secret ? <SchedulePanel /> : null}
 
       <div className="panel-note">
         <ShieldCheck size={16} />
         <p>
-          待办在两端之间自动同步；<strong>课表与考试各留一份</strong>，不会跟着同步跑 ——
-          要搬的时候用上面那张卡片。配对密钥只在本机，快照文件不含它。手机 App 继续当接口服务端，协议不变。
+          待办在两端之间自动同步；<strong>课表与考试各留一份</strong>，不会跟着同步跑。
+          配对后可在「课表与考试」里手动搬运。配对密钥只在本机，快照文件不含它。手机 App 继续当接口服务端，协议不变。
         </p>
       </div>
     </div>

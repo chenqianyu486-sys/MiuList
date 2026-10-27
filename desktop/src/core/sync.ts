@@ -553,6 +553,7 @@ export function disconnectPair(): void {
     conflict: null,
     syncError: null,
     remoteSnapshot: null,
+    pair: { status: 'idle' },
   });
   persistSession(null, null);
   toast('已断开配对。本地数据还在。');
@@ -1110,7 +1111,9 @@ export async function boot(): Promise<void> {
     }
   } else if (s.base && !s.secret) {
     const health = await probePhone();
-    if (health && devParam('devsecret')) await requestPairCode();
+    if (health && devParam('devsecret') && get().pair.status === 'idle') {
+      await requestPairCode();
+    }
   }
 }
 
