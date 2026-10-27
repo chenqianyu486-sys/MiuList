@@ -46,7 +46,36 @@ const OUT = path.resolve(REPO, arg('--out', '.tmp/desktop-shots'));
 const CHROME = arg('--chrome', 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe');
 const ONLY = arg('--only', '');
 const SKIP_SHOTS = argv.includes('--no-shots');
-const APP_URL = `file:///${HTML.replace(/\\/g, '/')}?base=${encodeURIComponent(`http://127.0.0.1:${PORT}`)}&devsecret=${encodeURIComponent(SECRET)}`;
+/**
+ * 两种跑法：
+ *
+ * - `paired`（默认）：mock 自动批准 → 验行为 + 拍已配对的各个页面；
+ * - `pairing`：mock 用 `--no-auto-approve` 停在「等手机上点允许」那一步 →
+ *   拍**配对流程本身**（欢迎页、配对码页、连接面板）。
+ *
+ * 为什么配对页要单独一轮：那两个页面的存在前提是「有地址、还没配对」，
+ * 与「已配对」是互斥的状态，不能在同一轮里都拍到。
+ */
+const MODE = arg('--mode', 'paired');
+
+const FILE_URL = `file:///${HTML.replace(/\\/g, '/')}`;
+/**
+ * 带上手机地址。
+ *
+ * `devsecret` 是**老协议**（v3，secret 从二维码搬过去）才需要的 ——
+ * mock 用它自己那把 secret 算 `requestId`，网页端若自己随机生成一把就对不上。
+ * 新协议（v3.1，DH 协商）两边各算各的，**不需要这个参数**。
+ */
+const QUERY = `base=${encodeURIComponent(`http://127.0.0.1:${PORT}`)}${
+  SECRET ? `&devsecret=${encodeURIComponent(SECRET)}` : ''
+}`;
+const APP_URL = `${FILE_URL}?${QUERY}`;
+/**
+ * 有地址、还没批准 → 网页端停在配对页（二维码那张）。
+ */
+const APP_URL_PAIRING = `${FILE_URL}?${QUERY}`;
+/** 什么都没有 → 首次进入的欢迎页。 */
+const APP_URL_INTRO = FILE_URL;
 
 const SIZES = [
   { name: 'phone-390', width: 390, height: 844, mobile: true },
@@ -71,6 +100,43 @@ const SCENES = {
   sync: [`document.querySelector('.side-status')?.click()`],
   /** 同步面板的「快照」分区。 */
   snapshot: [`document.querySelector('.side-status')?.click()`, `clickTab('快照')`],
+  /**
+   * 同步面板的「连接」分区，滚到「从学在浙大拉课表」那张卡。
+   *
+   * **必须滚**：那张卡排在「课表与考试」下面，窄屏下不在首屏。
+   */
+  zju: [
+    `document.querySelector('.side-status')?.click()`,
+    `scrollToCard('从学在浙大拉课表')`,
+  ],
+};
+
+/**
+ * 配对流程的三个场景。
+ *
+ * 每个场景有自己的 URL —— 「有地址没密钥」与「什么都没有」是两个界面：
+ *
+ * - `intro`：首次进入的欢迎页（粘贴按钮、手打地址、扫码入口）；
+ * - `pairing-card`：地址已填、配对码已生成 —— 二维码与同步密码输入框在这里；
+ * - `sync-connect`：跳过初始配置后，设置面板「连接」分区里的「找到手机」。
+ */
+const PAIRING_SCENES = {
+  intro: { url: APP_URL_INTRO, steps: [] },
+  'pairing-card': { url: APP_URL_PAIRING, steps: [] },
+  /**
+   * 「只填地址」那条路：不出二维码，等手机上点「允许」。
+   *
+   * 它跟 `pairing-card` 是**两个界面**（一个画码、一个只显示配对码），
+   * 所以要单独拍 —— 拍出来的图得能看出「这条路没有二维码」。
+   */
+  'link-card': {
+    url: APP_URL_PAIRING,
+    steps: [`clickText('不扫码，直接让手机确认')`],
+  },
+  'sync-connect': {
+    url: APP_URL_INTRO,
+    steps: [`clickText('跳过初始配置')`, `document.querySelector('.side-status')?.click()`],
+  },
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -179,6 +245,22 @@ const HELPERS = `
       const el = document.querySelector('.sheet-tab.is-active');
       return el ? (el.textContent || '').trim() : null;
     },
+    /**
+     * 把某张卡滚到视野中间。
+     *
+     * 为什么需要：设置面板的「连接」分区里卡片是一路排下来的，
+     * 「从学在浙大拉课表」那张卡在窄屏下**在首屏之外** ——
+     * 不滚过去截出来的图就只有「课表与考试」那一张，
+     * 看起来像「这个面板不存在」。
+     */
+    scrollToCard(text) {
+      const nodes = [...document.querySelectorAll('h3')];
+      const hit = nodes.find((n) => (n.textContent || '').includes(text));
+      if (!hit) return 'not-found';
+      const card = hit.closest('.panel-card') || hit;
+      card.scrollIntoView({ block: 'center' });
+      return 'ok';
+    },
     snapshot() {
       try { return JSON.parse(localStorage.getItem('miulist.snapshot') || '{}'); } catch (e) { return {}; }
     },
@@ -189,6 +271,7 @@ const HELPERS = `
   };
   window.clickText = (text) => window.__miu.clickText(text);
   window.clickTab = (text) => window.__miu.clickTab(text);
+  window.scrollToCard = (text) => window.__miu.scrollToCard(text);
 `;
 
 /** 在页面里跑一段表达式，返回它的值。 */
@@ -267,10 +350,68 @@ async function waitForReady(cdp, sessionId, timeoutMs = 20000) {
   throw new Error(`页面没在 ${timeoutMs}ms 内 ready（readyState=${last}）`);
 }
 
+/**
+ * 拍一个场景。
+ *
+ * 每个场景可以有自己的 URL（配对流程那几个页面的前提不一样）与一串点击步骤。
+ *
+ * @param reset true = 拍之前清空 localStorage 并重载。
+ *   **必须这么做的原因**：同一套 localStorage 是所有场景共用的，
+ *   上一场把手机地址存进去，下一场打开就是「已填好地址」的那个页面 ——
+ *   于是拍出来的是**另一个界面**，却顶着这个场景的名字。
+ */
+async function captureScene(cdp, sessionId, size, scene, url, steps, reset = false) {
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width: size.width, height: size.height, deviceScaleFactor: 2, mobile: size.mobile,
+  }, sessionId);
+  // 先把上一页卸掉：它那条 SSE 长连接会占着到 mock 的并发连接数。
+  await cdp.send('Page.navigate', { url: 'about:blank' }, sessionId);
+  await sleep(250);
+
+  const done = cdp.once('Page.loadEventFired', sessionId);
+  await cdp.send('Page.navigate', { url }, sessionId);
+  await Promise.race([done, sleep(20000)]);
+  await waitForReady(cdp, sessionId);
+  await sleep(2200);
+
+  if (reset) {
+    await evaluate(cdp, sessionId, 'localStorage.clear()');
+    const reloaded = cdp.once('Page.loadEventFired', sessionId);
+    await cdp.send('Page.reload', {}, sessionId);
+    await Promise.race([reloaded, sleep(20000)]);
+    await waitForReady(cdp, sessionId);
+    await sleep(2200);
+  }
+
+  // 逐步执行：每一步之间都要给 React 一帧把面板/标签渲染出来。
+  for (const step of steps || []) {
+    const r = await evaluate(cdp, sessionId, step);
+    if (typeof r === 'string' && r === 'not-found') {
+      throw new Error(`场景「${scene}」的第一步点不到：${step}`);
+    }
+    await sleep(900);
+  }
+  // 设置面板场景：把当前标签记下来，方便事后确认这张图拍的是哪个分区。
+  const activeTab = await evaluate(cdp, sessionId, 'window.__miu.activeTab()');
+  const { data } = await cdp.send('Page.captureScreenshot', {
+    format: 'png', captureBeyondViewport: false,
+  }, sessionId);
+  const file = path.join(OUT, `${size.name}-${scene}.png`);
+  fs.writeFileSync(file, Buffer.from(data, 'base64'));
+  const kb = Math.round(fs.statSync(file).size / 1024);
+  const tabNote = activeTab ? `  标签=${activeTab}` : '';
+  console.log(`shot  ${(size.name + '-' + scene).padEnd(26)} ${size.width}x${size.height} -> ${file} (${kb} KB)${tabNote}`);
+}
+
 async function main() {
   if (!fs.existsSync(CHROME)) throw new Error(`找不到 Chrome：${CHROME}`);
   if (!fs.existsSync(HTML)) throw new Error(`找不到构建产物：${HTML}（先 npm run build）`);
-  if (!SECRET) throw new Error('要 --secret（mock 用 --auto-secret 打印的那把）');
+  // `--secret` 只在**老协议**下需要（网页端用 ?devsecret= 把 secret 固定住）。
+  // 新协议（v3.1，DH 协商）两边各算各的，网页端与 mock 用自己的临时密钥对，
+  // 不需要这把固定的 secret —— 所以它现在是**可选**的。
+  if (!SECRET) {
+    console.log('（没给 --secret：走新协议 DH 协商，网页端与 mock 各自生成临时密钥）');
+  }
   fs.mkdirSync(OUT, { recursive: true });
 
   const { proc, port, profile } = await launchChrome();
@@ -287,6 +428,22 @@ async function main() {
     await cdp.send('Emulation.setDeviceMetricsOverride', {
       width: 1440, height: 900, deviceScaleFactor: 1, mobile: false,
     }, sessionId);
+
+    // ── 配对模式：只拍配对流程那几个页面 ──
+    //
+    // mock 必须是 `--no-auto-approve`：配对码页面存在的**前提**就是
+    // 「还没被批准」。mock 自动批准的话，那张二维码一眨眼就没了。
+    if (MODE === 'pairing') {
+      if (!SKIP_SHOTS) {
+        const sizes = ONLY ? SIZES.filter((s) => s.name === ONLY) : SIZES;
+        for (const size of sizes) {
+          for (const [scene, spec] of Object.entries(PAIRING_SCENES)) {
+            await captureScene(cdp, sessionId, size, scene, spec.url, spec.steps, true);
+          }
+        }
+      }
+      return;
+    }
 
     const loaded = cdp.once('Page.loadEventFired', sessionId);
     await cdp.send('Page.navigate', { url: APP_URL }, sessionId);
@@ -351,37 +508,8 @@ async function main() {
     if (!SKIP_SHOTS) {
       const sizes = ONLY ? SIZES.filter((s) => s.name === ONLY) : SIZES;
       for (const size of sizes) {
-        await cdp.send('Emulation.setDeviceMetricsOverride', {
-          width: size.width, height: size.height, deviceScaleFactor: 2, mobile: size.mobile,
-        }, sessionId);
         for (const [scene, steps] of Object.entries(SCENES)) {
-          // 先把上一页卸掉：它那条 SSE 长连接会占着到 mock 的并发连接数。
-          await cdp.send('Page.navigate', { url: 'about:blank' }, sessionId);
-          await sleep(250);
-
-          const done = cdp.once('Page.loadEventFired', sessionId);
-          await cdp.send('Page.navigate', { url: APP_URL }, sessionId);
-          await Promise.race([done, sleep(20000)]);
-          await waitForReady(cdp, sessionId);
-          await sleep(2200);
-          // 逐步执行：每一步之间都要给 React 一帧把面板/标签渲染出来。
-          for (const step of steps || []) {
-            const r = await evaluate(cdp, sessionId, step);
-            if (typeof r === 'string' && r === 'not-found') {
-              throw new Error(`场景「${scene}」的第一步点不到：${step}`);
-            }
-            await sleep(900);
-          }
-          // 设置面板场景：把当前标签记下来，方便事后确认这张图拍的是哪个分区。
-          const activeTab = await evaluate(cdp, sessionId, 'window.__miu.activeTab()');
-          const { data } = await cdp.send('Page.captureScreenshot', {
-            format: 'png', captureBeyondViewport: false,
-          }, sessionId);
-          const file = path.join(OUT, `${size.name}-${scene}.png`);
-          fs.writeFileSync(file, Buffer.from(data, 'base64'));
-          const kb = Math.round(fs.statSync(file).size / 1024);
-          const tabNote = activeTab ? `  标签=${activeTab}` : '';
-          console.log(`shot  ${(size.name + '-' + scene).padEnd(26)} ${size.width}x${size.height} -> ${file} (${kb} KB)${tabNote}`);
+          await captureScene(cdp, sessionId, size, scene, APP_URL, steps);
         }
       }
     }

@@ -46,7 +46,10 @@ export function QrScanner() {
     handledRef.current = true;
     stopCamera();
     close();
-    void connectBase(base);
+    // **走「只填地址」那条路**：地址扫到了，公钥直接发给手机 ——
+    // 手机上弹一张确认卡，点「允许」就配好了。
+    // 这么走**只扫这一次码**（再让手机扫电脑的码就是两次了）。
+    void connectBase(base, { pairMode: 'link' });
   };
 
   useEffect(() => {
@@ -166,7 +169,7 @@ export function QrScanner() {
         <div className="scanner-head">
           <div>
             <h2>扫描手机地址码</h2>
-            <p>对准手机「更多 → 网页同步」里的地址码；配对码会由手机扫电脑。</p>
+            <p>对准手机「更多 → 网页同步」里的地址码；扫到之后手机上会弹出确认卡，点「允许」就连上了。</p>
           </div>
           <button type="button" className="scanner-close" onClick={close} aria-label="关闭">
             <X size={18} />
@@ -221,7 +224,8 @@ export function QrScanner() {
         </div>
 
         <p className="scanner-footnote">
-          摄像头只用于这一次找手机地址，不会保存画面。配对时方向反过来：手机扫电脑上的配对码。
+          摄像头只用于这一次找手机地址，不会保存画面。走这条路**只扫这一次码** ——
+          扫完地址码，手机上点一下「允许」就够了。
         </p>
       </div>
     </div>,

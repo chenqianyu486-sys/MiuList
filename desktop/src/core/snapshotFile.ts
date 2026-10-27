@@ -1,5 +1,6 @@
 import { del, get, set } from 'idb-keyval';
 import { useAppStore } from './store';
+import { decodePhoneDocument, buildPhoneDocument } from './phoneDocument';
 import {
   normalizeSnapshot,
   persistBase,
@@ -16,6 +17,34 @@ const HANDLE_KEY = 'miulist.snapshotHandle.v1';
 const PICKER_TYPES = [
   { description: 'MiuList 快照', accept: { 'application/json': ['.json'] } },
 ];
+
+/** 这次导入到底带进来了什么。用来**说清楚**，而不是只说「已导入」。 */
+export type SnapshotSummary = {
+  tasks: number;
+  taskTypes: number;
+  courses: number;
+  exams: number;
+  weekPlan: boolean;
+  calendar: boolean;
+};
+
+/**
+ * 把摘要说成一句话。
+ *
+ * **只报「已导入」是不够的**：以前手机导出的文件丢进来，
+ * 课表与考试全被丢掉，而界面照样提示「已导入快照」——
+ * 用户看到的是「课表怎么没了」，却没人在哪一步弄丢的。
+ */
+function summaryText(summary: SnapshotSummary | undefined): string {
+  if (!summary) return '已导入快照';
+  const parts = [`${summary.tasks} 条待办`];
+  if (summary.courses) parts.push(`${summary.courses} 门课`);
+  if (summary.exams) parts.push(`${summary.exams} 场考试`);
+  if (summary.taskTypes) parts.push(`${summary.taskTypes} 个分类`);
+  if (summary.weekPlan) parts.push('周课表');
+  if (summary.calendar) parts.push('校历');
+  return `已导入：${parts.join(' · ')}`;
+}
 
 let handle: any = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -47,6 +76,9 @@ export function buildSnapshotPayload(): SnapshotFilePayload {
     pending: s.pending,
     remoteBase: s.remoteBase,
     meta: s.meta,
+    // 同一份数据的另一种形状：**手机 App 也认得的整机快照**。
+    // 有了它，这份文件就能双向通用 —— 手机丢了可以从电脑上的这份救回来。
+    document: buildPhoneDocument(s.snapshot),
   };
 }
 
@@ -66,6 +98,40 @@ function unpack(raw: any): {
   savedAt: number | null;
 } | null {
   if (!raw || typeof raw !== 'object') return null;
+
+  // **手机 App 导出的整机快照**：翻译成网页端认识的形状。
+  //
+  // 以前这里没有这一分支：手机的文档顶层有 `tasks`，于是被当成了本机快照，
+  // 而 `normalizeSnapshot` 只认网页端自己的字段 ——
+  // 课程在手机那边是嵌在 `timetable.courses` 里的，找不到；
+  // 考试手机那边根本没带（v4 起才有）；周课表形状也对不上。
+  // 结果是**待办进来了、课表与考试全丢了、周视图空着**，
+  // 而界面上还提示「已导入快照」。
+  const phone = decodePhoneDocument(raw);
+  if (phone) {
+    return {
+      snapshot: {
+        tasks: phone.tasks,
+        taskTypes: phone.taskTypes,
+        courses: phone.courses,
+        exams: phone.exams,
+        timetable: phone.timetable,
+        calendar: phone.calendar,
+        hasCourses: phone.courses.length > 0,
+        hasExams: phone.exams.length > 0,
+        hasTaskTypes: phone.taskTypes.length > 0,
+        // 「谁新谁赢」要有个可比的值：取待办里最晚的那次改动。
+        latestEditAt: phone.tasks.reduce((max, task) => Math.max(max, task.updatedAt || 0), 0),
+      },
+      pending: {},
+      remoteBase: {},
+      meta: {},
+      base: '',
+      deviceId: null,
+      savedAt: null,
+    };
+  }
+
   const snapshot = raw.snapshot ?? (raw.tasks || raw.courses || raw.timetable ? raw : null);
   if (!snapshot || typeof snapshot !== 'object') return null;
   return {
@@ -90,7 +156,7 @@ function unpack(raw: any): {
 export function applySnapshotPayload(
   raw: unknown,
   mode: 'boot' | 'import',
-): { applied: boolean; reason?: string } {
+): { applied: boolean; reason?: string; summary?: SnapshotSummary } {
   const data = unpack(raw);
   if (!data) return { applied: false, reason: 'invalid' };
 
@@ -146,7 +212,17 @@ export function applySnapshotPayload(
   if (nextBase !== state.base) persistBase(nextBase);
   if (nextDeviceId !== state.deviceId) persistSession(state.secret, nextDeviceId);
 
-  return { applied: true };
+  return {
+    applied: true,
+    summary: {
+      tasks: nextSnapshot.tasks.length,
+      taskTypes: nextSnapshot.taskTypes.length,
+      courses: nextSnapshot.courses.length,
+      exams: nextSnapshot.exams.length,
+      weekPlan: Boolean(nextSnapshot.timetable),
+      calendar: Boolean(nextSnapshot.calendar),
+    },
+  };
 }
 
 async function permissionOf(fileHandle: any): Promise<'granted' | 'prompt' | 'denied'> {
@@ -245,7 +321,7 @@ export async function pickSnapshotFile(): Promise<boolean> {
       lastSavedAt: unpack(raw)?.savedAt ?? null,
       error: null,
     });
-    useAppStore.getState().pushToast('已载入快照文件', 'success');
+    useAppStore.getState().pushToast(summaryText(result.summary), 'success');
     return true;
   } catch (error: any) {
     if (error?.name === 'AbortError') return false;
@@ -385,7 +461,7 @@ export async function importSnapshotJsonFile(file: File): Promise<boolean> {
       useAppStore.getState().pushToast('这个文件不是有效的 MiuList 快照。', 'error');
       return false;
     }
-    useAppStore.getState().pushToast('已导入快照；连接手机后可同步。', 'success');
+    useAppStore.getState().pushToast(`${summaryText(result.summary)}；连接手机后可同步。`, 'success');
     return true;
   } catch (error) {
     console.warn('MiuList: 导入快照失败', error);

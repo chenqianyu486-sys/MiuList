@@ -1,12 +1,14 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   AlertTriangle,
   Check,
+  ClipboardPaste,
   Copy,
   Download,
   FileJson2,
   GraduationCap,
   Info,
+  Landmark,
   Link2,
   Palette,
   RefreshCw,
@@ -29,12 +31,17 @@ import {
   disconnectPair,
   manualSync,
   normalizeBase,
+  pasteAddress,
+  pullConfigAfterZju,
   requestPairCode,
   syncConfigPull,
   syncConfigPush,
   syncMerge,
   syncPull,
   syncPush,
+  zjuSync,
+  zjuTerms,
+  type ZjuTerm,
 } from '../core/sync';
 import {
   createSnapshotFile,
@@ -108,24 +115,51 @@ function ConnectForm({
   const [address, setAddress] = useState(initial);
   const [busy, setBusy] = useState(false);
   const openScanner = useAppStore((s) => s.openScanner);
+  const pushToast = useAppStore((s) => s.pushToast);
+  const addressRef = useRef<HTMLInputElement | null>(null);
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
+    await connectWith('scan');
+  };
+
+  /**
+   * 连上手机，并**选定走哪条配对路**。
+   *
+   * 两条路各只做一个动作：扫码，或者只填地址。
+   */
+  const connectWith = async (mode: 'scan' | 'link') => {
     if (!normalizeBase(address)) {
       return;
     }
     setBusy(true);
-    const ok = await connectBase(address);
+    const ok = await connectBase(address, { pairMode: mode });
     setBusy(false);
     if (ok) onDone?.();
+  };
+
+  /**
+   * 从剪贴板把地址搬过来。读不到就把输入框聚焦好，让用户按 Ctrl+V。
+   */
+  const paste = async () => {
+    setBusy(true);
+    const ok = await pasteAddress();
+    setBusy(false);
+    if (ok) {
+      onDone?.();
+      return;
+    }
+    addressRef.current?.focus();
+    pushToast('剪贴板里没读到地址 —— 在输入框里按 Ctrl+V 粘贴。', 'error');
   };
 
   return (
     <form className="connect-form" onSubmit={submit}>
       <div className="connect-row">
         <label className="field grow">
-          <span>第一次连接：填手机地址</span>
+          <span>手机地址（手机上「网页同步」里复制）</span>
           <input
+            ref={addressRef}
             value={address}
             onChange={(event) => setAddress(event.target.value)}
             placeholder="http://192.168.1.20:8765"
@@ -135,13 +169,19 @@ function ConnectForm({
             spellCheck={false}
           />
         </label>
+        <Button variant="ghost" icon={ClipboardPaste} onClick={() => void paste()}>
+          粘贴
+        </Button>
         <Button variant="primary" type="submit" loading={busy}>
           继续
         </Button>
       </div>
       <p className="field-hint">
-        地址在手机的「更多 → 网页同步」里，带复制按钮；手机和电脑要在同一个 Wi-Fi。
-        填好后电脑会显示配对码，由手机扫电脑完成配对，电脑不需要摄像头。
+        地址在手机的「更多 → 网页同步」里，点「复制连接链接」；
+        粘贴到这里之后，两条路挑一条 —— <strong>手机扫电脑的码</strong>
+        （电脑出二维码，手机扫一次）或 <strong>只填地址直接连</strong>
+        （手机弹确认卡，点「允许」，全程不用摄像头）。
+        手机和电脑要在同一个 Wi-Fi。
       </p>
       <button type="button" className="scan-tile" onClick={openScanner}>
         <span className="scan-tile-icon">
@@ -149,7 +189,7 @@ function ConnectForm({
         </span>
         <span>
           <strong>让电脑扫手机地址码</strong>
-          <em>只用来找到手机，不是配对码</em>
+          <em>扫完地址码，手机上点一下「允许」就行 —— 也只扫这一次</em>
         </span>
         <span className="scan-tile-arrow">→</span>
       </button>
@@ -203,7 +243,7 @@ function ConnectionPanel() {
             </span>
             <div>
               <h3>找到手机</h3>
-              <p>第一次只需告诉电脑手机地址；配对码随后由手机扫电脑生成。</p>
+              <p>第一次只需告诉电脑手机地址 —— 从手机复制粘贴过来，或手打一次。</p>
             </div>
           </div>
           <ConnectForm
@@ -220,7 +260,7 @@ function ConnectionPanel() {
             </span>
             <div>
               <h3>手机扫码配对</h3>
-              <p>电脑已记住手机地址。配对由手机扫下面的码完成，电脑不用摄像头。</p>
+              <p>电脑已记住手机地址。配对由手机扫下面的码完成 —— 只扫这一次码。</p>
             </div>
             <span className={cx('connection-chip', state.phoneReachable && 'is-online')}>
               {state.phoneReachable ? '手机在线' : '手机离线'}
@@ -311,6 +351,7 @@ function ConnectionPanel() {
       )}
 
       {state.base && state.secret ? <SchedulePanel /> : null}
+      {state.base && state.secret ? <ZjuPanel /> : null}
 
       <div className="panel-note">
         <ShieldCheck size={16} />
@@ -391,6 +432,183 @@ function SchedulePanel() {
         {localCourses
           ? '「用手机的」会覆盖这台电脑上的课表与考试；「推给手机」会覆盖手机上的。两者都只动配置，不动待办。'
           : '这台电脑还没有课表：先「用手机的课表和考试」搬一份过来，或者导入一份 JSON 快照。'}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * 「从学在浙大拉课表」。
+ *
+ * ## 为什么是「请手机去拉」
+ *
+ * 浏览器连不上浙大：网页端是 `file://` 打开的单文件 HTML（Origin 为 `null`），
+ * 而学在浙大的登录链路跨三个域，中间要自己读 302 的 `Location` 取 ticket、
+ * 读登录页的 hidden input 拿 `execution`、手改 TGC 的 Cookie Domain ——
+ * 跨源脚本一件都做不到，浏览器也拿不到浙大接口的 CORS 头。
+ * 手机那边有整套能力（Keystore 里的凭据 + CAS 客户端），所以由它代劳，
+ * 网页端只是发一句「去拉」。
+ *
+ * ## 密码的去向
+ *
+ * 密码只在这条请求的**密文**里存在，不落浏览器存储 —— 网页端不记密码。
+ * 手机侧会把它转存进 Keystore（除非用户关掉「记住」），
+ * 下次就能直接用「用手机已存的账号」。
+ */
+function ZjuPanel() {
+  const state = useAppStore();
+  const pushToast = state.pushToast;
+  const [studentId, setStudentId] = useState('');
+  const [password, setPassword] = useState('');
+  const [terms, setTerms] = useState<ZjuTerm[]>([]);
+  const [termKey, setTermKey] = useState('');
+  const [remember, setRemember] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  // 学期表是**公共配置**，不需要账号 —— 拿不到就退回「手机上次同步的那一期」。
+  useEffect(() => {
+    let cancelled = false;
+    void zjuTerms()
+      .then((list) => {
+        if (cancelled || !list.length) return;
+        setTerms(list);
+        setTermKey(`${list[0].year}:${list[0].term}`);
+      })
+      .catch(() => {
+        /* 连不上手机就算了：拉取按钮会给出真正的报错 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selected = terms.find((t) => `${t.year}:${t.term}` === termKey);
+
+  const run = async (useFilled: boolean) => {
+    if (useFilled && (!studentId.trim() || !password)) {
+      pushToast('填一下学号与密码，或者用手机已存的账号。', 'error');
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await zjuSync({
+        studentId: useFilled ? studentId.trim() : undefined,
+        password: useFilled ? password : undefined,
+        year: selected?.year,
+        term: selected?.term,
+        remember,
+      });
+      if (!result.ok) {
+        pushToast(result.error || '拉取失败', 'error');
+        return;
+      }
+      // 拉是手机那边的事，搬才是这台电脑的事 —— 中间还差一次同步。
+      await pullConfigAfterZju();
+      const exam = result.examError ? `，考试没拉到（${result.examError}）` : '';
+      pushToast(
+        `已从学在浙大拉到 ${result.courseCount} 门课 · ${result.examCount} 场考试${exam}`,
+        'success',
+      );
+      if (useFilled) setPassword('');
+    } catch (error: any) {
+      pushToast(error?.message || '拉取失败', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="panel-card glass-soft">
+      <div className="panel-card-head">
+        <span className="panel-icon">
+          <Landmark size={18} />
+        </span>
+        <div>
+          <h3>从学在浙大拉课表</h3>
+          <p>登录浙大教务系统，取回课表与考试。</p>
+        </div>
+      </div>
+
+      <div className="connect-row">
+        <label className="field grow">
+          <span>学号</span>
+          <input
+            value={studentId}
+            onChange={(event) => setStudentId(event.target.value)}
+            placeholder="如 3220000000"
+            inputMode="numeric"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+        </label>
+        <label className="field grow">
+          <span>密码</span>
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="教务网密码"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+        </label>
+      </div>
+
+      {terms.length ? (
+        <div className="connect-row">
+          <label className="field grow">
+            <span>学期</span>
+            <select value={termKey} onChange={(event) => setTermKey(event.target.value)}>
+              {terms.map((term) => (
+                <option key={`${term.year}:${term.term}`} value={`${term.year}:${term.term}`}>
+                  {term.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      ) : null}
+
+      <div className="switch-row">
+        <div>
+          <h3>把账号记住在手机上</h3>
+          <p>存进手机的 Keystore；网页端不留密码。</p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={remember}
+          className={cx('switch', remember && 'is-on')}
+          onClick={() => setRemember(!remember)}
+        >
+          <span />
+        </button>
+      </div>
+
+      <div className="connection-actions">
+        <Button
+          variant="primary"
+          icon={Download}
+          loading={busy}
+          onClick={() => void run(true)}
+        >
+          登录并拉取课表
+        </Button>
+        <Button
+          variant="ghost"
+          icon={RefreshCw}
+          disabled={busy}
+          onClick={() => void run(false)}
+        >
+          用手机已存的账号
+        </Button>
+      </div>
+
+      <p className="field-hint">
+        浏览器连不上浙大，这一步由手机代跑。密码只在这条加密请求里出现一次，
+        浏览器不留；勾上「记住」就转存进手机的 Keystore。
       </p>
     </div>
   );

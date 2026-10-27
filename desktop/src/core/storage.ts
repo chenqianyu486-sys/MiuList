@@ -43,6 +43,7 @@ export function emptySnapshot(): Snapshot {
     exams: [],
     todayCourses: [],
     timetable: null,
+    calendar: null,
   };
 }
 
@@ -59,6 +60,8 @@ export function normalizeSnapshot(raw: unknown): Snapshot {
     exams: Array.isArray(value.exams) ? value.exams : [],
     todayCourses: Array.isArray(value.todayCourses) ? value.todayCourses : [],
     timetable: value.timetable ?? null,
+    // 原始校历：手机导出的整机快照里带着它，导出备份要靠它。
+    calendar: value.calendar ?? null,
     latestEditAt: Number(value.latestEditAt) || 0,
     utcOffsetMinutes: Number.isFinite(Number(value.utcOffsetMinutes))
       ? Number(value.utcOffsetMinutes)

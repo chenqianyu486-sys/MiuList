@@ -13,6 +13,10 @@ export const {
   fromBase64Url,
   randomBytes,
   utf8Bytes,
+  dhGenerateKeypair,
+  dhPublicKey,
+  dhSharedSecret,
+  pairCodeOf,
 } = crypto as {
   sha256: (data: Uint8Array) => Uint8Array;
   hmacSha256: (key: Uint8Array, data: Uint8Array) => Uint8Array;
@@ -33,4 +37,12 @@ export const {
   fromBase64Url: (text: string) => Uint8Array;
   randomBytes: (length: number) => Uint8Array;
   utf8Bytes: (text: string) => Uint8Array;
+  /** 生成一对 DH 临时密钥（配对用）。 */
+  dhGenerateKeypair: () => { priv: Uint8Array; pub: Uint8Array };
+  /** 由私钥算公钥。 */
+  dhPublicKey: (priv: Uint8Array) => Uint8Array;
+  /** 算出共享密钥（32 字节）。 */
+  dhSharedSecret: (priv: Uint8Array, peerPub: Uint8Array) => Uint8Array;
+  /** 公钥的 6 位配对码（用户核对用）。 */
+  pairCodeOf: (pub: Uint8Array) => string;
 };

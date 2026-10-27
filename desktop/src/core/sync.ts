@@ -8,7 +8,17 @@ import {
   signRequest,
   toBase64Url,
   utf8Bytes,
+  dhGenerateKeypair,
+  dhSharedSecret,
+  pairCodeOf,
 } from './crypto';
+// 配对的纯逻辑（地址归一化、要不要再要一张配对码）与协议一样只有一份：
+// 直接复用 web/pairing.js，node 能直接跑它的自检（web/pairing.test.mjs）。
+// @ts-ignore - 共享的纯 JS 模块
+import * as pairing from '../../../web/pairing.js';
+// 「找到手机」也一样只有一份：web/discovery.js（node 能跑它的自检）。
+// @ts-ignore - 共享的纯 JS 模块
+import * as discovery from '../../../web/discovery.js';
 import { dueFromInput, formatTime } from './format';
 import { scheduleSnapshotFileSave, restoreSnapshotFileOnBoot } from './snapshotFile';
 import {
@@ -27,6 +37,7 @@ import {
   NO_DUE,
   type ConflictItem,
   type ConflictState,
+  type PairMode,
   type PairState,
   type PendingMap,
   type Snapshot,
@@ -54,6 +65,13 @@ class ApiError extends Error {
 let sessionKeys: unknown = null;
 let pairTimer: ReturnType<typeof setInterval> | null = null;
 let pairAttempts = 0;
+/**
+ * 配对用的临时 DH 私钥。
+ *
+ * **不放进 store** —— 它是密钥材料，配对一结束就该扔掉。
+ * store 里的东西会被快照文件、localStorage 带着走，密钥不该进去。
+ */
+let pairPriv: Uint8Array | null = null;
 let sse: EventSource | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let autoTimer: ReturnType<typeof setTimeout> | null = null;
@@ -75,19 +93,18 @@ function isOnline(): boolean {
   return Boolean(s.base && s.secret && s.deviceId);
 }
 
-export function normalizeBase(input: string): string {
-  let text = String(input || '').trim();
-  if (!text) return '';
-  if (!/^https?:\/\//i.test(text)) text = `http://${text}`;
-  try {
-    const url = new URL(text);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
-    if (!url.hostname) return '';
-    return url.origin;
-  } catch {
-    return '';
-  }
-}
+/**
+ * 地址归一化。**实现只有一份**，在 `web/pairing.js` 里（可被 node 自检）。
+ *
+ * 这里再导出一次，是为了别处只认 `../core/sync` 这一个入口。
+ */
+export const normalizeBase: (input: string) => string = pairing.normalizeBase as (
+  input: string,
+) => string;
+
+/** 「现在该不该再要一张配对码」的判定。同样只有一份，在 `web/pairing.js` 里。 */
+const shouldRequestPairCode: (status: string, force?: boolean) => boolean =
+  pairing.shouldRequestPairCode as (status: string, force?: boolean) => boolean;
 
 function initKeys(secret: string, passcode = loadPasscode()): boolean {
   try {
@@ -191,7 +208,13 @@ async function api(path: string, options: ApiOptions = {}): Promise<any> {
     try {
       payload = new TextDecoder().decode(openSealed(sessionKeys, fromBase64Url(text)));
     } catch {
-      throw new ApiError('响应解密失败（密钥对不上？）', 500);
+      // 解不开只有一种可能：**两边的密钥不是同一把**。
+      // 密钥 = secret + 同步密码 派生出来的，而 secret 两端是一样的
+      // （都来自那张二维码），所以差异只可能出在**同步密码**上。
+      throw new ApiError(
+        '密钥对不上 —— 手机上若设了同步密码，在配对处填同样的 4 位数字后重新配对',
+        500,
+      );
     }
   }
   if (!res.ok) {
@@ -413,42 +436,161 @@ function stopPairPolling(): void {
   pairAttempts = 0;
 }
 
-export async function requestPairCode(): Promise<void> {
+/**
+ * 申请一个配对码。
+ *
+ * ## 两条路（用户二选一，**各只做一个动作**）
+ *
+ * | 路 | 电脑做什么 | 手机做什么 | 公钥怎么到 |
+ * |---|---|---|---|
+ * | `scan` | 显示二维码 | **扫这张码** + 点「允许」 | 走二维码（视觉通道） |
+ * | `link` | 发一个 HTTP 请求 | 点「允许」 | 走 HTTP（**公钥不是秘密**） |
+ *
+ * 两条路都用 **DH 协商**：密钥是两端各自算出来的，**从不过网**。
+ * 过网的只有公钥 —— 而公钥本来就是公开的东西，抓包的人看到它
+ * 也算不出共享密钥（DH 的单向性）。
+ *
+ * ## 为什么默认**不**重复申请
+ *
+ * 同一个时刻可能有两条路都想要一张配对码：
+ *
+ * - [connectBase] 连上地址后会申请一次；
+ * - [PairingCard] 在地址已知、还没配对时也会自动申请一次。
+ *
+ * 两条都跑的话会拿到**两个不同的密钥对**，手机上会多出一条待确认的请求，
+ * 而网页端只在轮询**后一个** —— 用户若批准了前一个，
+ * 网页端就会一直转圈直到配对码过期（症状是「点了允许，但电脑那边没反应」）。
+ *
+ * 所以这里默认**让正在进行的配对继续**：只有显式换码（[force]）才重新申请。
+ *
+ * @param force true = 用户明确要「换一个配对码」，无视当前状态。
+ * @param mode 走哪条路：`scan` 出二维码，`link` 只填地址。
+ */
+export async function requestPairCode(force = false, mode: PairMode = 'scan'): Promise<void> {
+  if (!shouldRequestPairCode(get().pair.status, force)) return;
   stopPairPolling();
   const s = get();
   if (!s.base) {
     set({
-      pair: { status: 'error', message: '先填写手机地址，或扫描手机「网页同步」里的地址二维码。' },
+      pair: {
+        status: 'error',
+        mode,
+        message: '先填写手机地址，或扫描手机「网页同步」里的地址二维码。',
+      },
     });
     return;
   }
-  set({ pair: { status: 'requesting' } });
+  set({ pair: { status: 'requesting', mode } });
   try {
-    const devSecret = devParam('devsecret');
-    const secretBytes = devSecret ? fromBase64Url(devSecret) : randomBytes(32);
-    const secret = toBase64Url(secretBytes);
-    const requestId = toBase64Url(sha256(secretBytes).slice(0, 16));
-    await api('/api/pair/request', {
-      method: 'POST',
-      body: { requestId, deviceName: '电脑网页端' },
-      auth: false,
-      plain: true,
-      timeoutMs: 8000,
-    });
-    set({ pair: { status: 'waiting', requestId, secret } });
-    pollPair(requestId, secret);
+    // 先确认手机上真的有服务 —— 也顺便问清楚它支持哪一版配对协议。
+    const health = await probePhone();
+    if (!health) {
+      set({
+        pair: {
+          status: 'error',
+          mode,
+          message: '这个地址上没有 MiuList 服务。确认手机开着「局域网服务」。',
+        },
+      });
+      toast('这个地址上没有 MiuList 服务。确认手机开着「局域网服务」。', 'error');
+      return;
+    }
+    // 旧版手机（配对协议 v3）只会「把 secret 从二维码搬过去」，
+    // 没有「只填地址」那条路 —— 那就老老实实退回扫码。
+    const pairingProtocol = Number((health as any)?.pairing ?? 3);
+    if (pairingProtocol < 4) {
+      if (mode === 'link') {
+        set({
+          pair: {
+            status: 'error',
+            mode: 'scan',
+            message: '手机版本太旧，只能扫码配对 —— 把手机上的 MiuList 更新一下。',
+          },
+        });
+        return;
+      }
+      await startLegacyPairing(mode);
+      return;
+    }
+    await startDhPairing(mode);
   } catch (error: any) {
     const message = error?.message || '拿不到配对码';
-    set({ pair: { status: 'error', message } });
+    set({ pair: { status: 'error', mode, message } });
     toast(message, 'error');
   }
 }
 
-function pollPair(requestId: string, secret: string): void {
+/**
+ * 新协议（v3.1）：**DH 协商**。
+ *
+ * 密钥是两端各自算出来的，**从不过网** —— 过网的只有公钥。
+ */
+async function startDhPairing(mode: PairMode): Promise<void> {
+  const keypair = dhGenerateKeypair();
+  const requestId = toBase64Url(randomBytes(16));
+  const publicKey = toBase64Url(keypair.pub);
+  // 配对码是**公钥**的哈希：电脑算得出自己的，手机收到公钥也算得出同一个。
+  // 用户拿两个码一对，就知道「手机上要连的」是不是眼前这台电脑。
+  const code = pairCodeOf(keypair.pub);
+  pairPriv = keypair.priv;
+
+  const body: Record<string, unknown> = { requestId, deviceName: '电脑网页端' };
+  // 「只填地址」那条路：公钥跟着请求走。
+  // 扫码那条路：**不带**公钥 —— 手机在用户扫码之前不该弹确认卡，
+  // 否则「扫码」就不是那一步了。
+  if (mode === 'link') body.publicKey = publicKey;
+
+  await api('/api/pair/request', {
+    method: 'POST',
+    body,
+    auth: false,
+    plain: true,
+    timeoutMs: 8000,
+  });
+  set({ pair: { status: 'waiting', requestId, code, mode, publicKey } });
+  pollPair({ requestId, code, mode, publicKey });
+}
+
+/**
+ * 旧协议（v3）：secret 从二维码搬到手机上。
+ *
+ * 只在**手机还是旧版**时走 —— 新手机也认这条路（为了兼容旧网页端）。
+ */
+async function startLegacyPairing(mode: PairMode): Promise<void> {
+  const devSecret = devParam('devsecret');
+  const secretBytes = devSecret ? fromBase64Url(devSecret) : randomBytes(32);
+  const secret = toBase64Url(secretBytes);
+  const requestId = toBase64Url(sha256(secretBytes).slice(0, 16));
+  await api('/api/pair/request', {
+    method: 'POST',
+    body: { requestId, deviceName: '电脑网页端' },
+    auth: false,
+    plain: true,
+    timeoutMs: 8000,
+  });
+  // 旧网页端显示的就是 requestId 的前 6 位 —— 手机那边也显示一样的。
+  const code = requestId.slice(0, 6).toUpperCase();
+  set({ pair: { status: 'waiting', requestId, secret, code, mode } });
+  pollPair({ requestId, secret, code, mode });
+}
+
+/** 一次配对的现场。 */
+type PairAttempt = {
+  requestId: string;
+  /** 旧协议：secret 本身。新协议：null（走 DH 协商）。 */
+  secret?: string;
+  /** 配对码（用户核对用）。 */
+  code: string;
+  mode: PairMode;
+  /** 新协议：电脑的 DH 公钥（base64url），二维码里带的就是它。 */
+  publicKey?: string;
+};
+
+function pollPair(attempt: PairAttempt): void {
   stopPairPolling();
   pairTimer = setInterval(async () => {
     const current = get().pair;
-    if (current.requestId !== requestId || current.status !== 'waiting') {
+    if (current.requestId !== attempt.requestId || current.status !== 'waiting') {
       stopPairPolling();
       return;
     }
@@ -458,8 +600,10 @@ function pollPair(requestId: string, secret: string): void {
       set({
         pair: {
           status: 'expired',
-          requestId,
-          secret,
+          requestId: attempt.requestId,
+          secret: attempt.secret,
+          code: attempt.code,
+          mode: attempt.mode,
           message: '配对码过期了，或手机一直没响应。',
         },
       });
@@ -467,16 +611,36 @@ function pollPair(requestId: string, secret: string): void {
     }
     try {
       const res = await api(
-        `/api/pair/status?requestId=${encodeURIComponent(requestId)}`,
+        `/api/pair/status?requestId=${encodeURIComponent(attempt.requestId)}`,
         { auth: false, timeoutMs: 6000 },
       );
       if (res?.state === 'approved' && res.deviceId) {
         stopPairPolling();
-        const s = get();
+        const secret = attempt.secret ?? resolveDhSecret(res, attempt);
+        if (!secret) {
+          stopPairPolling();
+          set({
+            pair: {
+              status: 'error',
+              requestId: attempt.requestId,
+              code: attempt.code,
+              mode: attempt.mode,
+              message: '配对码对不上 —— 可能有人在中间拦截，别点「允许」。',
+            },
+          });
+          toast('配对码对不上，已中止配对', 'error');
+          return;
+        }
         set({
           secret,
           deviceId: res.deviceId,
-          pair: { status: 'approved', requestId, secret },
+          pair: {
+            status: 'approved',
+            requestId: attempt.requestId,
+            secret,
+            code: attempt.code,
+            mode: attempt.mode,
+          },
           phoneReachable: true,
         });
         persistSession(secret, res.deviceId);
@@ -491,8 +655,10 @@ function pollPair(requestId: string, secret: string): void {
         set({
           pair: {
             status: res.state,
-            requestId,
-            secret,
+            requestId: attempt.requestId,
+            secret: attempt.secret,
+            code: attempt.code,
+            mode: attempt.mode,
             message: res.state === 'expired' ? '配对码过期了，换一个再扫。' : '手机那边拒绝了。',
           },
         });
@@ -503,17 +669,42 @@ function pollPair(requestId: string, secret: string): void {
   }, 1500);
 }
 
+/**
+ * 拿手机回的公钥算出共享密钥 —— **顺便核对配对码**。
+ *
+ * ## 为什么核对码这么重要
+ *
+ * 配对码是**电脑那个公钥**的哈希。手机报上来的码必须跟电脑自己算的
+ * 一个字不差：对不上，说明有人在中间把公钥换掉了 ——
+ * 这时宁可配不成，也不能拿一把来路不明的密钥去加密数据。
+ *
+ * @returns secret（base64url）；对不上时返回 null。
+ */
+function resolveDhSecret(res: any, attempt: PairAttempt): string | null {
+  const peerPubB64 = res?.publicKey;
+  if (!peerPubB64 || !pairPriv) return null;
+  if (res?.pairCode && res.pairCode !== attempt.code) return null;
+  const peerPub = fromBase64Url(peerPubB64);
+  return toBase64Url(dhSharedSecret(pairPriv, peerPub));
+}
+
 export function cancelPair(): void {
   stopPairPolling();
+  // 私钥也一起扔掉 —— 换一条路重来时不该留着上一把。
+  pairPriv = null;
   set({ pair: { status: 'idle' } });
 }
 
-export async function connectBase(input: string): Promise<boolean> {
+export async function connectBase(
+  input: string,
+  options: { pairMode?: PairMode } = {},
+): Promise<boolean> {
   const base = normalizeBase(input);
   if (!base) {
     toast('手机地址看起来不对，应该是 http://192.168.x.x:端口', 'error');
     return false;
   }
+  const pairMode: PairMode = options.pairMode || 'scan';
   cancelPair();
   stopEvents();
   stopPolling();
@@ -523,6 +714,9 @@ export async function connectBase(input: string): Promise<boolean> {
     remoteSnapshot: null,
     conflict: null,
     syncError: null,
+    // **先把用户选的那条路记下来**：配对卡片会自动申请一张配对码，
+    // 它得知道该走扫码还是「只填地址」。
+    pair: { status: 'idle', mode: pairMode },
   });
   persistBase(base);
   const health = await probePhone();
@@ -536,8 +730,45 @@ export async function connectBase(input: string): Promise<boolean> {
     ensurePolling();
     await autoSync('connect');
   } else {
-    await requestPairCode();
+    await requestPairCode(false, pairMode);
   }
+  return true;
+}
+
+/**
+ * 从剪贴板读手机地址，然后连上。
+ *
+ * ## 为什么要有「粘贴」这一下
+ *
+ * 浏览器**不能发 UDP**（见 `docs/lan-sync-protocol.md` §1），
+ * 所以网页端没法自动找到手机 —— 地址只能由「人」搬过来。
+ *
+ * 而「搬」有三种成本：
+ *
+ * - 手打 `http://192.168.x.x:8765` —— 慢，且容易打错一个数字；
+ * - 电脑摄像头扫手机上的码 —— 要架手机、要点权限；
+ * - **手机上一键复制、电脑上一键粘贴** —— 两个动作，不用摄像头，不用抄数字。
+ *
+ * 手机端那个「复制连接链接」按钮就是为它准备的。
+ *
+ * ## 读不到剪贴板怎么办
+ *
+ * `navigator.clipboard.readText()` 在 `file://` 下可能被浏览器拒掉
+ * （file:// 虽是 secure context，但剪贴板**读**权限仍要用户授予）。
+ *
+ * 这时返回 false，由调用方**退回「聚焦输入框、让用户按 Ctrl+V」** ——
+ * 那条路永远可用，因为剪贴板里已经有那个地址了。
+ */
+export async function pasteAddress(): Promise<boolean> {
+  let text = '';
+  try {
+    text = await navigator.clipboard.readText();
+  } catch {
+    return false;
+  }
+  const base = normalizeBase(text);
+  if (!base) return false;
+  await connectBase(base);
   return true;
 }
 
@@ -627,12 +858,84 @@ function ensurePolling(): void {
     if (s.syncing || s.conflict) return;
     const health = await probePhone();
     if (health) await autoSync('poll');
+    // **手机可能只是换了 IP** —— 扫一遍网段把它找回来，用户什么都不用做。
+    else void ensurePhoneFound();
   }, 25000);
 }
 
 function stopPolling(): void {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = null;
+}
+
+// ── 自动找到手机 ──────────────────────────────────────────────
+
+/** 上次扫网段是什么时候。**别扫得太勤** —— 一次扫要 254 个请求。 */
+let lastDiscoverAt = 0;
+/** 正在扫（防止并发的两次扫描）。 */
+let discovering = false;
+
+/**
+ * 找到手机：**按上次记住的网段扫一遍**。
+ *
+ * 浏览器不能发 UDP 广播（见 `docs/lan-sync-protocol.md` §1），
+ * 所以「电脑自己找到手机」只剩这一条路：挨个敲。
+ *
+ * 它成立的前提有两个，缺一不可：
+ *
+ * 1. **手机端口固定**（38780）—— 否则不知道敲哪儿；
+ * 2. **知道上次那个网段** —— 记住的地址里就有（`192.168.1.20` → 扫 `192.168.1.x`）。
+ *
+ * @returns 找到的地址（`http://ip:port`）；没找到返回 null。
+ */
+export async function discoverPhone(): Promise<string | null> {
+  const s = get();
+  if (!s.base) return null;
+  const hosts = discovery.subnetHosts(s.base);
+  if (!hosts.length) return null;
+  const hit = await discovery.sweepPhone({
+    hosts,
+    ports: discovery.PHONE_PORTS,
+    probe: (host: string, port: number) => discovery.probeHealth(host, port),
+  });
+  if (!hit) return null;
+  return `http://${hit.host}:${hit.port}`;
+}
+
+/**
+ * 连不上手机时，**自动去把它找回来**。
+ *
+ * 手机换了 IP（DHCP 换了地址）是常事 —— 用户不该为这件事再填一次地址。
+ * 找到之后直接接上：密钥还在本地，不用重新配对。
+ */
+export async function ensurePhoneFound(): Promise<boolean> {
+  const s = get();
+  if (!s.base) return false;
+  if (s.phoneReachable) return true;
+  if (discovering) return false;
+  const now = Date.now();
+  // 一次扫描要 254 个请求，别连着扫。
+  if (now - lastDiscoverAt < 20000) return false;
+  lastDiscoverAt = now;
+  discovering = true;
+  try {
+    const found = await discoverPhone();
+    if (!found) return false;
+    if (found !== s.base) {
+      set({ base: found });
+      persistBase(found);
+    }
+    const health = await probePhone();
+    if (!health) return false;
+    if (get().secret && get().deviceId) {
+      connectEvents();
+      ensurePolling();
+      await autoSync('discovered');
+    }
+    return true;
+  } finally {
+    discovering = false;
+  }
 }
 
 // ── 同步 ────────────────────────────────────────────────────
@@ -871,8 +1174,11 @@ export async function syncMerge(): Promise<void> {
  * 要搬就得明确点一下。
  *
  * 待办一个字都不动。
+ *
+ * @param quiet 搬完不弹提示。用于「刚拉完浙大，顺手搬一次」那条路 ——
+ *   那条路自己要说清楚拉到了什么，多一条「已用手机上的课表」只会添乱。
  */
-export async function syncConfigPull(): Promise<void> {
+export async function syncConfigPull(quiet = false): Promise<void> {
   const s = get();
   if (!s.base || !s.secret || !s.deviceId) return;
   set({ syncing: true, syncError: null });
@@ -885,6 +1191,9 @@ export async function syncConfigPull(): Promise<void> {
       taskTypes: remote.taskTypes || [],
       timetable: remote.timetable ?? null,
       todayCourses: remote.todayCourses || [],
+      // 手机那边也会把**原始校历**发过来（见 P1-2）：有了它，
+      // 网页端导出的 JSON 才是完整的「整机快照」，而不只是待办。
+      calendar: remote.calendar ?? s.snapshot.calendar ?? null,
       hasCourses: (remote.courses?.length || 0) > 0,
       hasExams: (remote.exams?.length || 0) > 0,
       hasTaskTypes: (remote.taskTypes?.length || 0) > 0,
@@ -893,10 +1202,12 @@ export async function syncConfigPull(): Promise<void> {
     };
     set({ snapshot, remoteSnapshot: remote });
     saveLocalSnapshot(snapshot);
-    toast(
-      `已用手机上的课表：${snapshot.courses.length} 门课 · ${snapshot.exams.length} 场考试`,
-      'success',
-    );
+    if (!quiet) {
+      toast(
+        `已用手机上的课表：${snapshot.courses.length} 门课 · ${snapshot.exams.length} 场考试`,
+        'success',
+      );
+    }
   } catch (error: any) {
     if (error?.unauthorized) return handleUnauthorized();
     syncFailureToast(error?.message || '搬课表失败');
@@ -931,6 +1242,91 @@ export async function syncConfigPush(): Promise<void> {
   } finally {
     set({ syncing: false });
   }
+}
+
+// ── 学在浙大 ──────────────────────────────────────────────────────
+
+/** 学在浙大学期下拉里的一项。 */
+export type ZjuTerm = {
+  /** 学年，如 `"2026-2027"`。 */
+  year: string;
+  /** 教务网查询用哪一半：秋冬 → 0(秋)，春夏 → 4(春)。 */
+  term: number;
+  label: string;
+};
+
+/** 一次拉取的结果。 */
+export type ZjuSyncResult = {
+  ok: boolean;
+  courseCount: number;
+  slotCount: number;
+  examCount: number;
+  termLabel: string;
+  /** 考试没拉到时的原因；null = 一切正常（学校还没公布考试是正常状态）。 */
+  examError?: string | null;
+  /** 凭据是否被转存进了手机的 Keystore。 */
+  savedCredentials: boolean;
+  error?: string;
+  kind?: string;
+  localDataIntact?: boolean;
+};
+
+/**
+ * 可选的学期。**不需要账号** —— 学期表是公共配置。
+ */
+export async function zjuTerms(): Promise<ZjuTerm[]> {
+  const res = await api('/api/zju/terms');
+  return Array.isArray(res?.terms) ? (res.terms as ZjuTerm[]) : [];
+}
+
+/**
+ * 让手机去学在浙大拉一次课表（顺带把考试也拉了）。
+ *
+ * ## 为什么是「让手机去拉」
+ *
+ * 网页端是 `file://` 打开的单文件 HTML（Origin 为 `null`），
+ * 而学在浙大的登录链路跨三个域，中间要自己读 302 的 `Location` 取 ticket、
+ * 读登录页的 hidden input 拿 `execution`、手改 TGC 的 Cookie Domain ——
+ * 跨源脚本一件都做不到，浏览器也拿不到浙大接口的 CORS 头。
+ * 手机那边已经有整套能力（Keystore 里的凭据 + CAS 客户端），所以由它代劳。
+ *
+ * ## 密码的去向
+ *
+ * 密码只在这条请求的**密文**里存在（会话密钥派生，局域网上也解不开），
+ * **不落浏览器存储** —— 网页端不记密码。手机侧会把它转存进 Keystore，
+ * 下次就不用再填。
+ */
+export async function zjuSync(input: {
+  studentId?: string;
+  password?: string;
+  year?: string;
+  term?: number;
+  remember?: boolean;
+}): Promise<ZjuSyncResult> {
+  const res = await api('/api/zju/sync', { method: 'POST', body: input });
+  return {
+    ok: res?.ok === true,
+    courseCount: Number(res?.courseCount) || 0,
+    slotCount: Number(res?.slotCount) || 0,
+    examCount: Number(res?.examCount) || 0,
+    termLabel: typeof res?.termLabel === 'string' ? res.termLabel : '',
+    examError: typeof res?.examError === 'string' ? res.examError : null,
+    savedCredentials: res?.savedCredentials === true,
+    error: typeof res?.error === 'string' ? res.error : undefined,
+    kind: typeof res?.kind === 'string' ? res.kind : undefined,
+    localDataIntact: res?.localDataIntact !== false,
+  };
+}
+
+/**
+ * 拉完之后把手机上的课表搬过来。
+ *
+ * 单独拎出来是因为「拉」与「搬」是**两件事**：
+ * 拉是让手机去浙大取数据，搬是把结果放到这台电脑上。
+ * 中间还差一次同步 —— 手机那边 Room 变了，要再取一次快照。
+ */
+export async function pullConfigAfterZju(): Promise<void> {
+  await syncConfigPull(true);
 }
 
 let autoSyncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1056,12 +1452,16 @@ function bindGlobalEvents(): void {
     if (!get().base) return;
     void probePhone().then((health) => {
       if (health && isOnline()) void autoSync('online');
+      // 刚从「没网」恢复过来：手机可能换了地址，扫一遍找回来。
+      else void ensurePhoneFound();
     });
   });
   window.addEventListener('offline', () => set({ phoneReachable: false, sseConnected: false }));
   window.addEventListener('focus', () => {
     if (document.visibilityState !== 'visible') return;
     if (isOnline() && get().phoneReachable) scheduleAutoSync();
+    // 切回前台时手机可能换了 IP —— 顺手找一下。
+    else if (get().base) void ensurePhoneFound();
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && isOnline() && get().phoneReachable) {
@@ -1108,6 +1508,9 @@ export async function boot(): Promise<void> {
       connectEvents();
       ensurePolling();
       await autoSync('boot');
+    } else {
+      // **连不上就自己去找**：手机换了 IP 也不要紧，扫一遍网段就找回来。
+      void ensurePhoneFound();
     }
   } else if (s.base && !s.secret) {
     const health = await probePhone();
@@ -1131,6 +1534,8 @@ export const sync = {
   requestPairCode,
   cancelPair,
   disconnectPair,
+  discoverPhone,
+  ensurePhoneFound,
   toggleTask,
   toggleStar,
   addTask,
