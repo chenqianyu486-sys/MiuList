@@ -11,11 +11,11 @@
 #
 # | 文件 | 内容 |
 # |------|------|
-# | 01_topbar_off / 10_topbar_on | 总览页顶栏（关：没有 ✨；开：有 ✨） |
-# | 02_drawer_off / 11_drawer_on | 「更多」抽屉（开关行 + 规则行的显隐） |
-# | 03~09_guide_off_* | 引导的**轻量四步**（开关关着时走的那套） |
+# | 01_topbar_off / 09_topbar_on | 总览页顶栏（关：没有 ✨；开：有 ✨） |
+# | 02_drawer_off / 10_drawer_on | 「更多」抽屉（开关行 + 规则行的显隐） |
+# | 03~08_guide_off_* | 引导的**轻量三步**（开关关着时走的那套） |
 # | 05_guide_after_enable | 在引导里按下「开启」之后落到「课程分类」 |
-# | 12~17_guide_on_* | 引导的**完整六步**（开关开着时走的那套） |
+# | 11~15_guide_on_* | 引导的**完整五步**（开关开着时走的那套） |
 #
 # ## 用法
 #
@@ -260,44 +260,42 @@ capture_one() {
     close_drawer
   fi
 
-  # 引导的轻量四步
+  # 引导的轻量三步
   reset_guide
   open_guide
   shot 03_guide_off_1_sync
   tap_label "下一步" >/dev/null 2>&1; shot 04_guide_off_2_toggle
-  # 在引导里按下「开启」→ 引导落到「课程分类」（轻量四步变完整六步）
+  # 在引导里按下「开启」→ 引导落到「课程分类」（轻量三步变完整五步）
   tap_label "开启" >/dev/null 2>&1; shot 05_guide_after_enable
   tap_label "跳过" >/dev/null 2>&1
 
-  # 拨回关，再走一遍轻量四步（这次按「下一步」而不是「开启」）
+  # 拨回关，再走一遍轻量三步（这次按「下一步」而不是「开启」）
   set_switch false
   reset_guide
   open_guide
   shot 06_guide_off_1_sync
   tap_label "下一步" >/dev/null 2>&1; shot 07_guide_off_2_toggle
   tap_label "下一步" >/dev/null 2>&1; shot 08_guide_off_3_wallpaper
-  tap_label "下一步" >/dev/null 2>&1; shot 09_guide_off_4_flip
   tap_label "跳过" >/dev/null 2>&1
 
   # ---------------- 开关：开 ----------------
   set_switch true
-  shot 10_topbar_on
+  shot 09_topbar_on
 
   if [ "$GUIDE_ONLY" -eq 0 ]; then
     open_drawer
-    shot 11_drawer_on
+    shot 10_drawer_on
     close_drawer
   fi
 
-  # 引导的完整六步
+  # 引导的完整五步
   reset_guide
   open_guide
-  shot 12_guide_on_1_sync
-  tap_label "下一步" >/dev/null 2>&1; shot 13_guide_on_2_category
-  tap_label "下一步" >/dev/null 2>&1; shot 14_guide_on_3_rules
-  tap_label "下一步" >/dev/null 2>&1; shot 15_guide_on_4_generate
-  tap_label "下一步" >/dev/null 2>&1; shot 16_guide_on_5_wallpaper
-  tap_label "下一步" >/dev/null 2>&1; shot 17_guide_on_6_flip
+  shot 11_guide_on_1_sync
+  tap_label "下一步" >/dev/null 2>&1; shot 12_guide_on_2_category
+  tap_label "下一步" >/dev/null 2>&1; shot 13_guide_on_3_rules
+  tap_label "下一步" >/dev/null 2>&1; shot 14_guide_on_4_generate
+  tap_label "下一步" >/dev/null 2>&1; shot 15_guide_on_5_wallpaper
   tap_label "跳过" >/dev/null 2>&1
 
   echo "  抓到 $(ls "$OUT"/*.png 2>/dev/null | wc -l) 张"

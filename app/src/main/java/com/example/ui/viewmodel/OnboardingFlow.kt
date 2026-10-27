@@ -20,9 +20,9 @@ package com.example.ui.viewmodel
  * 「一键生成待办」默认关闭，而它背后的「课程分类 / 课程联动规则 /
  * 生成本周待办」三步**只服务于它**。所以：
  *
- * - 功能**关闭**：引导走轻量四步（同步课表 → 一键生成开关 → 壁纸 → 翻面）；
- * - 功能**开启**：引导走完整六步（同步课表 → 课程分类 → 联动规则 →
- *   生成本周待办 → 壁纸 → 翻面），与加这个开关之前完全一样。
+ * - 功能**关闭**：引导走轻量三步（同步课表 → 一键生成开关 → 壁纸）；
+ * - 功能**开启**：引导走完整五步（同步课表 → 课程分类 → 联动规则 →
+ *   生成本周待办 → 壁纸）。
  *
  * 关着的人不该被推去配规则 —— 那正是这个开关要避免的「折腾设置」。
  */
@@ -38,10 +38,6 @@ internal fun MainUiState.isGuideTargetOpen(target: GuideTarget): Boolean = when 
     GuideTarget.LINKAGE_RULES -> isCategoryRulesDialogOpen
     GuideTarget.WEEK_TASK_GENERATION -> isQuickGenerateDialogOpen
     GuideTarget.WALLPAPER -> isWallpaperDialogOpen
-    // 这一项**没有弹层**：它是总览页那张主卡的背面。
-    // 「去看看」是直接把人送到总览页并替他把卡翻过去 —— 没有弹层开着，
-    // 也就没有「做完之后接回来」这回事，所以恒为 false。
-    GuideTarget.HERO_FLIP_CARD -> false
     // 开关那一步也没有弹层：它按下去是**打开这个功能**（不是去某个地方），
     // 引导不暂停、也不等谁。
     GuideTarget.QUICK_GENERATE_TOGGLE -> false
@@ -50,15 +46,15 @@ internal fun MainUiState.isGuideTargetOpen(target: GuideTarget): Boolean = when 
 /**
  * 当前状态下，引导**看得见**的步骤（按顺序）。
  *
- * 关着时是轻量四步，开着时是完整六步（与加这个开关之前一样）。
+ * 关着时是轻量三步，开着时是完整五步。
  *
- * 两种清单都**至少有两步**（同步课表与翻面），所以下面那些「往后找一步」
+ * 两种清单都**至少有两步**（同步课表与壁纸），所以下面那些「往后找一步」
  * 的回退永远找得到落点。
  */
 internal fun visibleGuideTargets(quickGenerateEnabled: Boolean): List<GuideTarget> =
     if (quickGenerateEnabled) {
         // 开着：开关那一步**不出现**（入口在顶栏，第 4 步已经讲过怎么用），
-        // 其余六步原样。
+        // 其余五步原样。
         GuideTarget.entries.filter { it != GuideTarget.QUICK_GENERATE_TOGGLE }
     } else {
         // 关着：那三步只服务于一键生成，不出现；换成「要不要开启它」那一步。

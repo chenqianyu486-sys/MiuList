@@ -1630,6 +1630,10 @@ private val ruleFlow = combine(
     private fun resolveOnboardingResumeTarget(): GuideTarget {
         onboardingRepo.currentTarget?.let { name ->
             GuideTarget.entries.firstOrNull { it.name == name }?.let { return it }
+            // 存的是**名字**，所以老设备上还可能留着**已经从引导里去掉**的那一步
+            // （「HERO_FLIP_CARD」= 总览页主卡翻面）。认不得这个名字就等于
+            // 把他推回第 1 步 —— 白看一遍。落到新的最后一步就好。
+            GuideTarget.retiredTargetNames[name]?.let { return it }
         }
         // 进度**从没按新格式记过** = 这个键还没被写过 = 这台设备上的进度
         // 还是老版本那个序号（那时引导固定六步、顺序不变）→ 按老顺序换算。
@@ -1687,9 +1691,9 @@ private val ruleFlow = combine(
     /**
      * 下一步；已经是最后一步就走完这一趟（记「看过」并把进度清掉）。
      *
-     * 走的是**当前看得见的那套清单**：一键生成关着时是四步，
+     * 走的是**当前看得见的那套清单**：一键生成关着时是三步，
      * 从「开关」那一步按下会直接落到「壁纸」（那三步不出现）；
-     * 开着时是六步，与加这个开关之前完全一样。
+     * 开着时是五步。
      */
     fun advanceOnboardingStep() {
         val next = nextVisibleGuideTarget(_uiState.value.onboardingTarget, quickGeneratePref.isEnabled)
@@ -1744,32 +1748,6 @@ private val ruleFlow = combine(
      */
     fun openOnboardingTarget(target: GuideTarget) {
         when (target) {
-            // ----------------------------------------------------------------
-            // 最后一步：学在浙大那一面。
-            //
-            // 它**没有弹层**：它是总览页最上面那张主卡的背面。
-            // 所以这里没有「暂停 → 接回」那套：直接把这一趟引导收尾，
-            // 把人送到总览页并替他把卡翻过去 —— 引导的活儿到这儿就干完了。
-            //
-            // 收尾时顺手记下「看过」：这一趟确实走完了（走完的那一步就是它）。
-            // ----------------------------------------------------------------
-            GuideTarget.HERO_FLIP_CARD -> {
-                onboardingRepo.hasSeenOnboarding = true
-                onboardingRepo.currentTarget = null
-                _uiState.update {
-                    it.copy(
-                        isOnboardingGuideOpen = false,
-                        // 没有弹层可等，就**不记**在等谁：
-                        // 记上了的话，别的弹层一关就会把引导从总览页拽回来。
-                        onboardingAwaitingTarget = null,
-                        onboardingResumed = false,
-                        currentTab = NavigationTab.DASHBOARD,
-                        heroFlipRequest = it.heroFlipRequest + 1,
-                        userMessage = "这是学在浙大待交的作业，点这张卡可以翻回天气"
-                    )
-                }
-                return
-            }
             // ----------------------------------------------------------------
             // 「生成本周待办」：落点是**预览弹层**，而它是**异步**造的
             // （要读校历、课程与规则），不能像别的目标那样一次更新里开完。
@@ -1836,7 +1814,6 @@ private val ruleFlow = combine(
                         // 上面三个已经各自 return 了，走不到这里。
                         GuideTarget.WEEK_TASK_GENERATION -> state
                         GuideTarget.QUICK_GENERATE_TOGGLE -> state
-                        GuideTarget.HERO_FLIP_CARD -> state
                     }
                     opened.copy(
                         isOnboardingGuideOpen = false,

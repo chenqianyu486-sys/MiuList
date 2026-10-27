@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 「一键生成待办」关着时引导走轻量四步、开着时走完整六步。
+ * 「一键生成待办」关着时引导走轻量三步、开着时走完整五步。
  *
  * 这条规则撑着一个用户会不会被推去「折腾设置」：
  * 那三步（课程分类 / 课程联动规则 / 生成本周待办）**只服务于一键生成**，
@@ -20,28 +20,26 @@ import org.junit.Test
 class QuickGenerateGuideFlowTest {
 
     @Test
-    fun `关着时引导走轻量四步`() {
+    fun `关着时引导走轻量三步`() {
         assertEquals(
             listOf(
                 GuideTarget.ZJU_SYNC,
                 GuideTarget.QUICK_GENERATE_TOGGLE,
-                GuideTarget.WALLPAPER,
-                GuideTarget.HERO_FLIP_CARD
+                GuideTarget.WALLPAPER
             ),
             visibleGuideTargets(quickGenerateEnabled = false)
         )
     }
 
     @Test
-    fun `开着时引导还是原来那六步`() {
+    fun `开着时引导走完整五步`() {
         assertEquals(
             listOf(
                 GuideTarget.ZJU_SYNC,
                 GuideTarget.COURSE_CATEGORY,
                 GuideTarget.LINKAGE_RULES,
                 GuideTarget.WEEK_TASK_GENERATION,
-                GuideTarget.WALLPAPER,
-                GuideTarget.HERO_FLIP_CARD
+                GuideTarget.WALLPAPER
             ),
             visibleGuideTargets(quickGenerateEnabled = true)
         )
@@ -119,18 +117,20 @@ class QuickGenerateGuideFlowTest {
     }
 
     @Test
-    fun `两套清单都以翻面那一步收尾`() {
-        assertEquals(GuideTarget.HERO_FLIP_CARD, visibleGuideTargets(false).last())
-        assertEquals(GuideTarget.HERO_FLIP_CARD, visibleGuideTargets(true).last())
+    fun `两套清单都以壁纸收尾`() {
+        // 引导的最后一步是「设置壁纸」：它是这一趟的终点，
+        // 按完「下一步」就是「完成」。
+        assertEquals(GuideTarget.WALLPAPER, visibleGuideTargets(false).last())
+        assertEquals(GuideTarget.WALLPAPER, visibleGuideTargets(true).last())
     }
 
     @Test
     fun `最后一步没有下一步`() {
         assertNull(
-            nextVisibleGuideTarget(GuideTarget.HERO_FLIP_CARD, quickGenerateEnabled = false)
+            nextVisibleGuideTarget(GuideTarget.WALLPAPER, quickGenerateEnabled = false)
         )
         assertNull(
-            nextVisibleGuideTarget(GuideTarget.HERO_FLIP_CARD, quickGenerateEnabled = true)
+            nextVisibleGuideTarget(GuideTarget.WALLPAPER, quickGenerateEnabled = true)
         )
     }
 

@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 引导的七步与七个目标必须一一对应。
+ * 引导的六步与六个目标必须一一对应。
  *
  * ViewModel 用 [GuideTarget] 的枚举顺序决定「这一步在清单里的位置」，
  * 界面用 [GuideSteps] 决定显示什么。两边一旦对不上，
@@ -22,13 +22,12 @@ import org.junit.Test
  * 再加一段解释只是把**那个功能自己页面上的话**抄一份，而抄本会先过期
  * （「八张预设」「五个类别」这类数字，别的页面改了就轮到引导说错）。
  *
- * 现在有**三步带说明**：
+ * 现在有**两步带说明**：
  * - 「生成本周待办」（入口是顶栏一颗没有文字标签的图标）；
- * - 「学在浙大翻面」（那一面藏在主卡背面）；
  * - 「一键生成待办」（这个功能**默认关着**，不告诉用户它存在，
  *   他就以为这个 App 只能手动加待办）。
  *
- * 这三个是 App 里**唯三看不见**的功能，功能自己那一页上也没有一句话
+ * 这两个是 App 里**唯二看不见**的功能，功能自己那一页上也没有一句话
  * 在介绍它们 —— 引导是唯一能说清的地方。
  *
  * 所以这条断言的作用是：**别顺手给别的步骤也加一段说明**。
@@ -75,16 +74,15 @@ class OnboardingGuideStepsTest {
     }
 
     @Test
-    fun `只有那三个看不见的功能带说明`() {
+    fun `只有那两个看不见的功能带说明`() {
         val withDescription = GuideSteps.filter { it.description != null }.map { it.target }.toSet()
 
         assertEquals(
-            "只有「生成本周待办」「总览页主卡可翻面」「一键生成待办」该带说明：" +
-                "它们是 App 里唯三看不见的功能。" +
+            "只有「生成本周待办」「一键生成待办」该带说明：" +
+                "它们是 App 里唯二看不见的功能。" +
                 "给别的步骤加说明，等于把那个功能自己页面上的话抄一份，抄本会先过期。",
             setOf(
                 GuideTarget.WEEK_TASK_GENERATION,
-                GuideTarget.HERO_FLIP_CARD,
                 GuideTarget.QUICK_GENERATE_TOGGLE
             ),
             withDescription
@@ -148,20 +146,9 @@ class OnboardingGuideStepsTest {
     }
 
     @Test
-    fun `翻面那一步要说到背面是学在浙大`() {
-        // 这一步的全部意义就是「那一面藏着」：说明里得说清翻过去是什么，
-        // 否则用户点开引导还是不知道那张卡能翻。
-        val desc = GuideSteps.first { it.target == GuideTarget.HERO_FLIP_CARD }
-            .description.orEmpty()
-
-        assertTrue("说明里该说到学在浙大", desc.contains("学在浙大"))
-        assertTrue("说明里该说到翻面", desc.contains("翻"))
-    }
-
-    @Test
     fun `文案不许写长`() {
         // 「专业、清晰、简洁」最后要落到**字数**上：标题一行放不下太长的话，
-        // 说明一长，窄屏 + 大字号就得多滚一屏 —— 引导一共六步，每步多一行都是负担。
+        // 说明一长，窄屏 + 大字号就得多滚一屏 —— 引导最多五步，每步多一行都是负担。
         //
         // 上限按当前文案留了余量（标题最长 8 字、按钮最长 4 字、说明最长 43 字）：
         // 写长了先**删字**，别加句子。

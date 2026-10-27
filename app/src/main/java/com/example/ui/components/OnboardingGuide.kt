@@ -21,7 +21,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.CloudSync
-import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Wallpaper
 import androidx.compose.material3.Button
@@ -51,7 +50,7 @@ import com.example.ui.viewmodel.visibleGuideTargets
  * [target] 是**行为契约**（见 [GuideTarget]），其余都是给人看的：
  * 图标、标题、按钮上那句话，以及可选的 [description]。
  *
- * ## [description]：多数步骤没有，三步有
+ * ## [description]：多数步骤没有，两步有
  *
  * 原来每一步下面还有一段解释（「用学号和密码登录浙大教务…」），全删了 ——
  * 标题已经把这一步要做什么说完了，那段解释讲的是**同一个事实**的另一种说法，
@@ -60,15 +59,14 @@ import com.example.ui.viewmodel.visibleGuideTargets
  * 那边一改，这边就成了一句错的说明。
  * 真要说清楚什么，位置在**那个功能自己那一页**，不在引导里。
  *
- * 但有**三个例外**，它们是整个 App 里三个**看不见**的功能：
+ * 但有**两个例外**，它们是整个 App 里两个**看不见**的功能：
  *
  * - [GuideTarget.WEEK_TASK_GENERATION]：入口是顶栏一颗**没有文字标签**的图标；
- * - [GuideTarget.HERO_FLIP_CARD]：学在浙大那一面**藏在主卡背面**，不翻就看不见；
  * - [GuideTarget.QUICK_GENERATE_TOGGLE]：一键生成默认**关着**，用户根本不知道
  *   App 里有这个功能，更不知道「不配规则也能用」—— 这一步是唯一能告诉他这件事的地方。
  *
- * 对这三个，引导是**唯一**能说清它们是什么的地方 —— 功能自己那一页上也没有这句话，
- * 而用户找不到的入口，写在别处也没用。所以这三步带说明。
+ * 对这两个，引导是**唯一**能说清它们是什么的地方 —— 功能自己那一页上也没有这句话，
+ * 而用户找不到的入口，写在别处也没用。所以这两步带说明。
  *
  * 其余步骤一律 null：给它们加说明，等于把那个功能自己页面上的话抄一份，
  * 而抄本会先过期。这个约束由 `OnboardingGuideStepsTest` 钉住 ——
@@ -96,23 +94,20 @@ data class GuideStep(
  * 「课程类别」排在「联动规则」前面，因为规则是**按类别**配的 ——
  * 先知道有类别这回事，才谈得上「按类别配」。
  * 「生成本周待办」排在联动规则**之后**，因为它就是**按规则生成**：规则没配，它没什么可生成。
- * 「学在浙大翻面」排在最后，因为它是这一趟的**终点** ——
- * 「去看看」把人送到总览页并替他把卡翻过去，这一趟引导就在那儿收尾。
  *
  * ## 这份清单**不是**用户要走的那一份
  *
  * 用户实际走几步取决于「一键生成待办」开没开：
  *
- * - 关着：四步（同步课表 → **开关** → 壁纸 → 翻面）—— 轻量路线；
- * - 开着：六步（同步课表 → 课程分类 → 联动规则 → 生成本周待办 → 壁纸 → 翻面），
- *   与加这个开关之前完全一样。
+ * - 关着：三步（同步课表 → **开关** → 壁纸）—— 轻量路线；
+ * - 开着：五步（同步课表 → 课程分类 → 联动规则 → 生成本周待办 → 壁纸）。
  *
  * 可见的那一份由 [visibleGuideSteps] 按开关状态算出来。
  *
  * ## 图标与入口用同一枚
  *
  * 每一步的图标都取自该功能在别处的入口图标（抽屉的 ZJU 行、课程联动规则行、
- * 设置页的壁纸卡、顶栏那颗 ✨、主卡背面的学在浙大徽标）：用户看完引导再去找那个功能，
+ * 设置页的壁纸卡、顶栏那颗 ✨）：用户看完引导再去找那个功能，
  * 看到的是同一枚图标，不用重新认一遍。
  *
  * ## 文案怎么写：专业、清晰、简洁
@@ -188,16 +183,6 @@ val GuideSteps: List<GuideStep> = listOf(
         icon = Icons.Outlined.Wallpaper,
         title = "设置壁纸",
         actionLabel = "去更换"
-    ),
-    GuideStep(
-        target = GuideTarget.HERO_FLIP_CARD,
-        // 与主卡背面「学在浙大」那枚徽标同一枚图标（School）。
-        icon = Icons.Outlined.School,
-        title = "总览页主卡可翻面",
-        actionLabel = "翻到背面",
-        // 这一步**带说明**，因为学在浙大那一面**藏着**：不把卡翻过去，
-        // 用户根本不知道 App 里有这么一面。这一步的动作按钮会替他把卡翻过去。
-        description = "总览页顶部主卡是双面的：正面是日期与天气，翻到背面是学在浙大待交的作业。"
     )
 )
 
@@ -227,8 +212,8 @@ internal fun visibleGuideSteps(quickGenerateEnabled: Boolean): List<GuideStep> {
  *
  * ## 走几步取决于「一键生成待办」开没开
  *
- * 关着时是轻量四步（同步课表 → 开关 → 壁纸 → 翻面），
- * 开着时是完整六步（与加这个开关之前一样）。走哪一套由
+ * 关着时是轻量三步（同步课表 → 开关 → 壁纸），
+ * 开着时是完整五步。走哪一套由
  * [visibleGuideSteps] 算，「第 N 步 / 共 M 步」与进度点都按**看得见的那一套**算。
  *
  * **当前这一步可能已经不在清单里**：用户在「开关」那一步按下「开启」，
@@ -237,15 +222,14 @@ internal fun visibleGuideSteps(quickGenerateEnabled: Boolean): List<GuideStep> {
  *
  * ## 三个按钮各管一件事
  *
- * - **动作按钮**（每步各一个：「去同步」「开启」「去设置」「去配置」「预览待办」「去更换」「翻到背面」）：
+ * - **动作按钮**（每步各一个：「去同步」「开启」「去设置」「去配置」「预览待办」「去更换」）：
  *   把引导**暂停**在这里，去那个功能。目标功能做完、
  *   弹层关掉之后引导会自己接回来（见 `MainViewModel.openOnboardingTarget`）——
  *   用户还欠着几页没看，收掉就等于让他自己记着看到第几步了。
  *   但**不叠在上面**：叠着的话两层玻璃面会糊在一起（弹层的遮罩叠着引导的遮罩，
  *   背后被压两遍），面板也会和面板重叠成一堆。
- *   （最后一步「翻到背面」与「开启」那一步是例外：前者没有弹层可等，
- *   点下去就是把人送到总览页把卡翻过去，这一趟就此走完；
- *   后者按下去是**打开这个功能**，引导不暂停也不等谁。）
+ *   （「开启」那一步是例外：它按下去是**打开这个功能**，
+ *   引导不暂停也不等谁。）
  * - **「下一步」**：翻到下一步，最后一步是「完成」。
  * - **「跳过」**：直接收掉（这一趟到此为止）。
  *

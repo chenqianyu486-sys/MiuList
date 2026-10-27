@@ -929,7 +929,7 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
         if (state.isOnboardingGuideOpen) {
             OnboardingGuide(
                 step = state.onboardingTarget,
-                // 引导走几步取决于这个开关：关着是轻量四步，开着是完整六步。
+                // 引导走几步取决于这个开关：关着是轻量三步，开着是完整五步。
                 quickGenerateEnabled = state.isQuickGenerateEnabled,
                 resumed = state.onboardingResumed,
                 onDismiss = { viewModel.closeOnboardingGuide() },

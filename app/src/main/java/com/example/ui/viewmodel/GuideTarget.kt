@@ -52,25 +52,20 @@ enum class GuideTarget {
     WEEK_TASK_GENERATION,
 
     /** 壁纸：预设渐变或自己的照片。 */
-    WALLPAPER,
-
-    /**
-     * 总览页那张主卡的**背面**：学在浙大待交的作业。
-     *
-     * 这一项**没有弹层**：它是总览页最上面那张卡翻过去那一面，
-     * 「去看看」= 把人送到总览页并替他把卡翻过去（见 `MainViewModel.openOnboardingTarget`）。
-     * 它排在引导的最后一步，因为翻过去看就是这一趟的终点。
-     */
-    HERO_FLIP_CARD;
+    WALLPAPER;
 
     companion object {
         /**
          * 加开关之前那六步的顺序。
          *
          * 老版本把引导的进度存成**序号**，而序号只在「固定六步」那套清单里
-         * 才有意义。现在清单会随开关变成四步或六步，序号就对不上了，
+         * 才有意义。现在清单会随开关变成三步或五步，序号就对不上了，
          * 所以老用户的进度要按这张表换算成**目标名**（见
          * `OnboardingRepository.currentTarget`）。
+         *
+         * 最后一项是 [WALLPAPER] 而不是「翻面」：那一步（总览页主卡翻面）
+         * 已经从引导里去掉。老用户停在那儿就落到**新的最后一步**，
+         * 而不是被推回第 1 步白看一遍。
          */
         val legacyOrderBeforeToggle: List<GuideTarget> = listOf(
             ZJU_SYNC,
@@ -78,7 +73,18 @@ enum class GuideTarget {
             LINKAGE_RULES,
             WEEK_TASK_GENERATION,
             WALLPAPER,
-            HERO_FLIP_CARD
+            WALLPAPER
+        )
+
+        /**
+         * 已经从引导里去掉的目标**名字** → 现在的落点。
+         *
+         * 进度存的是**名字**（见 `OnboardingRepository.currentTarget`），
+         * 所以老用户设备上还可能留着「HERO_FLIP_CARD」（总览页主卡翻面那一步）。
+         * 认不得这个名字就等于把他推回第 1 步 —— 白看一遍。
+         */
+        val retiredTargetNames: Map<String, GuideTarget> = mapOf(
+            "HERO_FLIP_CARD" to WALLPAPER
         )
     }
 }

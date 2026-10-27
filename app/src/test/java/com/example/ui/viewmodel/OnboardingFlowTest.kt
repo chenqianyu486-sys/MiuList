@@ -119,17 +119,6 @@ class OnboardingFlowTest {
     }
 
     @Test
-    fun `翻面那一步没有弹层可等`() {
-        // 「学在浙大翻面」的落点是总览页那张主卡的**背面**：没有弹层，
-        // 也就没有「做完之后接回来」这回事。所以它恒为 false ——
-        // 别的弹层关掉时不会因此把引导从总览页拽回来。
-        assertFalse(
-            "翻面这一步不该有弹层可等",
-            MainUiState().isGuideTargetOpen(GuideTarget.HERO_FLIP_CARD)
-        )
-    }
-
-    @Test
     fun `预览弹层关掉了引导要接回来`() {
         // 「生成本周待办」这一步的动作按钮开到的是预览弹层：
         // 用户在里面挑完（或按取消）关掉它，就是这一步做完了的信号。

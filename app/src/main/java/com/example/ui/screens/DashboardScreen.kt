@@ -721,15 +721,8 @@ fun DashboardScreen(
             Spacer(modifier = Modifier.height(6.dp))
 
             var isHeroFlipped by rememberSaveable { mutableStateOf(false) }
-            // 引导最后一步「学在浙大翻面」的「去看看」：把人送到总览页，
-            // 并替他把卡翻到**背面**（学在浙大待交作业那一面）。
-            //
-            // 用**序号**而不是布尔开关：布尔只能表达「翻过一次」，
-            // 第二次点「翻到背面」时值没变，这边就收不到新的一次请求。
-            // 序号 +1 就是「又来一次」的信号。
-            LaunchedEffect(state.heroFlipRequest) {
-                if (state.heroFlipRequest > 0) isHeroFlipped = true
-            }
+            // 主卡是双面的：正面是日期与天气，背面是学在浙大待交的作业。
+            // 翻面靠**点卡片本身**：正面点一下翻过去，背面点一下翻回来。
             val heroFlipRotation by animateFloatAsState(
                 targetValue = if (isHeroFlipped) 180f else 0f,
                 animationSpec = tween(durationMillis = 450, easing = FastOutSlowInEasing),
