@@ -322,6 +322,16 @@ capture_task_shots() {
   tap_label "清单" >/dev/null 2>&1
   capture_dialog 06_task_new tap_label "添加待办"
 
+  # 新建待办 + **已经选了一个分类**：标题**仍然**是空的。
+  # 这一张守着「App 不替用户写名字」这条规则 —— 2026-10-27 起新建时不再预填标题
+  # （以前选完分类会自动填成「【作业】课程名」）。
+  # 取**最后一个**匹配：分类 chip 在弹层里，而背后的清单页也有同名筛选 chip。
+  relaunch
+  tap_label "清单" >/dev/null 2>&1
+  tap_label "添加待办" >/dev/null 2>&1
+  sleep 1
+  capture_dialog 06d_task_new_picked_type tap_label_last "课后作业"
+
   # 编辑弹层里**就地展开**课程滚筒：点「课程」那一行
   relaunch
   tap_label "清单" >/dev/null 2>&1

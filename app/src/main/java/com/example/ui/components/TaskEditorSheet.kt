@@ -138,6 +138,15 @@ private val UTC: TimeZone = TimeZone.getTimeZone("UTC")
  * 「查看」和「编辑」不再分成两个状态：弹层里看到的就是能改的那份，
  * 改完不点保存就当作没改（和所有表单一致）。
  *
+ * ## 手动新建时，标题**不预填**
+ *
+ * 标题框打开就是空的，只显示「待办名称」占位符；点分类、换课程都**不往里写东西**
+ * （2026-10-27 用户定，规则见 [nextAutoTitle]）。名字由用户自己写 ——
+ * App 替他写好等于先塞一段字给他删。
+ *
+ * 编辑**已有**待办时不一样：那条标题本来就是这条待办的名字，
+ * 若它仍是一份模板（当初由 App 按课程 + 分类算出来的），换分类 / 换课程时仍跟着换。
+ *
  * ## 版式为什么是「笔记」而不是「表单」
  *
  * 表单那套（每个字段一个带 label 的带框输入框）在这里全撤了：
@@ -402,15 +411,15 @@ fun TaskEditorSheet(
                             onClick = {
                                 val previousTypeKey = selectedTypeKey
                                 selectedTypeKey = option.key
+                                // 新建时**不写标题**（2026-10-27 用户定，规则见 [nextAutoTitle]）：
+                                // 名字是用户自己的话，App 替他写好等于先塞一段字给他删。
                                 selectedCourse?.let { c ->
-                                    // 标题只在「它正好是按（课程 + 类型）算出来的那份模板」
-                                    // 时才跟着分类变。判据不能是「以【开头」——
-                                    // 用户自己写的「【作业】数据结构 第6周作业」也是以【开头，
-                                    // 而用户只是点了个**同名**的 chip，
-                                    // 标题却被改写成了「【作业】数据结构」。
-                                    if (title.isBlank() || isAutoTitle(title, previousTypeKey, c)) {
-                                        title = autoTitle(option.key, c)
-                                    }
+                                    nextAutoTitle(
+                                        isNewTask = initialTask == null,
+                                        currentTitle = title,
+                                        oldTemplate = autoTitle(previousTypeKey, c),
+                                        newTemplate = autoTitle(option.key, c)
+                                    )?.let { title = it }
                                 }
                             },
                             testTag = "task_edit_type_${option.key}"
@@ -527,11 +536,17 @@ fun TaskEditorSheet(
                         onSelected = { index ->
                             val previousCourse = courseOptions.getOrNull(selectedIndex)
                             selectedIndex = index
-                            // 换课程时补上自动标题，但只在标题还是模板时才动
-                            // （理由同上面的分类 chip）
+                            // 换课程同样**不写标题**（理由同上面的分类 chip）
                             val c = courseOptions.getOrNull(index)
-                            if (c != null && (title.isBlank() || isAutoTitle(title, selectedTypeKey, previousCourse))) {
-                                title = autoTitle(selectedTypeKey, c)
+                            if (c != null) {
+                                nextAutoTitle(
+                                    isNewTask = initialTask == null,
+                                    currentTitle = title,
+                                    // 上一门课是「不关联课程」时没有模板可言：
+                                    // 传空串（任何非空标题都匹配不上它）。
+                                    oldTemplate = previousCourse?.let { autoTitle(selectedTypeKey, it) } ?: "",
+                                    newTemplate = autoTitle(selectedTypeKey, c)
+                                )?.let { title = it }
                             }
                         }
                     )
@@ -1036,12 +1051,38 @@ private fun PickerSegment(text: String, modifier: Modifier = Modifier, onClick: 
 }
 
 /**
- * 标题「是不是按（课程 + 类型）算出来的那一份模板」。
+ * 标题要不要跟着「分类 / 课程」换 —— 返回**新标题**；null = 不动。
  *
- * 只有是模板，标题才跟着分类/课程变 —— 用户自己写的标题不该被顺手改掉。
+ * ## 新建待办：一律不动（2026-10-27 用户定）
+ *
+ * 名字是用户自己的话，App 替他写好等于**先塞一段字给他删**。
+ * 而且「【作业】数据结构」这种模板还替用户断言了这条待办的性质 ——
+ * 他点「作业」这个分类时，脑子里想的往往是「把这次作业记下来」，
+ * 具体叫什么他还得自己敲。预填只会让人多按一次退格。
+ *
+ * 所以手动新建时标题框是空的（只显示「待办名称」占位符），
+ * 点分类、换课程都不往里写东西。
+ *
+ * ## 编辑已有待办：只有「标题还是模板」时才动
+ *
+ * 判据不能是「以【开头」—— 用户自己写的「【作业】数据结构 第6周作业」
+ * 也是以【开头，而用户只是点了个**同名**的 chip，
+ * 标题却被改写成了「【作业】数据结构」。用户自己写的标题不该被顺手改掉。
+ *
+ * @param oldTemplate 改动**之前**按（课程 + 类型）算出来的那份模板；
+ *   「不关联课程」那种没有模板的情形传空串（任何非空标题都匹配不上它）。
+ * @param newTemplate 改动**之后**的那份模板。
  */
-private fun isAutoTitle(title: String, typeKey: String, course: CourseEntity?): Boolean =
-    course != null && title == autoTitle(typeKey, course)
+internal fun nextAutoTitle(
+    isNewTask: Boolean,
+    currentTitle: String,
+    oldTemplate: String,
+    newTemplate: String
+): String? = when {
+    isNewTask -> null
+    currentTitle.isBlank() || currentTitle == oldTemplate -> newTemplate
+    else -> null
+}
 
 /**
  * 换课程时补的默认标题。
