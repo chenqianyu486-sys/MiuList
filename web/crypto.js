@@ -293,6 +293,176 @@ export function open(keys, sealed) {
   return chacha20(keys.kEnc, nonce, 1, ciphertext);
 }
 
+/* ── DH 密钥协商（RFC 3526 group 14） ────────────────────────────
+ *
+ * ## 为什么要有它
+ *
+ * v3 的配对 secret 是**电脑生成、手机从二维码里拿到**的 ——
+ * secret 只走「二维码 → 手机相机」这条视觉通道，从不经过网络。
+ * 这条性质很好，但它让「手动填地址」这条路走不通：
+ * 光有地址，电脑拿不到 secret，配对就停在半路。
+ *
+ * ## 换成 DH 之后
+ *
+ * 两端各自生成一对临时密钥，交换**公钥**，各自算出**同一把共享密钥**：
+ *
+ * ```
+ * 电脑                              手机
+ *  │  a 随机私钥                    │  b 随机私钥
+ *  │  A = g^a mod p                 │  B = g^b mod p
+ *  │  ──────── A ─────────────────► │  S = A^b mod p
+ *  │  ◄─────── B ────────────────── │  S = B^a mod p
+ *  │  secret = sha256(S)            │  secret = sha256(S)
+ * ```
+ *
+ * **过网的只有公钥** —— 公钥本来就是公开的东西，抓包的人看到它也
+ * 算不出共享密钥（DH 的单向性）。于是两条路都成立：
+ *
+ * - 「手机扫电脑的码」：A 走二维码（视觉通道）；
+ * - 「只填地址」：A 走 HTTP（公钥过网不泄密）。
+ *
+ * ## 为什么用 MODP 群而不是 ECDH
+ *
+ * - 浏览器端：`crypto.subtle` 只在 secure context 里存在，而网页端
+ *   可能跑在 `http://192.168.x.x` 上（手机托管网页端那条路）——
+ *   那里 `crypto.subtle` 是 undefined，**连 BigInt 之外的密钥协商都做不了**；
+ * - 手机端：`KeyAgreement("ECDH")` 在各家 Android 厂商的 JCE 上
+ *   能不能用、用的哪条曲线，行为并不一致（老版本 AndroidOpenSSL
+ *   干脆不注册 ECDH）。
+ *
+ * 而 **BigInt / BigInteger 两边都有**，实现只有一份逻辑：
+ * 模幂 + 定长编码，两端逐字节一致很容易验证（见测试向量）。
+ *
+ * ## 参数
+ *
+ * - 群：RFC 3526 §3 的 **2048 位 MODP 群（group 14）**，生成元 g = 2；
+ * - 私钥指数：256 位随机（够用：2048 位群配 256 位指数 ≈ 128 位安全强度，
+ *   而且模幂只跑 256 轮，比跑 2048 轮快一个数量级）；
+ * - 共享值 S 定长编码成 256 字节（大端、补零），再 `sha256` 成 32 字节的 secret。
+ */
+
+/** RFC 3526 §3 的 2048 位 MODP 素数（group 14）。 */
+const DH_P_HEX =
+  'FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1' +
+  '29024E088A67CC74020BBEA63B139B22514A08798E3404DD' +
+  'EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245' +
+  'E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED' +
+  'EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D' +
+  'C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F' +
+  '83655D23DCA3AD961C62F356208552BB9ED529077096966D' +
+  '670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B' +
+  'E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9' +
+  'DE2BCBF6955817183995497CEA956AE515D2261898FA0510' +
+  '15728E5A8AACAA68FFFFFFFFFFFFFFFF';
+
+const DH_P = BigInt('0x' + DH_P_HEX);
+const DH_G = 2n;
+/** 公钥 / 共享值的定长字节数。2048 位 = 256 字节。 */
+const DH_KEY_BYTES = 256;
+/** 私钥指数的字节数。 */
+const DH_PRIV_BYTES = 32;
+
+/** 配对码的字母表：去掉 I / L / O / U，避免和 1 / 0 混淆。 */
+const PAIR_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/** 模幂（平方-乘）。 */
+function modPow(base, exponent, modulus) {
+  let result = 1n;
+  let b = base % modulus;
+  let e = exponent;
+  while (e > 0n) {
+    if (e & 1n) result = (result * b) % modulus;
+    b = (b * b) % modulus;
+    e >>= 1n;
+  }
+  return result;
+}
+
+/** 大整数 → 定长字节（大端、高位补零）。 */
+function bigIntToBytes(value, size) {
+  const out = new Uint8Array(size);
+  let v = value;
+  for (let i = size - 1; i >= 0; i--) {
+    out[i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+  return out;
+}
+
+/** 字节 → 大整数（大端）。 */
+function bytesToBigInt(bytes) {
+  let v = 0n;
+  for (let i = 0; i < bytes.length; i++) v = (v << 8n) | BigInt(bytes[i]);
+  return v;
+}
+
+/**
+ * 生成一对临时 DH 密钥。
+ *
+ * @returns {{priv: Uint8Array, pub: Uint8Array}} priv 32 字节，pub 256 字节
+ */
+export function dhGenerateKeypair() {
+  const priv = randomBytes(DH_PRIV_BYTES);
+  return { priv, pub: dhPublicKey(priv) };
+}
+
+/**
+ * 由私钥算出公钥（A = g^a mod p）。
+ *
+ * 单独暴露是为了**能对着固定向量测**：随机生成的一对密钥没法写进测试里，
+ * 而「给定私钥 → 确定的公钥」可以。
+ *
+ * @param {Uint8Array} priv 私钥（32 字节）
+ * @returns {Uint8Array} 公钥（256 字节）
+ */
+export function dhPublicKey(priv) {
+  return bigIntToBytes(modPow(DH_G, bytesToBigInt(priv), DH_P), DH_KEY_BYTES);
+}
+
+/**
+ * 算出共享密钥。
+ *
+ * @param {Uint8Array} priv 本端私钥（32 字节）
+ * @param {Uint8Array} peerPub 对端公钥（256 字节）
+ * @returns {Uint8Array} 32 字节的 secret（= sha256(共享值)）
+ */
+export function dhSharedSecret(priv, peerPub) {
+  const shared = modPow(bytesToBigInt(peerPub), bytesToBigInt(priv), DH_P);
+  return sha256(bigIntToBytes(shared, DH_KEY_BYTES));
+}
+
+/**
+ * **配对码**：公钥的 6 位短码，给用户肉眼核对。
+ *
+ * ## 为什么是公钥的哈希，而不是共享密钥的哈希
+ *
+ * 共享密钥要等两端都拿到对方公钥才算得出来 —— 那时配对已经成了，
+ * 再拿它核对就晚了。而**公钥一开始双方就有了**：电脑显示二维码时
+ * 就能算出自己的码，手机扫到公钥时算出同一个码。
+ *
+ * 于是这个码真正挡住的是「有人在中间换了公钥」：
+ * 电脑显示 `7K2M9Q`，手机上却是 `B4XR8T` —— 用户一看就知道不对。
+ *
+ * @param {Uint8Array} pub 公钥（256 字节）
+ * @returns {string} 6 个字符
+ */
+export function pairCodeOf(pub) {
+  const digest = sha256(concatBytes(utf8Bytes('miulist-paircode-v3.1'), pub));
+  let out = '';
+  for (let i = 0; i < 6; i++) out += PAIR_ALPHABET[digest[i] % 32];
+  return out;
+}
+
+/** 配对码字母表（导出给测试与 Kotlin 侧对齐用）。 */
+export const pairAlphabet = PAIR_ALPHABET;
+
+/** DH 群参数（导出给测试用：模数是不是安全素数、长度对不对）。 */
+export const dhGroup = {
+  pHex: DH_P_HEX,
+  keyBytes: DH_KEY_BYTES,
+  privBytes: DH_PRIV_BYTES,
+};
+
 /* ── 请求签名 ──────────────────────────────────────────────── */
 
 /**

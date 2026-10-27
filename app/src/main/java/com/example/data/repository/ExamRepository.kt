@@ -20,13 +20,21 @@ import java.time.Instant
  *
  * ## 考试是独立的一份数据
  *
- * 它不参与课表的导入 / 导出 / 快照那条管线（那是 `ScheduleBundle` 的地盘），
- * 也不随课程增删而增删 —— 考试是学校已经公布的事实，
+ * 它不随课程增删而增删 —— 考试是学校已经公布的事实，
  * 用户删掉一门课不等于那场考试不存在了。
  *
  * 但它**和课程有关联**：界面上要继承课程的颜色、能点进课程详情。
  * 这个关联在**读时**解析（见 [getExamEntries]），而不是靠外键：
  * 外键会让「删课」连带「删考试」，那是错的。
+ *
+ * ## 它在导出 / 导入管线里的位置
+ *
+ * v4 起考试是整机快照的**顶层一块**（`exams`），与课程同源（都来自教务网），
+ * 但生命周期独立 —— 所以它单独成块，而不是塞进课程里当某门课的属性。
+ *
+ * 写入口有两条：
+ * - [replaceAll]：浙大同步用，整表覆盖（服务端那份就是权威）；
+ * - 文件导入：逐场认人合并，见 `ScheduleImportService`。
  */
 class ExamRepository(
     private val db: AppDatabase,
@@ -35,6 +43,14 @@ class ExamRepository(
 ) {
 
     fun getAllExams(): Flow<List<ExamEntity>> = examDao.getAllExams()
+
+    /**
+     * 全部考试，**一次性**读取。
+     *
+     * 给导出与快照那条路用：它们要的是「此刻库里的全部考试」这一份值，
+     * 而不是一条持续更新的流（流在导出中途变化会拿到半新半旧的一批）。
+     */
+    suspend fun getAllExamsOnce(): List<ExamEntity> = examDao.getAllExamsOnce()
 
     suspend fun countExams(): Int = examDao.countExams()
 

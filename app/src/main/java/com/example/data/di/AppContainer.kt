@@ -139,7 +139,8 @@ class AppContainer(context: Context) {
             calendarRepository,
             settingsRepository,
             taskRepository,
-            taskTypeRepository
+            taskTypeRepository,
+            examRepository
         )
     }
 

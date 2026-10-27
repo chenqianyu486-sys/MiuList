@@ -2,7 +2,7 @@
  *
  * 为什么要单独测：**这套实现是手写的**（浏览器明文 HTTP 下没有 crypto.subtle），
  * 而它是「局域网上你的待办会不会被人看见」的最后一道防线。
- * 手写的密码学没���自测 == 没有密码学。
+ * 手写的密码学没有自测 == 没有密码学。
  *
  * 测法：
  * - SHA-256 / HMAC → 对照 Node 的 crypto（权威实现）；
@@ -17,6 +17,7 @@ import nodeCrypto from 'node:crypto';
 import {
   sha256, hmacSha256, chacha20, deriveKeys, seal, open,
   toBase64Url, fromBase64Url, randomBytes, utf8Bytes, concatBytes,
+  dhGenerateKeypair, dhPublicKey, dhSharedSecret, pairCodeOf, dhGroup,
 } from './crypto.js';
 
 let failures = 0;
@@ -169,6 +170,58 @@ console.log('base64url');
     check(`${len} 字节往返`, eqBytes(fromBase64Url(enc), b));
     check(`${len} 字节无 padding`, !enc.includes('=') && !enc.includes('+') && !enc.includes('/'));
   }
+}
+
+// ── DH 密钥协商 ──────────────────────────────────────────────
+
+console.log('DH（RFC 3526 group 14）');
+{
+  check('模数是 512 位十六进制（2048 位）', dhGroup.pHex.length === 512);
+  check('模数是安全素数（p mod 24 == 23）', BigInt('0x' + dhGroup.pHex) % 24n === 23n);
+
+  // **跨实现向量**：这组值在 Kotlin 侧（WebDhTest）必须逐字节对上。
+  // 两边各写一份实现，对不上就是「配对显示成功、之后全都解密失败」。
+  const V = {
+    privA: 'SGwJzYUjf42RFVrrgD7N5YCbKpUpIjYm5hTseHYtiMk',
+    pubA:
+      'oF4x3H1Bih-U0yGAiJupaLn2vQfqafmAa3ngN1jjB5Q7LKtXLcd5M-btsl7q4dSzbntSz6byDBH3HgWT8Zi5nWgHS1kVudDHpAZxjVTqPd96b0B2zXEQv226xKZo3JZJ3VWg5QH1_zFWSYgTsbiOU01CwyAPb5oZyghPOyZyCyYzpfB9jSaG-GBEr2mlBXbX7UnqINHKEs9_qJ4o36EgbGu_okAidtPktho8gIwqewNwU4jH-paD9M-j61AGTDKH3eltwLaDfjzr_39cDxaqKAOR9rHZjgNKAWcsFazzVPC5V258_nTTrhkENzaMHqVPfEsZ_pwous5ogs8H1gijBA',
+    privB: '1oxEBNFNm7FBsy8PheU-raGzlfkKr0kEV5ORJLz31Oo',
+    pubB:
+      'Rn64Z7aPzX3ybA11oK1pAQEDNHvcwEHOhRtHFWb7RcghLds9cjyFxPwCYIgJiB1VpE1hfKMPL1If1__svnZWdfIqFeNt7sKvlPO3ELXF5-R323Y2oHzjvbFS7N2nICYdDSSTFQjRA9-qfCYIRB6aXZdXyBGZG0PQM1dPe6wdO4jRFhkoCA8MFwYCiAY76MGCkABekSOJo5oSOpFxE476KAUj7bFxDKjEg31JAcshWs7AwS1ZFLE7EHmZNzc5kwkER8uJYGVQsyDUCWlSmSyS3mBMCNhkl4HolhLhdcZWizUCIaI9ocYRPVSdi5ROnxY5HRKCXcVg4HpNDqF64jNyEQ',
+    shared: 'mOILLb-KxF2Ne3O_syKW6Qh43qhW0KXTO5Dh7Xk1vEQ',
+    codeA: 'CJXWBZ',
+  };
+
+  const privA = fromBase64Url(V.privA);
+  const privB = fromBase64Url(V.privB);
+  const pubA = fromBase64Url(V.pubA);
+  const pubB = fromBase64Url(V.pubB);
+
+  check('公钥是 256 字节', pubA.length === 256 && pubB.length === 256);
+  check('私钥是 32 字节', privA.length === 32 && privB.length === 32);
+
+  check('由私钥算出的公钥与向量一致（A）', toBase64Url(dhPublicKey(privA)) === V.pubA);
+  check('由私钥算出的公钥与向量一致（B）', toBase64Url(dhPublicKey(privB)) === V.pubB);
+
+  const s1 = dhSharedSecret(privA, pubB);
+  const s2 = dhSharedSecret(privB, pubA);
+  check('两端算出的共享密钥一致', toBase64Url(s1) === toBase64Url(s2));
+  check('共享密钥与向量一致', toBase64Url(s1) === V.shared);
+  check('共享密钥是 32 字节', s1.length === 32);
+
+  check('配对码与向量一致', pairCodeOf(pubA) === V.codeA);
+  check('配对码是 6 个字符', pairCodeOf(pubA).length === 6);
+  check('配对码不含容易混淆的 I L O U', !/[ILOU]/.test(pairCodeOf(pubA)));
+
+  // 随机生成的一对：两端算出的共享密钥必须一致
+  const a = dhGenerateKeypair();
+  const b = dhGenerateKeypair();
+  check(
+    '随机密钥对也能协商出同一把密钥',
+    toBase64Url(dhSharedSecret(a.priv, b.pub)) === toBase64Url(dhSharedSecret(b.priv, a.pub)),
+  );
+  check('随机公钥是 256 字节', a.pub.length === 256 && b.pub.length === 256);
+  check('不同密钥对算出的密钥不同', toBase64Url(dhSharedSecret(a.priv, b.pub)) !== toBase64Url(dhSharedSecret(a.priv, a.pub)));
 }
 
 console.log(failures === 0 ? '\n全部通过' : `\n${failures} 条失败`);

@@ -49,6 +49,25 @@ data class TaskMergePlan(
     val losingCourse: Int = 0
 )
 
+/**
+ * 考试合并的逐条结论。判定与 [TaskMergePlan] 同一套形状：
+ * 认出同一场考试 → 比 `updatedAt`，较新的赢。
+ *
+ * **没有「删除」这一项**：文件里没提到的考试会**留在本机**。
+ *
+ * 理由是考试的生命周期与课程不同 —— 删课不该连带删考试（考试是学校已经公布的
+ * 事实），而「学校取消了这场考试」这件事只有教务网知道，导入一份文件没有依据
+ * 去做这个判断。删除只发生在浙大同步那条整表覆盖的路上。
+ */
+data class ExamMergePlan(
+    /** 将新增的考试数。 */
+    val added: Int = 0,
+    /** 将被文件内容覆盖的考试数（本机那条较旧）。 */
+    val overwritten: Int = 0,
+    /** 本机较新、文件里的旧版本被跳过。 */
+    val keptLocal: Int = 0
+)
+
 /** 预览摘要：确认前告诉用户「会发生什么」。 */
 data class ImportPreview(
     val strategy: ImportStrategy,
@@ -80,7 +99,13 @@ data class ImportPreview(
     /** 将被覆盖的自定义分类数。 */
     val taskTypesOverwritten: Int = 0,
     /** 将被覆盖的生成规则条数。 */
-    val taskRulesOverwritten: Int = 0
+    val taskRulesOverwritten: Int = 0,
+    /** 本机现存的考试场次。 */
+    val existingExamCount: Int = 0,
+    /** 文件里带的考试场次。0 = 这份文件没带考试，导入时不动本机的考试。 */
+    val fileExamCount: Int = 0,
+    /** 逐场合并的结论。 */
+    val examMerge: ExamMergePlan = ExamMergePlan()
 ) {
     val hasCalendarChange: Boolean
         get() = semesterChanged || timetableChanged || noClassDayCount > 0 || makeupDayCount > 0
@@ -106,5 +131,7 @@ data class ImportReport(
     /** 快照导入的逐条合并结果。非 SNAPSHOT 策略下全为 0。 */
     val taskMerge: TaskMergePlan = TaskMergePlan(),
     val taskTypesImported: Int = 0,
-    val taskRulesImported: Int = 0
+    val taskRulesImported: Int = 0,
+    /** 考试逐场合并的结果。文件没带考试时全为 0（本机的考试一条不动）。 */
+    val examMerge: ExamMergePlan = ExamMergePlan()
 )

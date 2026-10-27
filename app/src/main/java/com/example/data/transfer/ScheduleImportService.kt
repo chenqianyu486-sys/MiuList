@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import com.example.data.calendar.EpochDays
 import com.example.data.codec.CourseBundle
 import com.example.data.codec.DecodeResult
+import com.example.data.codec.ExamBundle
 import com.example.data.codec.ScheduleCodec
 import com.example.data.codec.SlotBundle
 import com.example.data.codec.TaskBundle
@@ -15,6 +16,7 @@ import com.example.data.local.AppDatabase
 import com.example.data.local.CourseEntity
 import com.example.data.local.CourseSlotEntity
 import com.example.data.local.CustomTaskTypeEntity
+import com.example.data.local.ExamEntity
 import com.example.data.local.TaskEntity
 import com.example.data.model.CategoryRule
 import com.example.data.model.CourseKeys
@@ -62,6 +64,22 @@ private fun CourseEntity.naturalKey(): String =
 /** 本机课程的自然键 → id。供待办与生成规则共用。 */
 private fun List<CourseEntity>.courseIdByNaturalKey(): Map<String, Long> =
     associate { it.naturalKey() to it.id }
+
+/**
+ * 一场考试跨设备的自然键。**口径必须与 [ExamBundle.naturalKey] 一致**，
+ * 否则文件里的那场考试在本机认不出来，会被当成一场新的插进去 ——
+ * 界面上同一门课的两场考试变成三场，而且没有任何报错。
+ */
+private fun ExamEntity.naturalKey(): String {
+    val code = xkkh.trim()
+    if (code.isNotEmpty()) return code
+    return listOf(
+        courseCode.trim(),
+        courseName.trim(),
+        startAt.toString(),
+        startMinute.toString()
+    ).joinToString("|")
+}
 
 sealed interface PreviewResult {
     data class Failed(val message: String) : PreviewResult
@@ -166,6 +184,10 @@ class ScheduleImportService(
             TaskMergePlan()
         }
 
+        // 考试的逐场合并结论。与提交走同一个 [planExamMerge]。
+        val examMerge = planExamMerge(validated.exams)
+        val existingExamCount = if (validated.exams.isEmpty()) 0 else existingExamCount()
+
         return PreviewResult.Ready(
             validated = validated,
             preview = ImportPreview(
@@ -192,7 +214,10 @@ class ScheduleImportService(
                 fileTaskTypeCount = snapshot.taskTypes.size,
                 fileTaskRuleCount = snapshot.taskRules.size,
                 taskTypesOverwritten = countOverwrittenTypes(snapshot.taskTypes),
-                taskRulesOverwritten = countOverwrittenRules(snapshot.taskRules, existingCourses)
+                taskRulesOverwritten = countOverwrittenRules(snapshot.taskRules, existingCourses),
+                existingExamCount = existingExamCount,
+                fileExamCount = validated.exams.size,
+                examMerge = examMerge
             ),
             snapshot = snapshot
         )
@@ -289,6 +314,15 @@ class ScheduleImportService(
 
             applyImportedRules(v.categoryRules)
 
+            // 考试：逐场认人合并。**与策略无关** —— 考试不是「课表」，
+            // 它是学校已经公布的事实，删课不该连带删它；
+            // 而「学校取消了一场考试」只有教务网知道，导入一份文件没有依据做这个判断，
+            // 所以文件里没提到的考试一律留在本机（没有「删除」这一项）。
+            //
+            // 文件里**没有考试块**时（浙大同步产出的课表文档就是这种形状）
+            // 本机的考试一条都不动 —— 考试是同步那条路单独拉的。
+            val examMerge = applyExams(v.exams)
+
             val removed = if (strategy == ImportStrategy.REPLACE) ready.preview.existingCourseCount else 0
 
             // ---- 整机快照的三块。课表部分已经落完，这里才轮到用户数据 ----
@@ -314,7 +348,8 @@ class ScheduleImportService(
                 tasksRelinked = taskLinkPlan.count { it.value != null },
                 taskMerge = merge,
                 taskTypesImported = if (strategy == ImportStrategy.SNAPSHOT) ready.snapshot.taskTypes.size else 0,
-                taskRulesImported = if (strategy == ImportStrategy.SNAPSHOT) countAppliedRules(ready.snapshot) else 0
+                taskRulesImported = if (strategy == ImportStrategy.SNAPSHOT) countAppliedRules(ready.snapshot) else 0,
+                examMerge = examMerge
             )
         }
     }
@@ -433,6 +468,97 @@ class ScheduleImportService(
         }
         return TaskMergePlan(added, overwritten, keptLocal, losingCourse)
     }
+
+    // ------------------------------------------------------------------ 考试
+
+    /**
+     * 逐场认人的合并结论，**不写库**。
+     *
+     * 与 [applyExams] 共用同一套判定（同一个自然键、同一个「较新者胜」），
+     * 所以预览上写的数字就是提交后的实际结果。
+     *
+     * **文件里没有考试就一条都不动**（返回空计划）：浙大同步产出的课表文档
+     * 就是这种形状，而考试在那条路上是单独拉的 —— 这里要是把它当成「清空」，
+     * 一次同步就会把刚拉到的考试抹掉。
+     */
+    private suspend fun planExamMerge(rows: List<ExamBundle>): ExamMergePlan {
+        if (rows.isEmpty()) return ExamMergePlan()
+        val localByKey = db.examDao().getAllExamsOnce().associateBy { it.naturalKey() }
+        var added = 0
+        var overwritten = 0
+        var keptLocal = 0
+        for (row in rows) {
+            val hit = localByKey[row.naturalKey]
+            when {
+                hit == null -> added++
+                // 本机这场更晚改过：保留本机版本。
+                hit.updatedAt > (row.updatedAt ?: 0L) -> keptLocal++
+                else -> overwritten++
+            }
+        }
+        return ExamMergePlan(added, overwritten, keptLocal)
+    }
+
+    /**
+     * 落考试。**只能在 [commit] 的事务内调用。**
+     *
+     * 认人靠自然键（教务网的选课课号原串），输赢靠 `updatedAt`：
+     * 两台设备都从同一个教务网拉过之后，各自那份的 `updatedAt` 不一样，
+     * 较晚的那份才是学校最新公布的。
+     *
+     * **没有「删除」**：文件里没提到的考试留在本机。理由见 [applyExams] 的调用处。
+     */
+    private suspend fun applyExams(rows: List<ExamBundle>): ExamMergePlan {
+        if (rows.isEmpty()) return ExamMergePlan()
+        val dao = db.examDao()
+        val localByKey = dao.getAllExamsOnce().associateBy { it.naturalKey() }
+        var added = 0
+        var overwritten = 0
+        var keptLocal = 0
+        val toWrite = mutableListOf<ExamEntity>()
+        for (row in rows) {
+            val entity = row.toEntity()
+            val hit = localByKey[row.naturalKey]
+            when {
+                hit == null -> {
+                    toWrite += entity
+                    added++
+                }
+                hit.updatedAt > entity.updatedAt -> keptLocal++
+                else -> {
+                    // 覆盖时**保留本机 id**：Room 的主键换不得，
+                    // 而「同一场考试换了本地行号」对用户没有任何好处。
+                    toWrite += entity.copy(id = hit.id)
+                    overwritten++
+                }
+            }
+        }
+        if (toWrite.isNotEmpty()) dao.insertExams(toWrite)
+        return ExamMergePlan(added, overwritten, keptLocal)
+    }
+
+    /** 本机现存的考试场次。 */
+    private suspend fun existingExamCount(): Int = db.examDao().countExams()
+
+    /** 文件里的一场考试 → 库里的实体。 */
+    private fun ExamBundle.toEntity(): ExamEntity = ExamEntity(
+        id = 0L,
+        xkkh = xkkh.orEmpty(),
+        courseCode = courseCode.orEmpty(),
+        courseName = courseName.orEmpty(),
+        kind = kind ?: ExamEntity.KIND_FINAL,
+        startAt = startAt ?: 0L,
+        endAt = endAt ?: 0L,
+        startMinute = startMinute ?: 0,
+        endMinute = endMinute ?: 0,
+        dateLabel = dateLabel.orEmpty(),
+        // 空串 = 「学校还没安排」，与库里既有的写法一致。
+        classroom = classroom.orEmpty(),
+        seat = seat.orEmpty(),
+        credit = credit ?: 0.0,
+        termLabel = termLabel.orEmpty(),
+        updatedAt = updatedAt ?: 0L
+    )
 
     /** 文件里的一条待办 → 库里的实体。课程的三个快照字段从本机课程行取。 */
     private fun TaskBundle.toEntity(courseId: Long, course: CourseEntity?): TaskEntity = TaskEntity(

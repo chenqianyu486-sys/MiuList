@@ -42,7 +42,19 @@ class PairingStore(
 
     enum class State { PENDING, APPROVED, DENIED, EXPIRED }
 
-    /** 一次待批准的配对请求。**只存摘要，不存 secret。** */
+    /**
+     * 一次待批准的配对请求。
+     *
+     * ## 里面能装两种密钥材料
+     *
+     * - **老协议（v3）**：`legacySecret` —— secret 本身从二维码过来。
+     *   服务端只见到它的摘要（`requestId`），抓包的人拿不到 secret。
+     * - **新协议（v3.1）**：`peerPublicKey` + `sharedSecret` ——
+     *   电脑的 DH 公钥换来的共享密钥。**过网的只有公钥**。
+     *
+     * 两者的差别只在「密钥怎么到手机上」，后面的密钥派生、
+     * 签名、加密全都一样。
+     */
     data class PendingRequest(
         val requestId: String,
         val requestedAt: Long,
@@ -50,7 +62,31 @@ class PairingStore(
         var state: State = State.PENDING,
         var deviceId: String? = null,
         var deviceName: String = "",
-    )
+        /** 电脑的 DH 公钥。null = 还没拿到（老协议，或深链还没到）。 */
+        var peerPublicKey: ByteArray? = null,
+        /** 手机自己的一次性私钥。**只在内存里。** */
+        var ephemeralPrivate: ByteArray? = null,
+        /** 手机的一次性公钥 —— 要回给电脑，它靠它算出同一把共享密钥。 */
+        var ephemeralPublic: ByteArray? = null,
+        /** 协商出来的共享密钥（32 字节）。 */
+        var sharedSecret: ByteArray? = null,
+        /** 老协议：secret 本身（二维码带来的）。 */
+        var legacySecret: ByteArray? = null,
+    ) {
+        /**
+         * **配对码**：给用户肉眼核对的两端一致的 6 位码。
+         *
+         * - 新协议：公钥的哈希（两端一开始就有同一个公钥，立刻能算）；
+         * - 老协议：`requestId` 的前 6 位（老网页端显示的就是这个）。
+         */
+        val pairCode: String
+            get() = peerPublicKey?.let { WebDh.pairCode(it) }
+                ?: requestId.take(6).uppercase()
+
+        /** 这条请求现在**配不配得成** —— 没有密钥材料就还不成。 */
+        val hasKeyMaterial: Boolean
+            get() = sharedSecret != null || legacySecret != null
+    }
 
     /**
      * 一台已配对的设备。
@@ -71,6 +107,15 @@ class PairingStore(
         val state: State,
         val deviceId: String? = null,
         val deviceName: String? = null,
+        /**
+         * 手机的一次性公钥 —— 电脑靠它算出**同一把**共享密钥。
+         *
+         * **它是公钥，不是秘密**：抓包的人看到它也算不出共享密钥
+         * （DH 的单向性）。没有它，电脑就没有 secret可用。
+         */
+        val publicKey: ByteArray? = null,
+        /** 配对码。电脑拿它跟自己算出来的一比 —— 对不上就是有人在中间换公钥。 */
+        val pairCode: String? = null,
     )
 
     private val pending = LinkedHashMap<String, PendingRequest>()
@@ -84,33 +129,64 @@ class PairingStore(
     /**
      * 申请配对。
      *
-     * @param requestId `requestIdOf(secret)`，服务端**只能看到这个摘要**。
+     * @param requestId `requestIdOf(secret)`（老协议），或一个随机 id（新协议）。
+     * @param peerPublicKey 电脑的 DH 公钥。**给了它，手机就能自己算出共享密钥** ——
+     *   这条「只填地址」的路就是这样走通的：过网的只有公钥。
      */
-    fun request(requestId: String, deviceName: String = ""): PendingRequest {
+    fun request(
+        requestId: String,
+        deviceName: String = "",
+        peerPublicKey: ByteArray? = null,
+    ): PendingRequest {
         purgeExpired()
         val now = clock()
         val existing = pending[requestId]
-        if (existing != null && existing.state == State.PENDING) return existing
+        if (existing != null && existing.state == State.PENDING) {
+            // **补公钥**：两条通道（HTTP 请求 / 二维码深链）谁先到都行 ——
+            // 先到的那条只带 requestId，后到的那条把公钥补上。
+            if (peerPublicKey != null) attachPeerKey(existing, peerPublicKey)
+            return existing
+        }
         val req = PendingRequest(
             requestId = requestId,
             requestedAt = now,
             expiresAt = now + CODE_TTL_MS,
             deviceName = deviceName,
         )
+        if (peerPublicKey != null) attachPeerKey(req, peerPublicKey)
         pending[requestId] = req
         return req
     }
 
     /**
+     * 把电脑的 DH 公钥接到一条待批准的请求上，并**当场协商出共享密钥**。
+     *
+     * 为什么「当场」：共享密钥一旦定下来，配对码也就定下来了 ——
+     * 界面要立刻把它显示出来让用户核对。
+     */
+    private fun attachPeerKey(req: PendingRequest, peerPublicKey: ByteArray) {
+        // 已经有密钥材料就不覆盖：同一请求重复到达时，保留第一次协商的结果
+        // （换了公钥就换了一把密钥，两端会对不上）。
+        if (req.peerPublicKey != null) return
+        if (peerPublicKey.size != WebDh.KEY_BYTES) return
+        val (priv, pub) = WebDh.generateKeypair()
+        req.peerPublicKey = peerPublicKey
+        req.ephemeralPrivate = priv
+        req.ephemeralPublic = pub
+        req.sharedSecret = WebDh.sharedSecret(priv, peerPublicKey)
+    }
+
+    /**
      * 批准 —— **由用户在手机上点「允许」后调用**。
      *
-     * @param secret 二维码里带来的那个 secret。
-     *   这里会**重算一遍摘要**跟 [requestId] 对上：二维码被人改过
-     *   （比如把 code 换成另一台设备的 requestId）就会在这里被挡住。
+     * @param secret 老协议（二维码带来的那个 secret）。新协议传 null ——
+     *   共享密钥在 [request] 收到公钥时就算好了。
+     * @param secret 老协议里会**重算一遍摘要**跟 [requestId] 对上：
+     *   二维码被人改过（比如把 requestId 换成另一台设备的）就会在这里被挡住。
      */
     fun approve(
         requestId: String,
-        secret: ByteArray,
+        secret: ByteArray? = null,
         passcode: String = "",
         deviceName: String = "",
     ): PairedDevice? {
@@ -121,13 +197,16 @@ class PairingStore(
             req.state = State.EXPIRED
             return null
         }
-        if (requestIdOf(secret) != requestId) return null
+        // 新协议：共享密钥已经协商好了。
+        // 老协议：secret 由二维码带来，这时才校验摘要。
+        val effective = req.sharedSecret ?: secret ?: req.legacySecret ?: return null
+        if (req.sharedSecret == null && requestIdOf(effective) != requestId) return null
 
         val deviceId = idGenerator()
         val now = clock()
         val device = PairedDevice(
             deviceId = deviceId,
-            keys = WebCrypto.deriveKeys(secret, passcode),
+            keys = WebCrypto.deriveKeys(effective, passcode),
             deviceName = deviceName.ifBlank { req.deviceName.ifBlank { "网页端" } },
             pairedAt = now,
             lastSeenAt = now,
@@ -160,6 +239,8 @@ class PairingStore(
             state = req.state,
             deviceId = req.deviceId,
             deviceName = req.deviceName.takeIf { it.isNotBlank() },
+            publicKey = req.ephemeralPublic,
+            pairCode = req.pairCode.takeIf { req.hasKeyMaterial },
         )
     }
 

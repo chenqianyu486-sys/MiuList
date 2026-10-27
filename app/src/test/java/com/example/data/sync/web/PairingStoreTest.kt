@@ -129,6 +129,90 @@ class PairingStoreTest {
         )
     }
 
+    // ── 新协议（v3.1）：DH 协商 ─────────────────────────────────
+
+    /** 假装自己是那台「电脑」：生成一对临时密钥。 */
+    private fun desktopKeypair(): Pair<ByteArray, ByteArray> = WebDh.generateKeypair()
+
+    @Test
+    fun `带公钥的申请会当场协商出共享密钥 - 并给出配对码`() {
+        val store = store()
+        val (priv, pub) = desktopKeypair()
+        val requestId = "req-dh-0001"
+
+        val req = store.request(requestId, "网页端", pub)
+
+        assertTrue("拿到公钥就算「配得成」了", req.hasKeyMaterial)
+        assertNotNull("共享密钥要算出来", req.sharedSecret)
+        assertEquals(
+            "配对码必须是**公钥**的哈希 —— 电脑那边算出来的是同一个",
+            WebDh.pairCode(pub),
+            req.pairCode,
+        )
+        // 共享密钥 = sha256(公钥协商出来的值)
+        assertArrayEqualsBytes(
+            WebDh.sharedSecret(req.ephemeralPrivate!!, pub),
+            req.sharedSecret!!,
+        )
+        // 私钥不会留在请求对象里给界面看
+        assertTrue(req.ephemeralPublic!!.size == WebDh.KEY_BYTES)
+        assertTrue(priv.size == WebDh.PRIV_BYTES)
+    }
+
+    @Test
+    fun `批准时用协商出来的密钥 - 与电脑端算出来的是同一把`() {
+        val store = store()
+        val (priv, pub) = desktopKeypair()
+        val req = store.request("req-dh-0002", "网页端", pub)
+
+        val device = store.approve(req.requestId, passcode = "", deviceName = "网页端")
+
+        assertNotNull(device)
+        // 电脑那边会用自己算出来的共享密钥派生 —— 两边必须一致。
+        assertArrayEqualsBytes(
+            WebCrypto.deriveKeys(WebDh.sharedSecret(priv, req.ephemeralPublic!!)).kEnc,
+            device!!.keys.kEnc,
+        )
+    }
+
+    @Test
+    fun `状态里会回手机自己的公钥与配对码 - 电脑靠它算出同一把密钥`() {
+        val store = store()
+        val (_, pub) = desktopKeypair()
+        store.request("req-dh-0003", "网页端", pub)
+
+        val status = store.status("req-dh-0003")
+
+        assertEquals(PairingStore.State.PENDING, status.state)
+        assertNotNull("手机要把自己的公钥回给电脑", status.publicKey)
+        assertEquals(WebDh.pairCode(pub), status.pairCode)
+    }
+
+    @Test
+    fun `深链后到时补上公钥 - 批准与否只取决于用户点了什么`() {
+        val store = store()
+        // 先来一条只有 requestId 的请求（扫码那条路：公钥在二维码里）
+        val req = store.request("req-dh-0004", "网页端")
+        assertFalse("还没拿到公钥时不弹确认卡", req.hasKeyMaterial)
+
+        // 深链把公钥带来了
+        val (_, pub) = desktopKeypair()
+        val again = store.request("req-dh-0004", "网页端", pub)
+
+        assertTrue(again.hasKeyMaterial)
+        assertEquals(WebDh.pairCode(pub), again.pairCode)
+        assertNotNull(store.approve("req-dh-0004"))
+    }
+
+    @Test
+    fun `公钥长度不对时不算配好 - 不能拿乱码当公钥`() {
+        val store = store()
+        val req = store.request("req-dh-0005", "网页端", ByteArray(10) { 1 })
+
+        assertFalse(req.hasKeyMaterial)
+        assertNull(store.approve("req-dh-0005"))
+    }
+
     // ── 请求认证 ────────────────────────────────────────────────
 
     @Test

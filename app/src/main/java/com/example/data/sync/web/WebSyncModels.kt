@@ -106,6 +106,17 @@ data class WebSnapshotDto(
      * 网页端据此把「周视图」这一档藏起来，而不是画一张空表。
      */
     val timetable: WebTimetableDto? = null,
+    /**
+     * **原始校历**（学期 / 调休 / 作息）。
+     *
+     * 周课表是**算好的结果**，网页端只画；而这一块是**规则本身** ——
+     * 网页端显示用不到它，但**导出备份要靠它**：
+     * 有了它，网页端导出的 JSON 才是一份完整的「整机快照」，
+     * 而不是「一堆待办 + 一张画好的表」。
+     *
+     * null = 手机那边还没有校历（老版本 App）。
+     */
+    val calendar: WebCalendarDto? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -213,110 +224,33 @@ data class WebTodayCourseDto(
     val state: String = "future",
 )
 
-// ── 周课表 ──────────────────────────────────────────────────────
 
 /**
- * 周课表：网页端画那张栅格要的全部数据。
+ * 周课表那六件东西现在住在 `data/model`（见 `com.example.data.model.WeekPlan.kt`）。
  *
- * ## 为什么在**手机**上算，而不是让网页端自己算
+ * **为什么搬**：同一份形状同时出现在两个协议里 ——
+ * 局域网同步快照的 `timetable`，与整机快照文件的 `weekPlan`。
+ * 住在 `sync/web` 的话，文件格式那一层（`codec`）就得反过来依赖同步协议，
+ * 层次就倒了。搬进共享词汇层，两边各引各的。
  *
- * 周课表的一列是「这一周里的一个**真实日期**」，不是「星期几」——
- * 补课只有在这一层才表达得出来：2026-10-17 是周六，它要出周五的课，
- * 而同一周的 10-16（周五）反而一节都没有。
- *
- * 哪些课落在哪一天，牵扯学期范围、停课日、补课日、开课周次，
- * 而这些规则在 App 里已经是**唯一一份**实现（`ScheduleResolver`）。
- * 在网页端重写一份，两边迟早给出不同的答案，而用户会以为是网页端算错了
- * —— 所以这里在手机侧算好，网页端只负责画。
- *
- * ## 载荷为什么长这样
- *
- * - **时段只存一份**（[slotList]），周计划里存下标（[WebTimetableDayDto.slotIndexes]）。
- *   一门课在一学期里要出几十次，全文重复就是几十份一模一样的 JSON；
- * - **考试不重复**：一场考试只落在**一天**上，所以整张表里它只出现一次，
- *   内容直接内联，不用再去别处查。
+ * 这里的别名只是为了让本包里的代码一个字都不用改。
+ * **JSON 字段名没变**，所以协议与文件格式都是线兼容的。
  */
-@JsonClass(generateAdapter = true)
-data class WebTimetableDto(
-    /** 学期总周数。翻周箭头的上界。 */
-    val totalWeeks: Int = 0,
-    /** 当前周次（顶栏与「本周」标识用）。 */
-    val currentWeek: Int = 0,
-    /** 一天几节。栅格的行数。 */
-    val periodsPerDay: Int = 0,
-    /** 每节的起止分钟（自 00:00 起）。给「这一节几点到几点」用。 */
-    val periods: List<WebPeriodDto> = emptyList(),
-    /** 去重后的全部时段。周计划按下标引用它。 */
-    val slotList: List<WebTimetableSlotDto> = emptyList(),
-    /** 每一周，按周次排好。 */
-    val weeks: List<WebTimetableWeekDto> = emptyList(),
-)
-
-/** 一节课的时间定义（自 00:00 起的分钟数）。 */
-@JsonClass(generateAdapter = true)
-data class WebPeriodDto(
-    val period: Int = 0,
-    val startMinute: Int = 0,
-    val endMinute: Int = 0,
-)
-
-/** 一个时段。课程由 [courseKey] 指向 `courses[]` 里那门课。 */
-@JsonClass(generateAdapter = true)
-data class WebTimetableSlotDto(
-    val courseKey: String = "",
-    val startPeriod: Int = 0,
-    val endPeriod: Int = 0,
-    val classroom: String = "",
-)
-
-/** 一周。 */
-@JsonClass(generateAdapter = true)
-data class WebTimetableWeekDto(
-    val week: Int = 0,
-    /** 周一到周日，**七列恒在**（少一列整张表会左右错位）。 */
-    val days: List<WebTimetableDayDto> = emptyList(),
-)
+typealias WebTimetableDto = com.example.data.model.WeekPlanDto
+typealias WebPeriodDto = com.example.data.model.WeekPeriodDto
+typealias WebTimetableSlotDto = com.example.data.model.WeekPlanSlotDto
+typealias WebTimetableWeekDto = com.example.data.model.WeekPlanWeekDto
+typealias WebTimetableDayDto = com.example.data.model.WeekPlanDayDto
+typealias WebTimetableExamDto = com.example.data.model.WeekPlanExamDto
 
 /**
- * 周课表里的一天 = 一列。
+ * **原始校历**（学期 / 调休 / 作息）。
  *
- * [date] / [dayOfWeek] 说的是**这一天本身**；[slotIndexes] 里装的却是
- * 「这一天要上的课」—— 补课日补的是别的星期几的课，那部分信息在
- * [makeupDayOfWeek] 里。
+ * 与整机快照文件里的 `calendar` 块**同构**（同一个 DTO）——
+ * 不然网页端从手机同步来的校历和从手机文件里读来的校历会长得不一样，
+ * 而用户看不出那两份是同一件事。
  */
-@JsonClass(generateAdapter = true)
-data class WebTimetableDayDto(
-    /** `YYYY-MM-DD`，北京时间。 */
-    val date: String = "",
-    /** 这天**真实**的星期几（1=周一 … 7=周日）。补课日也照实报它本来的星期几。 */
-    val dayOfWeek: Int = 0,
-    /**
-     * 这一天为什么没课：`NO_CLASS` / `VACATED` / `WEEKEND` / `OUT_OF_TERM`，
-     * 空 = 正常上课日。
-     *
-     * 周末是**软**理由（用户自己排了课就有课），其余三种是硬理由。
-     */
-    val offReason: String? = null,
-    /** 补课日：补的是星期几的课（1..7）。空 = 不是补课日。 */
-    val makeupDayOfWeek: Int? = null,
-    /** 这天要上的课。下标指向 [WebTimetableDto.slotList]。 */
-    val slotIndexes: List<Int> = emptyList(),
-    /** 这天的考试（考试只有钟点，节次已按作息表换算好）。 */
-    val exams: List<WebTimetableExamDto> = emptyList(),
-)
-
-/** 周课表格子里的一场考试。 */
-@JsonClass(generateAdapter = true)
-data class WebTimetableExamDto(
-    val courseName: String = "",
-    val colorHex: String = "",
-    val startPeriod: Int = 0,
-    val endPeriod: Int = 0,
-    /** 开考时刻（自 00:00 起的分钟数）。0 = 学校还没公布。 */
-    val startMinute: Int = 0,
-    val classroom: String = "",
-    val seat: String = "",
-)
+typealias WebCalendarDto = com.example.data.codec.CalendarDto
 
 /**
  * 「把这份快照落进本机」的请求体。
@@ -353,6 +287,63 @@ data class WebTaskPatchDto(
     val dueDateString: String? = null,
     val courseKey: String? = null,
     val baseUpdatedAt: Long? = null,
+)
+
+// ── 学在浙大（网页端拉课表） ────────────────────────────────────
+
+/** 学期下拉里的一项。 */
+@JsonClass(generateAdapter = true)
+data class WebZjuTermDto(
+    /** 学年，如 `"2026-2027"`。 */
+    val year: String = "",
+    /** 教务网查询用哪一半：秋冬 → 0(秋)，春夏 → 4(春)。 */
+    val term: Int = 0,
+    /** 「2026-2027学年 秋冬 学期」。 */
+    val label: String = "",
+)
+
+@JsonClass(generateAdapter = true)
+data class WebZjuTermsResponse(
+    val terms: List<WebZjuTermDto> = emptyList(),
+)
+
+/**
+ * 「去学在浙大拉一次」的请求体。
+ *
+ * **[password] 走的是密文**：整个请求体在会话密钥派生的 ChaCha20 里，
+ * 局域网上也解不开。它**不落浏览器存储** —— 网页端不记密码。
+ */
+@JsonClass(generateAdapter = true)
+data class WebZjuSyncRequest(
+    /** 学号。空 = 用手机已存的凭据。 */
+    val studentId: String? = null,
+    /** 密码。空 = 用手机已存的凭据。 */
+    val password: String? = null,
+    /** 目标学年（`"2026-2027"`）。空 = 用上次同步的那一期。 */
+    val year: String? = null,
+    /** 目标半学期（0 = 秋，4 = 春）。空 = 用上次同步的那一期。 */
+    val term: Int? = null,
+    /** 是否把凭据转存进手机的 Keystore。 */
+    val remember: Boolean? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class WebZjuSyncResponse(
+    val ok: Boolean = false,
+    val courseCount: Int = 0,
+    val slotCount: Int = 0,
+    val examCount: Int = 0,
+    val termLabel: String = "",
+    /** 考试没拉到时的原因；null = 一切正常。 */
+    val examError: String? = null,
+    /** 凭据是否被转存进了 Keystore。 */
+    val savedCredentials: Boolean = false,
+    /** 失败时的原因。 */
+    val error: String? = null,
+    /** 失败类别。 */
+    val kind: String? = null,
+    /** 失败时本机数据是不是原样保留着。 */
+    val localDataIntact: Boolean = true,
 )
 
 // ── 映射 ──────────────────────────────────────────────────────

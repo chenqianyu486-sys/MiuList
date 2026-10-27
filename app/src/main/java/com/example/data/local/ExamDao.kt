@@ -9,9 +9,13 @@ import kotlinx.coroutines.flow.Flow
 /**
  * 考试的读写。
  *
- * **整表替换**是这里的唯一写入口（见 `ExamRepository.replaceAll`）：
- * 考试完全来自服务端，没有「本地新建的考试」这种东西，
- * 所以不存在「合并两份考试列表」的场景，也就不需要 upsert 的去重规则。
+ * 写入口有两条：
+ * - **整表替换**（[insertExams] + [clearExams]）：浙大同步用，服务端那份就是权威；
+ * - **逐场合并**（[insertExams] 带上原 id）：文件导入用，按自然键认人、
+ *   较新者胜，见 `ScheduleImportService`。
+ *
+ * 两种语义并存是因为它们的**权威源不同**：同步那条里服务端说了算，
+ * 文件导入那条里「另一台设备上的我」说了算。
  */
 @Dao
 interface ExamDao {

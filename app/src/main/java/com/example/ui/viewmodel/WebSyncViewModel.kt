@@ -25,11 +25,20 @@ data class WebSyncUiState(
     val pairedDevices: List<PairingStore.PairedDevice> = emptyList(),
     /** 有一台设备在等确认。 */
     val pendingPairing: Boolean = false,
+    /**
+     * **配对码**：两端一致的 6 位码。
+     *
+     * 用户要拿它跟电脑上显示的那一串比对 —— 这是「允许」之前
+     * 唯一能确认「对面确实是我眼前这台电脑」的办法。
+     */
+    val pendingPairCode: String = "",
+    /** 在等确认的是哪台设备。 */
+    val pendingDeviceName: String = "",
     /** 本机最新的一次编辑发生在什么时候。 */
     val localLatestEditAt: Long = 0L,
     /** 网页端最近一次同步过来的快照的最新编辑时间。 */
     val remoteLatestEditAt: Long = 0L,
-    /** 设了同步密码没有。**不��显明文。** */
+    /** 设了同步密码没有。**不示显明文。** */
     val hasPasscode: Boolean = false,
     /** 刚刚发生过的事，给界面一句提示。 */
     val message: String? = null,
@@ -44,14 +53,42 @@ class WebSyncViewModel(
     private val _uiState = MutableStateFlow(WebSyncUiState())
     val uiState: StateFlow<WebSyncUiState> = _uiState.asStateFlow()
 
+    init {
+        // 「有一台设备请求连接」可能**在弹层开着的时候**才出现 ——
+        // 深链是在 HTTP 处理线程里到的，弹层开着不代表界面会重读一次状态。
+        // 所以这里订阅服务上的那个流，而不是只在 refresh() 时读一次。
+        viewModelScope.launch {
+            service.pendingPairing.collect { pending ->
+                _uiState.value = _uiState.value.copy(
+                    pendingPairing = pending != null,
+                    pendingPairCode = pending?.pairCode.orEmpty(),
+                    pendingDeviceName = pending?.deviceName.orEmpty(),
+                )
+            }
+        }
+    }
+
+    /** 待确认配对的那一块状态。 */
+    private fun pendingState(): Triple<Boolean, String, String> {
+        val pending = service.pendingPairing.value
+        return Triple(
+            pending != null,
+            pending?.pairCode.orEmpty(),
+            pending?.deviceName.orEmpty(),
+        )
+    }
+
     /** 重新读一遍服务状态。打开弹层时调一次。 */
     fun refresh() {
+        val (pending, code, deviceName) = pendingState()
         _uiState.value = WebSyncUiState(
             running = service.isRunning,
             port = service.port,
             addresses = service.lanAddresses(),
             pairedDevices = service.pairedDevices(),
-            pendingPairing = service.pendingPairing != null,
+            pendingPairing = pending,
+            pendingPairCode = code,
+            pendingDeviceName = deviceName,
             localLatestEditAt = _uiState.value.localLatestEditAt,
             remoteLatestEditAt = service.remoteLatestEditAt,
             hasPasscode = service.syncPasscode().isNotEmpty(),
@@ -76,12 +113,15 @@ class WebSyncViewModel(
             service.stop()
             true
         }
+        val (pending, code, deviceName) = pendingState()
         _uiState.value = _uiState.value.copy(
             running = service.isRunning,
             port = service.port,
             addresses = if (enabled && ok) service.lanAddresses() else emptyList(),
             pairedDevices = service.pairedDevices(),
-            pendingPairing = service.pendingPairing != null,
+            pendingPairing = pending,
+            pendingPairCode = code,
+            pendingDeviceName = deviceName,
             message = if (enabled && !ok) "启动失败：端口可能被占用" else null,
         )
         refreshLocalLatestEdit()
@@ -108,16 +148,25 @@ class WebSyncViewModel(
     }
 
     /**
-     * 深链带来的配对请求。
+     * 配对请求来了（二维码深链，或「只填地址」那条路的 HTTP 请求）。
      *
      * **只记下来，不批准。** 批准必须由用户在界面上点一下 ——
      * 局域网里任何设备都能构造出这个深链，自动批准等于把门开着。
      *
-     * @param requestId secret 的摘要。
-     * @param secretBase64 secret 本身（base64url）。**它只在这一刻存在于内存里。**
+     * @param requestId 这次配对的 id。
+     * @param secretBase64 老协议：secret 本身（base64url）。**它只在这一刻存在于内存里。**
+     * @param publicKeyBase64 新协议：电脑的 DH 公钥（base64url）。
      */
-    fun offerPairing(requestId: String, secretBase64: String, deviceName: String = "网页端") {
-        service.offerPairing(requestId, secretBase64, deviceName)
+    fun offerPairing(
+        requestId: String,
+        secretBase64: String = "",
+        publicKeyBase64: String = "",
+    ) {
+        service.offerPairing(
+            requestId = requestId,
+            secretBase64 = secretBase64.ifBlank { null },
+            publicKeyBase64 = publicKeyBase64.ifBlank { null },
+        )
         refresh()
     }
 

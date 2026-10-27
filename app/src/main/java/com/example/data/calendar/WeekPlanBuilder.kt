@@ -1,19 +1,20 @@
-package com.example.data.sync.web
+package com.example.data.calendar
 
-import com.example.data.calendar.AcademicCalendar
-import com.example.data.calendar.AppZone
-import com.example.data.calendar.EpochDays
-import com.example.data.calendar.ScheduleResolver
 import com.example.data.local.CourseEntity
 import com.example.data.local.CourseSlotEntity
 import com.example.data.model.ExamEntry
+import com.example.data.model.WeekPlanDayDto
+import com.example.data.model.WeekPlanDto
+import com.example.data.model.WeekPlanExamDto
+import com.example.data.model.WeekPlanSlotDto
+import com.example.data.model.WeekPlanWeekDto
+import com.example.data.model.WeekPeriodDto
 import com.example.data.timetable.PeriodTable
-import java.time.Instant
 
 /**
- * 把「这一学期每周的课表」算成网页端能直接画的那份数据。
+ * 把「这一学期每周的课表」算成**渲染好**的那份数据。
  *
- * ## 为什么是这一层，而不是让网页端自己算
+ * ## 为什么是这一层，而不是让另一端自己算
  *
  * 周课表的一列是**这一周里的一个真实日期**，不是「星期几」。
  * 哪些课落在哪一天牵扯四件事：开课周次、停课日、补课日、学期范围，
@@ -22,15 +23,22 @@ import java.time.Instant
  *
  * 在网页端重写一份的代价不是「多写几十行」，而是**两边迟早给出不同的答案**，
  * 而用户看到不一致时只会觉得网页端算错了 —— 他不知道手机那边有一份权威实现。
- * 所以这里在手机侧算好，网页端只负责把算好的东西画出来。
+ * 所以这里在手机侧算好，另一端只负责把算好的东西画出来。
  *
  * ## 为什么是一个**纯函数**
  *
  * 它不碰 Room、不碰 Android、不碰协程：所有输入都由参数喂进来。
  * 于是「补课日到底出的是不是周五的课」「停课日是不是真的空着」
  * 这类问题可以直接在普通 JUnit 里断言，不用起模拟器、不用灌库。
+ *
+ * ## 谁在用它
+ *
+ * - 局域网同步：`WebSnapshotBuilder` 把结果放进快照的 `timetable`；
+ * - 整机快照文件：`ScheduleExportService` 把结果放进文件的 `weekPlan`。
+ *
+ * 两处都要它，所以它住在 `calendar` —— 也就是排课规则真正收口的这一层。
  */
-object WebTimetableBuilder {
+object WeekPlanBuilder {
 
     /**
      * @param calendar 校历（学期、停课、补课）。判定口径全在它与 [ScheduleResolver] 里。
@@ -47,7 +55,7 @@ object WebTimetableBuilder {
         coursesById: Map<Long, CourseEntity>,
         exams: List<ExamEntry>,
         periodTable: PeriodTable,
-    ): WebTimetableDto {
+    ): WeekPlanDto {
         val resolver = ScheduleResolver(calendar)
         val totalWeeks = calendar.totalWeeks.coerceAtLeast(1)
 
@@ -67,12 +75,12 @@ object WebTimetableBuilder {
             compareBy({ it.courseId }, { it.dayOfWeek }, { it.startPeriod }, { it.id })
         )
         val slotIndexById = LinkedHashMap<Long, Int>(sortedSlots.size)
-        val slotList = ArrayList<WebTimetableSlotDto>(sortedSlots.size)
+        val slotList = ArrayList<WeekPlanSlotDto>(sortedSlots.size)
         for (slot in sortedSlots) {
             if (slotIndexById.containsKey(slot.id)) continue
             val course = coursesById[slot.courseId]
             slotIndexById[slot.id] = slotList.size
-            slotList += WebTimetableSlotDto(
+            slotList += WeekPlanSlotDto(
                 courseKey = course?.dedupeKey.orEmpty(),
                 startPeriod = slot.startPeriod,
                 endPeriod = slot.endPeriod,
@@ -91,10 +99,10 @@ object WebTimetableBuilder {
         // ── 每一周 ──────────────────────────────────────────────
         val weeks = (1..totalWeeks).map { week ->
             val plan = resolver.weekPlan(week, slots, weeksBySlotId)
-            WebTimetableWeekDto(
+            WeekPlanWeekDto(
                 week = week,
                 days = plan.map { dayPlan ->
-                    WebTimetableDayDto(
+                    WeekPlanDayDto(
                         date = EpochDays.format(dayPlan.epochDay),
                         dayOfWeek = dayPlan.dayOfWeek,
                         offReason = dayPlan.offReason?.name,
@@ -107,7 +115,7 @@ object WebTimetableBuilder {
                             if (exam.startMinute <= 0) return@mapNotNull null
                             val span = periodTable.periodSpanOf(exam.startMinute, exam.endMinute)
                                 ?: return@mapNotNull null
-                            WebTimetableExamDto(
+                            WeekPlanExamDto(
                                 courseName = exam.courseName,
                                 colorHex = exam.courseColorHex,
                                 startPeriod = span.first,
@@ -122,12 +130,12 @@ object WebTimetableBuilder {
             )
         }
 
-        return WebTimetableDto(
+        return WeekPlanDto(
             totalWeeks = totalWeeks,
             currentWeek = resolver.currentWeek(),
             periodsPerDay = periodTable.periodsPerDay,
             periods = periodTable.periods.map {
-                WebPeriodDto(period = it.period, startMinute = it.startMinute, endMinute = it.endMinute)
+                WeekPeriodDto(period = it.period, startMinute = it.startMinute, endMinute = it.endMinute)
             },
             slotList = slotList,
             weeks = weeks,
@@ -141,9 +149,6 @@ object WebTimetableBuilder {
      */
     private fun examDay(exam: ExamEntry): Long? {
         if (!exam.hasDate) return null
-        return Instant.ofEpochMilli(exam.startAt)
-            .atZone(AppZone.ZONE)
-            .toLocalDate()
-            .toEpochDay()
+        return AppZone.epochDayOf(exam.startAt)
     }
 }

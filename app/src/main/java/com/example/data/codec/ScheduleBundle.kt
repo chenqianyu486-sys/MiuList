@@ -2,6 +2,7 @@ package com.example.data.codec
 
 import com.example.data.calendar.TweakKind
 import com.example.data.model.CategoryRule
+import com.example.data.model.WeekPlanDto
 
 /**
  * 课表的中间模型。
@@ -23,6 +24,10 @@ import com.example.data.model.CategoryRule
  * 而课表可以随时从浙大重新拉一遍**。这两件事的来源不同，混在一块就分不清
  * 「同步进来的是我的待办」还是「服务端说的课表」。三块全为 null 的 v3 文档
  * 仍然是一份合法的「只有课表」文档 —— zju-ical 的 `config.json` 就走这条。
+ *
+ * v4 再加一块 [exams]：**考试是学校已经公布的事实**，与课程同源（都来自教务网），
+ * 但与课程的生命周期不同 —— 删课不该连带删考试（见 `ExamEntity` 的类注释）。
+ * 所以它单独成块，而不是塞进 `timetable.courses` 里当某门课的属性。
  */
 data class ScheduleBundle(
     val provenance: ProvenanceBundle = ProvenanceBundle(),
@@ -31,7 +36,20 @@ data class ScheduleBundle(
     val categoryRules: List<CategoryRule> = emptyList(),
     val tasks: List<TaskBundle> = emptyList(),
     val taskTypes: List<TaskTypeBundle> = emptyList(),
-    val taskRules: List<TaskRuleBundle> = emptyList()
+    val taskRules: List<TaskRuleBundle> = emptyList(),
+    /** v4 起：考试。空列表 = 这份文档没带考试，导入时**不动**本机的考试。 */
+    val exams: List<ExamBundle> = emptyList(),
+    /**
+     * v4 起：**渲染好的**周课表。
+     *
+     * **只出不进**：它是派生结果（原始规则在 [calendar] 与 [timetable] 两块里），
+     * 而手机自己算得出周课表 —— 导入时这份块会被忽略。
+     *
+     * 带着它是为了另一端（网页端）：它只会画、不会算，
+     * 排课判定只有手机那一份实现（`ScheduleResolver`），
+     * 让网页端重写一份，迟早两边给出的日期不一样。
+     */
+    val weekPlan: WeekPlanDto? = null
 ) {
     /** 三块是否整体缺席。浙大同步产出的文档就是这种形状。 */
     val hasNoUserData: Boolean
@@ -248,3 +266,70 @@ data class TaskRuleBundle(
     val dueOffsetDays: Int? = null,
     val dueBeforeMinutes: Int? = null
 )
+
+// ------------------------------------------------------------------ v4：考试
+
+/**
+ * 一场考试。
+ *
+ * 字段与 `ExamEntity` 一一对应，只是 `id` 换成了 [xkkh]：
+ *
+ * - **不导出 [id]**：那是本机自增的行号，写进文件等于把一端的主键强加给另一端；
+ * - **[xkkh] 才是它的身份**：教务网给的选课课号原串（如
+ *   `(2026-2027-1)-MATH2432F-0083261-1`），同一个学校里一门课一次考试只有一个。
+ *
+ * [xkkh] 偶尔是空的（少数考试教务网不给课号），这时退回用
+ * 「课程代码 + 课程名 + 开考时刻」认人，见 [naturalKey]。
+ *
+ * **空串与 null 不是一回事**（与 `CourseBundle.note` 同一套约定）：
+ * 教室 / 座位写成空串 = 「学校还没安排」，写 null = 「这份文件没带这一项」。
+ */
+data class ExamBundle(
+    /** 教务网选课课号原串。跨设备的身份。 */
+    val xkkh: String? = null,
+    /** 从 [xkkh] 抽出的课程代码，与 `CourseBundle.code` 同一口径。 */
+    val courseCode: String? = null,
+    val courseName: String? = null,
+    /** MIDTERM / FINAL，见 `ExamEntity.KIND_MIDTERM`。 */
+    val kind: String? = null,
+    /** 绝对开始时间（epoch 毫秒，北京时间）。0 = 学校还没公布具体日期。 */
+    val startAt: Long? = null,
+    /** 绝对结束时间（epoch 毫秒）。与 [startAt] 同时为 0 或同时有值。 */
+    val endAt: Long? = null,
+    /** 开始时刻（当天第几分钟，0..1439）。日期没公布时也有值。 */
+    val startMinute: Int? = null,
+    val endMinute: Int? = null,
+    /** 日期未公布时的原始标签，如「考试周第 3 天」。 */
+    val dateLabel: String? = null,
+    /** 教室。空串 = 学校还没安排。 */
+    val classroom: String? = null,
+    /** 座位号。空串 = 学校还没安排。 */
+    val seat: String? = null,
+    val credit: Double? = null,
+    /** 学年学期标签，如「2026-2027 秋冬」。 */
+    val termLabel: String? = null,
+    /** 本条记录的更新时间（epoch 毫秒）。跨设备「谁赢」的仲裁依据。 */
+    val updatedAt: Long? = null
+) {
+    /**
+     * 这场考试跨设备的自然键。
+     *
+     * 优先用 [xkkh]（教务网的选课课号原串）：它是**唯一**稳定且唯一的标识，
+     * 连「同一门课的期中考与期末考」都能分开。
+     *
+     * 它偶尔是空的，这时退回「课程代码 + 课程名 + 开考时刻」——
+     * 这三样凑起来足以把一场考试认出来，且不会把同一门课的两场考试混成一场
+     * （它们的时刻不同）。
+     */
+    val naturalKey: String
+        get() {
+            val code = xkkh?.trim().orEmpty()
+            if (code.isNotEmpty()) return code
+            return listOf(
+                courseCode?.trim().orEmpty(),
+                courseName?.trim().orEmpty(),
+                (startAt ?: 0L).toString(),
+                (startMinute ?: 0).toString()
+            ).joinToString("|")
+        }
+}

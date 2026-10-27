@@ -74,7 +74,7 @@ internal fun formatMinuteOfDay(minute: Int): String {
  * 「09:00」→ 540。解析不出来（格式不对、小时越界）返回 null。
  *
  * 本地编辑考试时刻用：宁可**不让保存**，也不要悄悄存一个错的时间 ——
- * 考试时间错了，��户会按错的时间出门。
+ * 考试时间错了，用户会按错的时间出门。
  */
 internal fun parseClockText(text: String): Int? {
     val t = text.trim()

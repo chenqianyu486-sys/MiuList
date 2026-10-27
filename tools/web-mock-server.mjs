@@ -1,25 +1,25 @@
 #!/usr/bin/env node
-/* MiuList 网页端的本地 mock 服务（协议 v3）。
+/* MiuList 网页端的本地 mock 服务（协议 v3 / 配对 v3.1）。
  *
  * 用途：不开手机也能把网页端跑起来 —— 开发时调样式、截图验收时出图。
  *
  * ## 它怎么扮演「手机」
  *
- * 真机上，手机是**扫码的一方**：它从二维码里拿到 secret。
- * mock 没有摄像头，所以它**自己持有一把固定的 secret**
- * （`--secret`），而网页端在带 `?devsecret=<同一个值>` 时会改用这把 secret
- * 而不是随机生成 —— 两边于是算得出同一套密钥。
+ * 真机上，手机是**确认的一方**：网页端带着自己的 DH 公钥来（公钥不是秘密），
+ * 两端各自算出同一把共享密钥 —— **密钥从不过网**。
  *
- * 这是**只在开发时用**的口子：
- * - 网页端只有 URL 里显式带了 `devsecret` 才会走这条路；
- * - 真正的手机上没有这个参数，secret 照旧是随机生成、只走二维码。
+ * mock 就照着这个来：网页端 POST 来的公钥它接着，
+ * 算出一把共享密钥，然后按 `--no-auto-approve` 决定批不批。
+ *
+ * 老协议（把 secret 从二维码搬过去）也留着：`--secret <base64url>` +
+ * 网页端 URL 上带 `?devsecret=<同一个值>`。那是给**旧网页端**用的。
  *
  * 密码学直接 import 网页端那份 `web/crypto.js` ——
  * 这样 mock 与手机端的算法**不可能**对不齐（那是「配对过了但一直解密失败」的元凶）。
  *
  * 用法：
- *   node tools/web-mock-server.mjs --port 8777 --secret <base64url>
- *   node tools/web-mock-server.mjs --port 8777 --auto-secret
+ *   node tools/web-mock-server.mjs --port 8777
+ *   node tools/web-mock-server.mjs --port 8777 --no-auto-approve
  *   node tools/web-mock-server.mjs --port 8778 --secret <base64url> --no-timetable
  *
  * 最后一个 `--no-timetable` 是**模拟旧版本手机**：快照里不带 `timetable`，
@@ -35,6 +35,7 @@ import { fileURLToPath } from 'node:url';
 import {
   sha256, hmacSha256, chacha20, deriveKeys, seal, open, signRequest,
   toBase64Url, fromBase64Url, randomBytes, utf8Bytes,
+  dhGenerateKeypair, dhSharedSecret, pairCodeOf,
 } from '../web/crypto.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -84,6 +85,18 @@ const NO_TIMETABLE = argv.includes('--no-timetable');
  * 自动批准是 mock 的默认（方便截图），但要拍**配对页那张二维码**就得关掉它。
  */
 const NO_AUTO_APPROVE = argv.includes('--no-auto-approve');
+/**
+ * 模拟**旧版手机**的配对协议（v3）。
+ *
+ * 新协议（v3.1）是 DH 协商：网页端把**公钥**发过来，两端各自算出同一把密钥。
+ * 而「手机扫电脑的码」那条路里，**公钥走二维码**——mock 不会扫码，
+ * 于是那条路在 mock 上走不通（扫码时公钥根本不过网）。
+ *
+ * `--legacy-pairing` 让 mock 报 `pairing: 3`，网页端就退回老协议
+ * （secret 从二维码搬过去，`?devsecret=` 配对）——
+ * 与 `--no-timetable` 是同一个思路：**模拟一个旧版本的手机**。
+ */
+const LEGACY_PAIRING = argv.includes('--legacy-pairing');
 
 // ── 假数据 ──────────────────────────────────────────────────
 
@@ -401,6 +414,13 @@ function deriveTodayCourses(courses) {
 const DEVICE_ID = 'mock-device';
 let keys = null;
 let secretBytes = null;
+/**
+ * 待批准的配对（DH 协议 v3.1）。
+ *
+ * 网页端带着自己的**公钥**来，mock 拿它算出一把共享密钥 ——
+ * 两边都有 secret，而它**从不过网**。
+ */
+let pendingPair = null;
 const usedNonces = new Map();
 
 /** secret → requestId（与手机端同一套算法：摘要前 16 字节的 base64url）。 */
@@ -455,6 +475,14 @@ function snapshot() {
     todayCourses: deriveTodayCourses(state.courses),
     // 周课表：随课表一起走；网页端只画，不自己算（手机那边才是权威）
     timetable: NO_TIMETABLE ? null : buildTimetable(state.courses),
+    // 原始校历：网页端存下这一份，是为了写进它导出的 JSON
+    // （那份文件手机也认得，换机后周次才对得上）。
+    calendar: {
+      termConfigs: [{ Year: '2026-2027', Term: 0, Begin: 20260907, End: 20261025, FirstWeekNo: 1 }],
+      classTerms: ['2026-2027:0'],
+      tweaks: [{ TweakType: 'Clear', Description: '国庆', From: 20261001, To: 20261003 }],
+      periods: [{ period: 1, startTime: '08:00', endTime: '08:45', section: '大教室' }],
+    },
   };
 }
 
@@ -599,7 +627,10 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (p === '/api/health') {
-      return json(res, 200, { ok: true, app: 'MiuList', appVersion: '1.0.4', protocol: 3, deviceName: 'Mock 手机', serverTime: Date.now() });
+      // `pairing: 4` —— 网页端据此知道这台「手机」支持 **DH 协商**
+      // （公钥过网、密钥各自算），而不是老协议「把 secret 从二维码搬过去」。
+      // `--legacy-pairing` 时报 3，网页端就退回老协议（见那个开关的说明）。
+      return json(res, 200, { ok: true, app: 'MiuList', appVersion: '1.0.4', protocol: 3, pairing: LEGACY_PAIRING ? 3 : 4, deviceName: 'Mock 手机', serverTime: Date.now() });
     }
 
     // ── 调试：换掉这台「手机」的课表 ────────────────────────────
@@ -632,27 +663,130 @@ const server = http.createServer(async (req, res) => {
       const raw = await readBody(req);
       let body = {};
       try { body = JSON.parse(raw.toString('utf8') || '{}'); } catch (_) { /* 坏体当空 */ }
-      if (!SECRET) {
-        return json(res, 400, { error: 'mock 需要 --secret：网页端要用 ?devsecret=<同一个值>' });
-      }
-      ensureKeys();
-      const expected = requestIdOf(secretBytes);
-      if (body.requestId !== expected) {
-        return json(res, 400, {
-          error: `requestId 对不上（网页端要用同一个 secret）：收到 ${body.requestId}，期望 ${expected}`,
-          raw: raw.toString('utf8').slice(0, 120),
-          keys: Object.keys(body),
+
+      // ── 新协议（v3.1）：DH 协商 ────────────────────────────────
+      //
+      // 网页端带着自己的**公钥**来。它是公钥不是秘密 ——
+      // mock 拿它跟自己的一对临时密钥算出同一把共享密钥，
+      // 于是两边都有 secret，而它**从不过网**。
+      if (body.publicKey) {
+        const peerPub = fromBase64Url(body.publicKey);
+        if (peerPub.length !== 256) {
+          return json(res, 400, { error: 'publicKey 长度不对' });
+        }
+        const keypair = dhGenerateKeypair();
+        const shared = dhSharedSecret(keypair.priv, peerPub);
+        pendingPair = {
+          requestId: body.requestId || '',
+          priv: keypair.priv,
+          pub: keypair.pub,
+          secret: shared,
+          // 配对码是**电脑那个公钥**的哈希 —— 手机那边算的也是这个。
+          code: pairCodeOf(peerPub),
+          approved: !NO_AUTO_APPROVE,
+        };
+        keys = deriveKeys(shared, PASSCODE);
+        return json(res, 200, {
+          state: pendingPair.approved ? 'approved' : 'pending',
+          expiresAt: Date.now() + 300000,
+          deviceId: pendingPair.approved ? DEVICE_ID : undefined,
         });
       }
-      // --no-auto-approve：停在「等手机上点允许」这一步。
-      if (NO_AUTO_APPROVE) {
-        return json(res, 200, { state: 'pending', expiresAt: Date.now() + 300000 });
+
+      // ── 老协议（v3）：secret 从二维码搬过来 ───────────────────
+      //
+      // 判据是**requestId 对不对得上那把事先约好的 secret** ——
+      // 对得上就是老协议，对不上就不是。
+      if (SECRET) {
+        ensureKeys();
+        const expected = requestIdOf(secretBytes);
+        if (body.requestId === expected) {
+          // --no-auto-approve：停在「等手机上点允许」这一步。
+          if (NO_AUTO_APPROVE) {
+            return json(res, 200, { state: 'pending', expiresAt: Date.now() + 300000 });
+          }
+          return json(res, 200, { state: 'approved', expiresAt: Date.now() + 300000, deviceId: DEVICE_ID });
+        }
       }
-      return json(res, 200, { state: 'approved', expiresAt: Date.now() + 300000, deviceId: DEVICE_ID });
+
+      // ── 新协议（v3.1），但**公钥还没到** ─────────────────────
+      //
+      // 「手机扫电脑的码」那条路：网页端**故意不带**公钥 ——
+      // 手机在用户扫码之前不该弹确认卡，否则「扫码」就不是那一步了。
+      // 公钥是跟着**二维码深链**走的（`miulist://pair?v=4&k=…`），
+      // 手机扫到才收得到。
+      //
+      // 所以在新协议里，「请求里没有 publicKey」是一种**正常状态**，
+      // 不是错误 —— 它表示「已受理，等对方扫码」。
+      // （真机上这一步由深链完成；`POST /__mock/pair/key` 模拟的就是它。）
+      pendingPair = {
+        requestId: body.requestId || '',
+        priv: null,
+        pub: null,
+        secret: null,
+        // 公钥还没到 → 配对码还**算不出来**（配对码是对方公钥的哈希）。
+        code: null,
+        approved: false,
+      };
+      return json(res, 200, { state: 'pending', expiresAt: Date.now() + 300000 });
+    }
+
+    /**
+     * **mock 专用**：把电脑的公钥「送」过来，模拟「手机扫了那张二维码」。
+     *
+     * 真机上这一步是**深链**干的（`miulist://pair?v=4&k=<公钥>&r=<requestId>`），
+     * 走的是视觉通道 —— mock 不会扫码，所以给它开一个同款入口。
+     *
+     * 为什么要留这个口子：没有它，mock 就**只能**测「只填地址」那条路，
+     * 「手机扫电脑的码」那条路在 mock 上永远停在「等公钥」，
+     * 那条路的**配对码核对**（两端算出的 6 位码对不对得上）就没法验。
+     */
+    if (p === '/__mock/pair/key' && req.method === 'POST') {
+      const raw = await readBody(req);
+      let body = {};
+      try { body = JSON.parse(raw.toString('utf8') || '{}'); } catch (_) { /* 坏体当空 */ }
+      const requestId = body.requestId || '';
+      if (!pendingPair || pendingPair.requestId !== requestId) {
+        return json(res, 400, { error: '没有这条待批准的请求' });
+      }
+      const peerPub = fromBase64Url(body.publicKey || '');
+      if (peerPub.length !== 256) {
+        return json(res, 400, { error: 'publicKey 长度不对' });
+      }
+      // 已经有密钥材料就不覆盖：与手机端一致（同一请求重复到达时保留第一次协商的结果）。
+      if (!pendingPair.priv) {
+        const keypair = dhGenerateKeypair();
+        const shared = dhSharedSecret(keypair.priv, peerPub);
+        pendingPair.priv = keypair.priv;
+        pendingPair.pub = keypair.pub;
+        pendingPair.secret = shared;
+        pendingPair.code = pairCodeOf(peerPub);
+        keys = deriveKeys(shared, PASSCODE);
+      }
+      return json(res, 200, {
+        ok: true,
+        pairCode: pendingPair.code,
+        publicKey: toBase64Url(pendingPair.pub),
+      });
     }
 
     if (p === '/api/pair/status') {
       const requestId = url.searchParams.get('requestId') || '';
+      // 新协议：回自己的公钥 + 配对码，网页端拿它们算出同一把密钥。
+      if (pendingPair && pendingPair.requestId === requestId) {
+        const base = {};
+        // 公钥还没送到（还没「扫码」）时，这两样都**没有** ——
+        // 别塞空串过去：网页端会拿它去核对配对码。
+        if (pendingPair.pub) base.publicKey = toBase64Url(pendingPair.pub);
+        if (pendingPair.code) base.pairCode = pendingPair.code;
+        if (!pendingPair.approved) return json(res, 200, { state: 'pending', ...base });
+        return json(res, 200, {
+          state: 'approved',
+          deviceId: DEVICE_ID,
+          deviceName: 'Mock 手机',
+          ...base,
+        });
+      }
       if (!SECRET) return json(res, 400, { error: 'mock 需要 --secret' });
       ensureKeys();
       if (requestId !== requestIdOf(secretBytes)) {
@@ -717,6 +851,38 @@ const server = http.createServer(async (req, res) => {
         appliedUids: result.applied,
         keptUids: result.kept,
         revision,
+      }));
+    }
+
+    // ── 网页端「从学在浙大拉课表」：手机代跑 ──────────────────────
+    //
+    // mock 不连浙大，但它得**说得出协议长什么样** —— 网页端那个面板
+    // 要靠这两个接口把学期下拉与结果画出来，
+    // 而「网页端能不能直连浙大」本来就是这套架构里最容易被误解的一环。
+    if (p === '/api/zju/terms') {
+      return encrypted(res, JSON.stringify({
+        terms: [
+          { year: '2026-2027', term: 0, label: '2026-2027 秋冬' },
+          { year: '2025-2026', term: 4, label: '2025-2026 春夏' },
+        ],
+      }));
+    }
+
+    if (p === '/api/zju/sync' && req.method === 'POST') {
+      let body = {};
+      try { body = JSON.parse(new TextDecoder().decode(bodyBytes) || '{}'); } catch (_) { /* 坏体当空 */ }
+      // 假装真的去拉了一次：把手机这边的课表与考试当成刚拉回来的。
+      bump('mock:zju-sync');
+      return encrypted(res, JSON.stringify({
+        ok: true,
+        courseCount: state.courses.length,
+        slotCount: state.courses.length * 2,
+        examCount: state.exams.length,
+        termLabel: body.year
+          ? `${body.year} ${body.term === 4 ? '春夏' : '秋冬'}`
+          : '2026-2027 秋冬',
+        savedCredentials: body.remember !== false,
+        examError: null,
       }));
     }
 

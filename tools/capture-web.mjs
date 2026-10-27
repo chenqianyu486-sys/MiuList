@@ -8,7 +8,7 @@
  * 窄屏断点根本没被触发过。「手机尺寸下不溢出」这种结论就是假的。
  *
  * 所以走 DevTools 协议：`Emulation.setDeviceMetricsOverride` 直接把
- * 视口设成多少就是多少，还���以顺带模拟移动端（`mobile: true` 会带上
+ * 视口设成多少就是多少，还可以顺带模拟移动端（`mobile: true` 会带上
  * 设备像素比与触摸事件）。
  *
  * ## 用法

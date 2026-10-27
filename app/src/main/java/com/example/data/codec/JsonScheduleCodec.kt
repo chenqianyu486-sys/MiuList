@@ -8,14 +8,15 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.adapter
 
 /**
- * MiuList 自有 JSON 格式（schemaVersion = 3）的实现。
+ * MiuList 自有 JSON 格式（schemaVersion = 4）的实现。
  *
  * **这份格式同时是三种数据源之间的契约**，也是教务网爬虫的接口说明书：
  * 爬虫按 [ScheduleDocumentDto] 的字段表产出 JSON，走的是和用户导入文件
  * 完全相同的管线。
  *
  * 文档形状是「**单文件、顶层分块**」：`calendar` / `timetable` / `categoryRules`，
- * 外加 v3 起的三块用户数据 `tasks` / `taskTypes` / `taskRules`。
+ * 外加 v3 起的三块用户数据 `tasks` / `taskTypes` / `taskRules`，
+ * 以及 v4 起的一块 `exams`。
  *
  * 分块的理由是**课程与学期绑定**——课表块自带 `termRef`，必须能在校历块的
  * `termConfigs` 里对上，校验期对不上就整档失败。
@@ -24,9 +25,12 @@ import com.squareup.moshi.adapter
  * 待办不能（勾没勾、打没打星标，服务端根本不知道）。合成一块就分不清
  * 「同步进来的是我的待办」还是「服务端说的课表」。
  *
+ * 考试单独成块的理由是**生命周期不同**：它来自教务网（与课程同源），
+ * 但删课不该连带删考试 —— 它是学校已经公布的事实。
+ *
  * `calendar` 块与 zju-ical 的 `configs/config.json` 同构同字段名，
  * 所以那份 config.json 本身就是一份合法的「只有 calendar 的文档」——
- * **v3 之后仍然是**，三块用户数据缺空不构成问题。
+ * **v4 之后仍然是**，三块用户数据与考试块缺空不构成问题。
  *
  * 本类只做「JSON ↔ Bundle」的搬运，归一化与判错全部交给
  * `ScheduleBundleValidator` 与 `SnapshotValidator` —— 解析层不该懂
@@ -46,8 +50,13 @@ class JsonScheduleCodec : ScheduleCodec {
 
     override fun decode(text: String): DecodeResult {
         if (text.isBlank()) return DecodeResult.Failure("文件内容为空")
+
+        // **网页端导出的那份**把整机快照包在 `document` 里
+        // （外面还有网页端自己的同步簿记：待办队列、手机地址、密钥…）。
+        // 这里剥掉外壳再按本格式读 —— 于是同一份文件两端都能用。
         val dto = try {
-            adapter.fromJson(text)
+            val envelope = moshi.adapter(DesktopSnapshotEnvelope::class.java).fromJson(text)
+            envelope?.document ?: adapter.fromJson(text)
         } catch (e: Exception) {
             return DecodeResult.Failure("无法解析为课表 JSON：${e.message ?: e::class.java.simpleName}")
         } ?: return DecodeResult.Failure("文件内容不是合法的课表 JSON 对象")
@@ -173,7 +182,9 @@ class JsonScheduleCodec : ScheduleCodec {
         },
         tasks = tasks.orEmpty().map { it.toBundle() },
         taskTypes = taskTypes.orEmpty().map { it.toBundle() },
-        taskRules = taskRules.orEmpty().map { it.toBundle() }
+        taskRules = taskRules.orEmpty().map { it.toBundle() },
+        exams = exams.orEmpty().map { it.toBundle() },
+        weekPlan = weekPlan
     )
 
     private fun CalendarDto.toBundle() = CalendarBundle(
@@ -309,15 +320,29 @@ class JsonScheduleCodec : ScheduleCodec {
         },
         tasks = tasks.map { it.toDto() },
         taskTypes = taskTypes.map { it.toDto() },
-        taskRules = taskRules.map { it.toDto() }
+        taskRules = taskRules.map { it.toDto() },
+        exams = exams.map { it.toDto() },
+        weekPlan = weekPlan
     )
 
     companion object {
-        const val SCHEMA_VERSION = 3
+        const val SCHEMA_VERSION = 4
         const val DEFAULT_GENERATOR = "MiuList 1.0"
         const val DEFAULT_GENERATED_AT = ""
     }
 }
+
+/**
+ * **网页端导出的那份**的外壳。
+ *
+ * 网页端的快照文件是「自己的那份 + 同步簿记」，而整机快照被放在 `document` 里。
+ * 手机读这种文件时先剥掉外壳（见 [JsonScheduleCodec.decode]），
+ * 于是同一个文件两端都能用：手机丢了可以从电脑上的这份救回来。
+ */
+@JsonClass(generateAdapter = true)
+internal data class DesktopSnapshotEnvelope(
+    val document: ScheduleDocumentDto? = null,
+)
 
 /**
  * v1 旧文档的形状。

@@ -36,6 +36,9 @@ class WebSyncApiTest {
     private var appliedMode: SyncMode? = null
     private var appliedSnapshot: WebSnapshotDto? = null
 
+    /** 假的「手机代跑学在浙大」。真实现要网络与 Keystore，接口层不该依赖那些。 */
+    private val zjuProxy = FakeZjuProxy()
+
     private fun setUpApi(): WebSyncApi {
         pairing = PairingStore(clock = { now }, idGenerator = { "dev-1" })
         val req = pairing.request(pairing.requestIdOf(secret), "网页端")
@@ -80,6 +83,7 @@ class WebSyncApiTest {
                 appliedSnapshot = dto
                 SnapshotApplier.Report(tasks = dto.tasks.size, appliedUids = dto.tasks.map { it.syncUid })
             },
+            zjuProxy = zjuProxy,
         )
     }
 
@@ -332,5 +336,140 @@ class WebSyncApiTest {
         assertNotNull(decoded)
         assertEquals("2026-10-25", decoded?.today)
         assertEquals(111L, decoded?.latestEditAt)
+    }
+
+    // ── 网页端请手机去学在浙大拉课表 ──────────────────────────
+
+    @Test
+    fun `学期列表不需要账号 - 但还是要签名`() {
+        val api = setUpApi()
+        zjuProxy.termItems = listOf(
+            ZjuProxy.TermItem(year = "2026-2027", term = 0, label = "2026-2027 秋冬"),
+            ZjuProxy.TermItem(year = "2025-2026", term = 4, label = "2025-2026 春夏"),
+        )
+        val reply = api.handle(signedRequest(api, path = "/api/zju/terms"))
+        assertEquals(200, statusOf(reply))
+        val body = reply.decrypt()
+        assertTrue(body.contains("2026-2027"))
+        assertTrue(body.contains("2025-2026"))
+        // 秋 = 0、春 = 4：网页端把它直接当查询参数用，值错了就是查错学期。
+        assertTrue(body.contains("\"term\":0"))
+        assertTrue(body.contains("\"term\":4"))
+    }
+
+    @Test
+    fun `学期列表没签名就拿不到`() {
+        val api = setUpApi()
+        val reply = api.handle(HttpRequest("GET", "/api/zju/terms", emptyMap(), emptyMap(), ByteArray(0)))
+        assertEquals(401, statusOf(reply))
+    }
+
+    @Test
+    fun `拉课表的请求体必须加密 - 明文密码不许过`() {
+        val api = setUpApi()
+        val body = """{"studentId":"3220000000","password":"secret"}"""
+        val reply = api.handle(
+            signedRequest(api, method = "POST", path = "/api/zju/sync", body = body.toByteArray())
+        )
+        assertEquals(401, statusOf(reply))
+    }
+
+    @Test
+    fun `学号密码原样转交给手机 - 网页端不自己碰浙大`() {
+        val api = setUpApi()
+        zjuProxy.outcome = ZjuProxy.Outcome.Ok(
+            courseCount = 5,
+            slotCount = 12,
+            examCount = 2,
+            termLabel = "2026-2027 秋冬",
+            examError = null,
+            savedCredentials = true,
+        )
+        val body = """{"studentId":"3220000000","password":"secret","year":"2026-2027","term":0,"remember":true}"""
+        val reply = api.handle(
+            signedRequest(api, method = "POST", path = "/api/zju/sync", body = body.toByteArray(), encryptBody = true)
+        )
+        assertEquals(200, statusOf(reply))
+        val call = zjuProxy.lastSync
+        assertNotNull("手机那边根本没被叫起来", call)
+        assertEquals("3220000000", call!!.studentId)
+        assertEquals("secret", call.password)
+        assertEquals("2026-2027", call.year)
+        assertEquals(0, call.term)
+        assertTrue(call.remember)
+        val plain = reply.decrypt()
+        assertTrue(plain.contains("\"ok\":true"))
+        assertTrue(plain.contains("\"courseCount\":5"))
+        assertTrue(plain.contains("\"examCount\":2"))
+    }
+
+    @Test
+    fun `不填密码就是用手机已存的凭据 - 网页端不记密码`() {
+        val api = setUpApi()
+        zjuProxy.outcome = ZjuProxy.Outcome.Ok(
+            courseCount = 1, slotCount = 2, examCount = 0,
+            termLabel = "2026-2027 秋冬", examError = null, savedCredentials = true,
+        )
+        val reply = api.handle(
+            signedRequest(api, method = "POST", path = "/api/zju/sync", body = "{}".toByteArray(), encryptBody = true)
+        )
+        assertEquals(200, statusOf(reply))
+        val call = zjuProxy.lastSync
+        assertNotNull(call)
+        assertEquals(null, call!!.studentId)
+        assertEquals(null, call.password)
+    }
+
+    @Test
+    fun `拉失败要说清原因 并说本机数据没被动过`() {
+        val api = setUpApi()
+        zjuProxy.outcome = ZjuProxy.Outcome.Failed(
+            kind = "AUTH",
+            reason = "学号或密码不对",
+            localDataIntact = true,
+        )
+        val body = """{"studentId":"3220000000","password":"wrong"}"""
+        val reply = api.handle(
+            signedRequest(api, method = "POST", path = "/api/zju/sync", body = body.toByteArray(), encryptBody = true)
+        )
+        assertEquals(200, statusOf(reply))
+        val plain = reply.decrypt()
+        assertTrue(plain.contains("\"ok\":false"))
+        assertTrue(plain.contains("\"kind\":\"AUTH\""))
+        assertTrue(plain.contains("\"localDataIntact\":true"))
+    }
+
+    /**
+     * 假的「手机代跑学在浙大」。
+     *
+     * 真实现（[ZjuProxyService]）要网络、要 Keystore、要真的浙大账号 ——
+     * 那些都不是接口层要守的东西。接口层要守的是：
+     * **密码有没有被原样转交出去**、**结果有没有被如实转述**。
+     */
+    private class FakeZjuProxy : ZjuProxy {
+        var termItems: List<ZjuProxy.TermItem> = emptyList()
+        var outcome: ZjuProxy.Outcome = ZjuProxy.Outcome.Failed("TEST", "没设结果", true)
+        var lastSync: SyncCall? = null
+
+        data class SyncCall(
+            val studentId: String?,
+            val password: String?,
+            val year: String?,
+            val term: Int?,
+            val remember: Boolean,
+        )
+
+        override suspend fun terms(): List<ZjuProxy.TermItem> = termItems
+
+        override suspend fun sync(
+            studentId: String?,
+            password: String?,
+            year: String?,
+            term: Int?,
+            remember: Boolean,
+        ): ZjuProxy.Outcome {
+            lastSync = SyncCall(studentId, password, year, term, remember)
+            return outcome
+        }
     }
 }

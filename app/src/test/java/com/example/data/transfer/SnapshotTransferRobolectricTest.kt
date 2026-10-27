@@ -276,7 +276,7 @@ class SnapshotTransferRobolectricTest {
         // B 上勾掉并打星标。updatedAt 显式给一个确定值：`toggleTaskComplete`
         // 用的是 `System.currentTimeMillis()`，与种子数据的 1000 撞在同一毫秒时，
         // 「相等时文件赢」会让这次改动被判成「保留本机」——
-        // 那是���毫秒而不是在测同步。
+        // 那是在测毫秒而不是在测同步。
         val changedAt = 5_000L
         a.database.taskDao().updateTask(
             taskByUid(a, "shared-2")!!.copy(

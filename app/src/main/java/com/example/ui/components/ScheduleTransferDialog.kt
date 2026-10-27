@@ -146,7 +146,7 @@ fun ScheduleTransferDialog(
                 }
 
                 Text(
-                    text = "导出的文件包含课程、校历、待办、自定义分类与生成规则，不含浙大学号与密码。" +
+                    text = "导出的文件包含课程、考试、校历、待办、自定义分类与生成规则，不含浙大学号与密码。" +
                         "课表随时可以用浙大同步刷新，待办只能靠这个文件带走。",
                     style = MaterialTheme.typography.labelSmall,
                     color = TextSecondary
@@ -323,6 +323,15 @@ private fun PreviewBlock(preview: ImportPreview, issues: List<ImportIssue>) {
         }
         if (preview.makeupDayCount > 0) {
             Text("补课 ${preview.makeupDayCount} 天", style = MaterialTheme.typography.bodySmall)
+        }
+        // 考试与课程同源（都来自教务网），所以并进课表那一段，不另起一节。
+        if (preview.fileExamCount > 0) {
+            Text(
+                text = "考试（文件 ${preview.fileExamCount} 场，本机 ${preview.existingExamCount} 场）：" +
+                    "新增 ${preview.examMerge.added} · 用文件覆盖 ${preview.examMerge.overwritten} · " +
+                    "保留本机较新 ${preview.examMerge.keptLocal}",
+                style = MaterialTheme.typography.bodySmall
+            )
         }
         if (preview.updatedCourses.isNotEmpty()) {
             Text("将被更新：", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))

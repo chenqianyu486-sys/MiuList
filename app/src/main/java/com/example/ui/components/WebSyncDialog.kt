@@ -44,6 +44,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.data.sync.web.PairingStore
 import com.example.data.sync.web.QrCodes
 import com.example.data.sync.web.SyncDirection
@@ -75,6 +76,14 @@ fun WebSyncDialog(
     pairedDevices: List<PairingStore.PairedDevice>,
     /** 有一台设备正在等确认。 */
     pendingPairing: Boolean,
+    /**
+     * **配对码**：电脑上显示的那 6 位码。
+     *
+     * 用户要拿它跟自己电脑上看到的一比 —— 对不上就别点「允许」。
+     */
+    pendingPairCode: String = "",
+    /** 在等确认的是哪台设备。 */
+    pendingDeviceName: String = "",
     /** 设了同步密码没有。 */
     hasPasscode: Boolean,
     /** 本机最新的一次编辑时间。 */
@@ -133,7 +142,12 @@ fun WebSyncDialog(
                 }
 
                 if (pendingPairing) {
-                    PendingPairingCard(onApprove = onApprove, onDeny = onDeny)
+                    PendingPairingCard(
+                        pairCode = pendingPairCode,
+                        deviceName = pendingDeviceName,
+                        onApprove = onApprove,
+                        onDeny = onDeny,
+                    )
                 }
 
                 if (running) {
@@ -148,7 +162,7 @@ fun WebSyncDialog(
                             color = MaterialTheme.colorScheme.error,
                         )
                     } else {
-                        SectionLabel("在同一个 Wi-Fi 下打开")
+                        SectionLabel("① 把地址交给电脑")
                         addresses.forEach { address ->
                             val url = "http://$address:$port/"
                             Row(
@@ -180,6 +194,40 @@ fun WebSyncDialog(
                             Spacer(Modifier.height(6.dp))
                         }
 
+                        // 「复制连接链接」做成一个**整行的大按钮**，而不是地址行里
+                        // 那个 18dp 的小图标 ——
+                        //
+                        // 电脑端是**扫一次码**就能连上的（配对码由电脑显示、手机扫），
+                        // 所以电脑唯一需要从手机这边拿走的就是「地址」这一个字符串。
+                        // 让用户去点一排小图标里的某一个，是把「复制」变成了猜谜：
+                        // 哪个地址才是该复制的那一个？虚拟网卡、VPN 适配器都会冒出来。
+                        //
+                        // 复制**第一个**地址（主地址）就够了：它就是 WebSyncDialog
+                        // 里生成二维码用的那一个，电脑端与手机端看到的是同一个。
+                        primaryUrl?.let { link ->
+                            Button(
+                                onClick = { clipboard.setText(AnnotatedString(link)) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("web_sync_copy_link"),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.ContentCopy,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text("复制连接链接")
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "在电脑上粘贴这个地址，网页端会立刻显示配对码 —— 之后只需手机扫一次。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                        }
+
                         qrBitmap?.let { bmp ->
                             Column(
                                 modifier = Modifier.fillMaxWidth(),
@@ -194,14 +242,23 @@ fun WebSyncDialog(
                                 ) {
                                     Image(
                                         bitmap = bmp.asImageBitmap(),
-                                        contentDescription = "网页端二维码",
+                                        contentDescription = "手机地址二维码",
                                         modifier = Modifier.fillMaxWidth(),
                                     )
                                 }
                                 Spacer(Modifier.height(6.dp))
                                 Text(
-                                    "扫码打开网页端",
+                                    "不想复制？让电脑扫这个地址码",
                                     style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    // **说清楚代价**：走这条路电脑先扫地址码、
+                                    // 手机再扫电脑的配对码 —— 是两次扫码。
+                                    // 上面那条「复制连接链接」才是只扫一次的走法。
+                                    "这样要扫两次码；复制链接那条路只扫一次。",
+                                    style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
@@ -260,8 +317,9 @@ fun WebSyncDialog(
                 if (running) {
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        "网页端第一次打开会显示一张配对码，扫一下就自动连上；之后两边的改动会实时同步。" +
-                            "配对过的设备不用再扫。",
+                        "电脑上打开 MiuList 网页端 → 粘贴上面的连接链接（地址手动填一次也行）→ " +
+                            "网页端会显示一张配对码 → 用手机扫它，在 MiuList 里点「允许」。" +
+                            "全程只扫一次码；配对过的设备以后不用再扫。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -371,9 +429,24 @@ fun WebSyncDialog(
     )
 }
 
-/** 有设备在等确认时，插在最上面的一块。 */
+/**
+ * 有设备在等确认时，插在最上面的一块。
+ *
+ * ## 这张卡上最重要的是**配对码**
+ *
+ * 电脑上会显示同一串 6 位码。用户点「允许」之前，**先核对这两个码**：
+ * 一致才说明「手机上要连的」确实是「我眼前这台电脑」。
+ *
+ * 这个码是公钥的哈希（见 [WebDh.pairCode]）——
+ * 有人在中间把公钥换掉的话，两边显示的码就对不上，用户一眼能看出来。
+ */
 @Composable
-private fun PendingPairingCard(onApprove: () -> Unit, onDeny: () -> Unit) {
+private fun PendingPairingCard(
+    pairCode: String,
+    deviceName: String,
+    onApprove: () -> Unit,
+    onDeny: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -387,7 +460,7 @@ private fun PendingPairingCard(onApprove: () -> Unit, onDeny: () -> Unit) {
             .padding(14.dp),
     ) {
         Text(
-            "有一台设备请求连接",
+            if (deviceName.isBlank()) "有一台设备请求连接" else "「$deviceName」请求连接",
             style = MaterialTheme.typography.bodyLarge,
             fontWeight = FontWeight.SemiBold,
         )
@@ -397,12 +470,52 @@ private fun PendingPairingCard(onApprove: () -> Unit, onDeny: () -> Unit) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (pairCode.isNotBlank()) {
+            Spacer(Modifier.height(12.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+                    .padding(vertical = 10.dp, horizontal = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    "配对码",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    pairCode,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 4.sp,
+                    modifier = Modifier.testTag("web_sync_pair_code"),
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "和电脑上显示的 6 位码一致再点允许",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onApprove, modifier = Modifier.testTag("web_sync_approve")) {
                 Text("允许")
             }
-            OutlinedButton(onClick = onDeny, modifier = Modifier.testTag("web_sync_deny")) {
+            // 「拒绝」是次要动作，但它**必须看得清** ——
+            // 默认的 OutlinedButton 用主题绿写字，落在浅绿卡片上几乎读不出来。
+            // 这里换成次级墨色，对比度够了才谈得上「用户看清了再决定」。
+            OutlinedButton(
+                onClick = onDeny,
+                modifier = Modifier.testTag("web_sync_deny"),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ),
+            ) {
                 Text("拒绝")
             }
         }
@@ -480,7 +593,7 @@ private fun formatPairedAt(millis: Long): String =
  * 那一格只有约 180dp 宽，写全了「2025-09-23 12:00」会被截成「2025-09-23 …」——
  * **而截掉的正是分钟那一头**，那才是用户要看的东西。
  *
- * 当年��只写「MM-DD HH:mm」，跨年才补上年份。
+ * 当年只写「MM-DD HH:mm」，跨年才补上年份。
  */
 private fun formatEditTime(millis: Long): String {
     if (millis <= 0) return "—"

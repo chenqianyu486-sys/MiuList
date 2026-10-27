@@ -3,6 +3,9 @@ package com.example.data.sync.web
 import com.example.data.calendar.AppZone
 import com.example.data.calendar.EpochDays
 import com.example.data.calendar.ScheduleResolver
+import com.example.data.calendar.WeekPlanBuilder
+import com.example.data.codec.CalendarBundleBuilder
+import com.example.data.codec.toDto
 import com.example.data.model.TaskTypes
 import com.example.data.repository.AcademicCalendarRepository
 import com.example.data.repository.CourseRepository
@@ -42,7 +45,7 @@ import kotlinx.coroutines.flow.first
  * 补课只有在这一层才表达得出来（10-17 周六出周五的课，10-16 周五反而空着）。
  * 网页端没有校历（学期、停课、补课都不在同步范围内），
  * 让它自己算等于让它**猜**。所以整张周表在这里算好发过去，
- * 网页端只负责画 —— 见 [WebTimetableBuilder]。
+ * 网页端只负责画 —— 见 [com.example.data.calendar.WeekPlanBuilder]。
  */
 class WebSnapshotBuilder(
     private val taskRepo: TaskRepository,
@@ -184,9 +187,18 @@ class WebSnapshotBuilder(
             courses = courseDtos,
             exams = examDtos,
             todayCourses = todayCourses,
+            // 原始校历：网页端显示用不到，但**导出备份要靠它**。
+            // 与整机快照文件里的 `calendar` 块同一个 DTO —— 两边长得一样，
+            // 用户才不会以为是两种东西。
+            calendar = CalendarBundleBuilder.calendar(
+                semester = calendarRepo.semesterOnce(),
+                periods = calendarRepo.periodsOnce(),
+                noClass = calendarRepo.noClassDaysOnce(),
+                makeup = calendarRepo.makeupDaysOnce(),
+            ).toDto(),
             // 周课表：和「今天的课」同一个理由 —— 排课判定只有一份实现，
             // 在这边算好发过去，网页端拿到的就是 App 课表页会显示的那一套。
-            timetable = WebTimetableBuilder.build(
+            timetable = WeekPlanBuilder.build(
                 calendar = calState.calendar,
                 slots = allSlots,
                 weeksBySlotId = weeksBySlot,

@@ -1,13 +1,11 @@
-package com.example.data.sync.web
+package com.example.data.calendar
 
-import com.example.data.calendar.AcademicCalendar
-import com.example.data.calendar.EpochDays
-import com.example.data.calendar.MakeupShift
-import com.example.data.calendar.Semester
 import com.example.data.local.CourseEntity
 import com.example.data.local.CourseSlotEntity
 import com.example.data.model.ExamEntry
 import com.example.data.model.ExamKind
+import com.example.data.model.WeekPlanDto
+import com.example.data.model.WeekPlanSlotDto
 import com.example.data.timetable.PeriodTable
 import com.squareup.moshi.Moshi
 import org.junit.Assert.assertEquals
@@ -23,7 +21,7 @@ import java.time.ZoneId
  *
  * ## 这里守的是什么
  *
- * 网页端**不自己算**周课表 —— 手机算好发过去（理由见 [WebTimetableBuilder]）。
+ * 网页端**不自己算**周课表 —— 手机算好发过去（理由见 [WeekPlanBuilder]）。
  * 于是「网页端那张表对不对」这件事，就落在这份数据对不对上。
  *
  * 守的正是那些**只有周课表这一层才表达得出来**的语义：
@@ -34,7 +32,7 @@ import java.time.ZoneId
  *
  * 任何一条退化，用户看到的都是「课表错了」，而网页端无从自查。
  */
-class WebTimetableBuilderTest {
+class WeekPlanBuilderTest {
 
     private val firstMonday = EpochDays.parse("2026-09-07")!!   // 周一
 
@@ -75,7 +73,7 @@ class WebTimetableBuilderTest {
         weeksBySlotId: Map<Long, Set<Int>> = emptyMap(),
         exams: List<ExamEntry> = emptyList(),
         totalWeeks: Int = 20,
-    ): WebTimetableDto = WebTimetableBuilder.build(
+    ): WeekPlanDto = WeekPlanBuilder.build(
         calendar = calendar,
         slots = slots,
         weeksBySlotId = weeksBySlotId,
@@ -84,10 +82,10 @@ class WebTimetableBuilderTest {
         periodTable = PeriodTable.DEFAULT,
     )
 
-    private fun WebTimetableDto.week(n: Int) = weeks.first { it.week == n }
+    private fun WeekPlanDto.week(n: Int) = weeks.first { it.week == n }
 
-    /** 那一天下标指向的时段，按 [WebTimetableDto.slotList] 展开。 */
-    private fun WebTimetableDto.slotsOf(week: Int, dayIndex: Int): List<WebTimetableSlotDto> =
+    /** 那一天下标指向的时段，按 [WeekPlanDto.slotList] 展开。 */
+    private fun WeekPlanDto.slotsOf(week: Int, dayIndex: Int): List<WeekPlanSlotDto> =
         week(week).days[dayIndex].slotIndexes.map { slotList[it] }
 
     // ---------------------------------------------------------------- 基本形状
@@ -312,7 +310,7 @@ class WebTimetableBuilderTest {
             slots = listOf(slot(1, 5, 3, 4)),
             exams = listOf(examOn(firstMonday + 3, 9 * 60, 11 * 60)),
         )
-        val adapter = Moshi.Builder().build().adapter(WebTimetableDto::class.java)
+        val adapter = Moshi.Builder().build().adapter(WeekPlanDto::class.java)
         val back = adapter.fromJson(adapter.toJson(table))
         assertNotNull(back)
         assertEquals(table.totalWeeks, back!!.totalWeeks)
@@ -327,6 +325,7 @@ class WebTimetableBuilderTest {
     }
 
     // ---------------------------------------------------------------- 没学期
+
     /**
      * 没配置学期时降级：周次从**今天所在周**起算，开课周次不参与筛选。
      *

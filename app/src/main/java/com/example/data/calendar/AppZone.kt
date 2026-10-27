@@ -2,6 +2,7 @@ package com.example.data.calendar
 
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.Instant
 import java.time.ZoneId
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -66,6 +67,15 @@ object AppZone {
 
     /** 北京的今天（epochDay）。校历、待办分组、天气缓存共用这一个判据。 */
     fun todayEpochDay(): Long = LocalDate.now(ZONE).toEpochDay()
+
+    /**
+     * 绝对毫秒 → 北京时区的那一天（epochDay）。
+     *
+     * 考试落在哪一天、周课表的某一列是哪一天，都走这一个换算 ——
+     * 跟着设备时区走会让它们落错列。
+     */
+    fun epochDayOf(millis: Long): Long =
+        Instant.ofEpochMilli(millis).atZone(ZONE).toLocalDate().toEpochDay()
 
     /** 北京的此刻几点（0..23）。只给天气卡片选昼夜图标用。 */
     fun hourOfDayNow(): Int = LocalTime.now(ZONE).hour

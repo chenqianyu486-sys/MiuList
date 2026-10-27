@@ -405,6 +405,15 @@ UPLOAD="https://uploads.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/$REL_ID
 curl -sS -X POST "${AUTH[@]}" -H 'Content-Type: application/vnd.android.package-archive' \
   --data-binary "@$OUT_APK_DIR/$APK_NAME" "$UPLOAD" >/dev/null
 
+# 上传桌面单文件网页版（若已构建）
+WEB_HTML="desktop/dist/MiuList-Web.html"
+if [ -f "$WEB_HTML" ]; then
+  echo "上传 MiuList-Web.html"
+  UPLOAD_WEB="https://uploads.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/$REL_ID/assets?name=MiuList-Web.html"
+  curl -sS -X POST "${AUTH[@]}" -H 'Content-Type: text/html; charset=utf-8' \
+    --data-binary "@$WEB_HTML" "$UPLOAD_WEB" >/dev/null
+fi
+
 # 核对
 echo ""
 echo "== 核对 =="

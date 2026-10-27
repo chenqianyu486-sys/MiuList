@@ -2,11 +2,12 @@ package com.example.data.codec
 
 import com.example.data.calendar.TweakKind
 import com.example.data.calendar.TweakKindJsonAdapter
+import com.example.data.model.WeekPlanDto
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 
 /**
- * JSON 文档的 DTO（schemaVersion = 3）。
+ * JSON 文档的 DTO（schemaVersion = 4）。
  *
  * v2 把文档**顶层分块**：`calendar` / `timetable` / `categoryRules` 三块互不嵌套。
  * 课表是与学期绑定的，所以 `timetable` 块自己带一个 `termRef`，指明这些课属于
@@ -15,6 +16,10 @@ import com.squareup.moshi.JsonClass
  * v3 再加 `tasks` / `taskTypes` / `taskRules` 三块用户数据（DTO 在
  * `SnapshotDtos.kt`）。**这三块全空时，这份文档仍然是一份合法的 v2 文档** ——
  * zju-ical 的 `config.json` 与浙大同步产出的东西都走这条路，兼容面没有变窄。
+ *
+ * v4 再加 `exams` 一块：考试是学校已经公布的事实，与课程同源但生命周期独立
+ * （删课不该连带删考试），所以单独成块。**这一块全空时文档仍然合法** ——
+ * 浙大同步产出的课表文档就走的这条路。
  *
  * `calendar` 块的字段名与类型**与 zju-ical 的 `configs/config.json` 逐字段同名同义**
  * （只多一个 `periods`：上游把作息硬编码在 Go 里，没有对应的 JSON 字段）。
@@ -36,7 +41,19 @@ data class ScheduleDocumentDto(
     /** v3 起：用户新建的待办分类。 */
     val taskTypes: List<TaskTypeDto>? = null,
     /** v3 起：课程 × 类型的生成规则。 */
-    val taskRules: List<TaskRuleDto>? = null
+    val taskRules: List<TaskRuleDto>? = null,
+    /** v4 起：考试。缺空 = 这份文档没带考试，导入时不动本机的考试。 */
+    val exams: List<ExamDto>? = null,
+    /**
+     * v4 起：**渲染好的**周课表（一列 = 一个真实日期）。
+     *
+     * 它是**派生结果**，不是原始规则 —— 原始规则在 `calendar` 与 `timetable` 两块里。
+     * 之所以还带着它，是因为另一端（网页端）只会画、不会算：
+     * 排课判定只有手机那一份实现，让网页端重写一份迟早两边答案不一样。
+     *
+     * **只出不进**：手机自己算得出周课表，导入时这份块会被忽略。
+     */
+    val weekPlan: WeekPlanDto? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -124,6 +141,28 @@ data class PeriodDto(
     val section: String? = null
 )
 
+/**
+ * 校历块 → DTO。
+ *
+ * **提出来是为了给两条路共用**：整机快照文件（`transfer`）与局域网同步快照
+ * （`sync/web`）发的是**同一份**校历，形状必须一模一样 ——
+ * 不然网页端从手机同步来的校历和从手机文件里读来的校历会长得不一样，
+ * 而用户看不出那两份是同一件事。
+ */
+internal fun CalendarBundle.toDto(): CalendarDto = CalendarDto(
+    lastUpdated = lastUpdated,
+    termConfigs = termConfigs.map {
+        TermConfigDto(it.year, it.term, it.begin, it.end, it.firstWeekNo)
+    },
+    classTerms = classTerms,
+    examTerms = examTerms,
+    tweaks = tweaks.map { tw -> TweakDto(tw.tweakType, tw.description, tw.from, tw.to) },
+    periods = periods.map { p -> PeriodDto(p.period, p.startTime, p.endTime, p.section) },
+    // legacy 两段只读不写：导出统一用 tweaks 形态
+    noClassRanges = null,
+    makeupDays = null
+)
+
 // ------------------------------------------------------------------ timetable
 
 /**
@@ -209,4 +248,71 @@ data class CategoryRuleDto(
     val defaultMinutes: Int? = null,
     /** 预习的截止：上课前 N 分钟 */
     val preDueBeforeMinutes: Int? = null
+)
+
+// ------------------------------------------------------------------ v4：考试
+
+/**
+ * 一场考试。
+ *
+ * **不写 `id`**：那是本机自增的行号，写进文件等于把一端的主键强加给另一端。
+ * 跨设备的身份靠 [xkkh]（教务网选课课号原串）。
+ *
+ * 空串与 null 的区别与 `CourseDto.note` 同一套约定：
+ * 教室 / 座位写成空串 = 「学校还没安排」，字段不存在 = 「这份文件没带这一项」。
+ */
+@JsonClass(generateAdapter = true)
+data class ExamDto(
+    /** 教务网选课课号原串，如 `(2026-2027-1)-MATH2432F-0083261-1`。 */
+    val xkkh: String? = null,
+    val courseCode: String? = null,
+    val courseName: String? = null,
+    /** MIDTERM / FINAL。 */
+    val kind: String? = null,
+    /** 绝对开始时间（epoch 毫秒）。0 = 学校还没公布具体日期。 */
+    val startAt: Long? = null,
+    val endAt: Long? = null,
+    /** 开始时刻（当天第几分钟）。日期没公布时也有值。 */
+    val startMinute: Int? = null,
+    val endMinute: Int? = null,
+    val dateLabel: String? = null,
+    val classroom: String? = null,
+    val seat: String? = null,
+    val credit: Double? = null,
+    val termLabel: String? = null,
+    val updatedAt: Long? = null
+)
+
+internal fun ExamDto.toBundle() = ExamBundle(
+    xkkh = xkkh,
+    courseCode = courseCode,
+    courseName = courseName,
+    kind = kind,
+    startAt = startAt,
+    endAt = endAt,
+    startMinute = startMinute,
+    endMinute = endMinute,
+    dateLabel = dateLabel,
+    classroom = classroom,
+    seat = seat,
+    credit = credit,
+    termLabel = termLabel,
+    updatedAt = updatedAt
+)
+
+internal fun ExamBundle.toDto() = ExamDto(
+    xkkh = xkkh,
+    courseCode = courseCode,
+    courseName = courseName,
+    kind = kind,
+    startAt = startAt,
+    endAt = endAt,
+    startMinute = startMinute,
+    endMinute = endMinute,
+    dateLabel = dateLabel,
+    classroom = classroom,
+    seat = seat,
+    credit = credit,
+    termLabel = termLabel,
+    updatedAt = updatedAt
 )

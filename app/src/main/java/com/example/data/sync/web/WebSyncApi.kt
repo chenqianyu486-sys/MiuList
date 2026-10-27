@@ -72,12 +72,23 @@ class WebSyncApi(
     private val deviceName: () -> String,
     private val appVersion: () -> String,
     private val snapshotApplier: suspend (WebSnapshotDto, SyncMode) -> SnapshotApplier.Report,
+    private val zjuProxy: ZjuProxy,
+    /**
+     * 有一条配对请求**拿到密钥材料**了 —— 界面该弹确认卡了。
+     *
+     * 为什么要有这个回调：`/api/pair/request` 是在 HTTP 处理线程里被处理的，
+     * 而界面要弹的是那张「有一台设备请求连接」的卡。这条请求什么时候
+     * 才算「能配了」，由 [PairingStore] 说了算（老协议要等 secret，
+     * 新协议要等公钥），接口层只负责把这件事告诉界面。
+     */
+    private val onPairingReady: (PairingStore.PendingRequest) -> Unit = {},
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO),
 ) {
     private val moshi: Moshi = Moshi.Builder().build()
     private val snapshotAdapter = moshi.adapter(WebSnapshotDto::class.java)
     private val patchAdapter = moshi.adapter(WebTaskPatchDto::class.java)
     private val applyAdapter = moshi.adapter(WebApplyRequest::class.java)
+    private val zjuSyncAdapter = moshi.adapter(WebZjuSyncRequest::class.java)
 
     /**
      * 自由 JSON 对象的适配器。
@@ -114,6 +125,8 @@ class WebSyncApi(
             path == "/api/pair/qr.svg" -> pairQr(request)
             path == "/api/snapshot" -> snapshot(request)
             path == "/api/snapshot/apply" && request.method == "POST" -> applySnapshot(request)
+            path == "/api/zju/terms" -> zjuTerms(request)
+            path == "/api/zju/sync" && request.method == "POST" -> zjuSync(request)
             path == "/api/events" -> events(request)
             path.startsWith("/api/") -> json(404, """{"error":"没有这个接口"}""")
             else -> staticFile(path)
@@ -124,7 +137,7 @@ class WebSyncApi(
 
     private fun health(): HttpReply = json(
         200,
-        """{"ok":true,"app":"MiuList","protocol":3,"appVersion":"${esc(appVersion())}","deviceName":"${esc(deviceName())}","serverTime":${System.currentTimeMillis()}}""",
+        """{"ok":true,"app":"MiuList","protocol":3,"pairing":4,"appVersion":"${esc(appVersion())}","deviceName":"${esc(deviceName())}","serverTime":${System.currentTimeMillis()}}""",
     )
 
     /**
@@ -132,12 +145,30 @@ class WebSyncApi(
      *
      * 请求体里只有 `requestId`（secret 的摘要）—— **secret 本身不上网络**。
      */
+    /**
+     * 申请配对。
+     *
+     * 请求体有两种形态：
+     *
+     * - **老协议（v3）**：只有 `requestId`（secret 的摘要）——
+     *   secret 本身从二维码过来，不上网络。
+     * - **新协议（v3.1）**：多带一个 `publicKey` —— 电脑的 DH 公钥。
+     *   **公钥不是秘密**（过网也泄不了密），但有了它手机就能自己
+     *   协商出共享密钥 —— 「只填地址」那条路就是这样走通的。
+     */
     private fun requestPairing(request: HttpRequest): HttpReply {
         val body = parseJson(request) ?: return json(400, """{"error":"请求体不合法"}""")
         val requestId = body.optString("requestId").orEmpty()
         if (requestId.length < 8) return json(400, """{"error":"缺少 requestId"}""")
         val deviceName = body.optString("deviceName").orEmpty()
-        val req = pairing.request(requestId, deviceName)
+        val publicKey = body.optString("publicKey")
+            ?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { WebCrypto.fromBase64Url(it) }.getOrNull() }
+            ?.takeIf { it.size == WebDh.KEY_BYTES }
+        val req = pairing.request(requestId, deviceName, publicKey)
+        // 拿到密钥材料了才弹确认卡 —— 否则用户看到的是一张「有个请求」，
+        // 却连配对码都算不出来（公钥还没到）。
+        if (req.hasKeyMaterial) onPairingReady(req)
         return json(
             200,
             """{"state":"${req.state.name.lowercase()}","expiresAt":${req.expiresAt}}""",
@@ -147,7 +178,7 @@ class WebSyncApi(
     /**
      * 查配对状态。
      *
-     * **免鉴权、��加密**，但里面**没有任何凭据** —— 只有状态与 deviceId。
+     * **免鉴权、不加密**，但里面**没有任何凭据** —— 只有状态与 deviceId。
      * 抓到这条请求的人知道「有个设备在等」，但没有 secret，
      * 拿不到密钥、也算不出签名。
      */
@@ -158,6 +189,10 @@ class WebSyncApi(
             append("""{"state":"${status.state.name.lowercase()}"""")
             status.deviceId?.let { append(""","deviceId":"${esc(it)}"""") }
             status.deviceName?.let { append(""","deviceName":"${esc(it)}"""") }
+            status.publicKey?.let {
+                append(""","publicKey":"${WebCrypto.base64Url(it)}"""")
+            }
+            status.pairCode?.let { append(""","pairCode":"${esc(it)}"""") }
             append("}")
         }
         return json(200, body)
@@ -218,6 +253,78 @@ class WebSyncApi(
             encrypted(auth.device, body)
         } catch (e: Exception) {
             encryptedError(auth.device, "落库失败：${e.message ?: ""}")
+        }
+    }
+
+    /**
+     * 可选的学期。**不需要账号** —— 学期表是公共配置。
+     *
+     * 走签名鉴权但**不加密请求体**（GET 没有请求体）。
+     * 响应仍然加密：网页端与手机之间的一切都走密文。
+     */
+    private fun zjuTerms(request: HttpRequest): HttpReply {
+        val auth = authenticate(request) ?: return unauthorized()
+        return try {
+            val terms = runBlocking { zjuProxy.terms() }
+            val body = buildString {
+                append("""{"terms":[""")
+                append(
+                    terms.joinToString(",") { term ->
+                        """{"year":"${esc(term.year)}","term":${term.term},"label":"${esc(term.label)}"}"""
+                    }
+                )
+                append("]}")
+            }
+            encrypted(auth.device, body)
+        } catch (e: Exception) {
+            encryptedError(auth.device, "拿不到学期列表：${e.message ?: ""}")
+        }
+    }
+
+    /**
+     * 「去学在浙大拉一次课表」。
+     *
+     * **请求体必须加密**（`X-ML-Enc: 1`）：学号密码在里面。
+     * `authenticate` 会先把密文解开再验签，所以这条路上密码始终是密文。
+     *
+     * 拉完之后手机这边的 Room 变了 —— 广播会通知网页端重拉快照，
+     * 于是「用手机的课表和考试」拿到的就是刚拉回来的那份。
+     */
+    private fun zjuSync(request: HttpRequest): HttpReply {
+        val auth = authenticate(request) ?: return unauthorized()
+        val req = try {
+            zjuSyncAdapter.fromJson(auth.body.toString(Charsets.UTF_8))
+        } catch (_: Exception) {
+            null
+        } ?: return encryptedError(auth.device, "请求体不是合法的请求")
+
+        return try {
+            when (
+                val outcome = runBlocking {
+                    zjuProxy.sync(
+                        studentId = req.studentId,
+                        password = req.password,
+                        year = req.year,
+                        term = req.term,
+                        remember = req.remember ?: true,
+                    )
+                }
+            ) {
+                is ZjuProxy.Outcome.Ok -> encrypted(
+                    auth.device,
+                    """{"ok":true,"courseCount":${outcome.courseCount},"slotCount":${outcome.slotCount},""" +
+                        """"examCount":${outcome.examCount},"termLabel":"${esc(outcome.termLabel)}",""" +
+                        """"savedCredentials":${outcome.savedCredentials},""" +
+                        """"examError":${outcome.examError?.let { "\"" + esc(it) + "\"" } ?: "null"}}"""
+                )
+                is ZjuProxy.Outcome.Failed -> encrypted(
+                    auth.device,
+                    """{"ok":false,"error":"${esc(outcome.reason)}","kind":"${esc(outcome.kind)}",""" +
+                        """"localDataIntact":${outcome.localDataIntact}}"""
+                )
+            }
+        } catch (e: Exception) {
+            encryptedError(auth.device, "拉取失败：${e.message ?: ""}")
         }
     }
 

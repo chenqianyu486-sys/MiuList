@@ -192,11 +192,15 @@ class MainActivity : ComponentActivity() {
         val data = intent?.data ?: return
         if (data.scheme != WebSyncApi.DEEP_LINK_SCHEME) return
         if (data.host != "pair") return
-        val secret = data.getQueryParameter("s")?.trim().orEmpty()
         val requestId = data.getQueryParameter("r")?.trim().orEmpty()
-        if (secret.isEmpty() || requestId.isEmpty()) return
+        if (requestId.isEmpty()) return
+        // 新协议（v3.1）：`k` 是电脑的 **DH 公钥**（公钥不是秘密，过网也泄不了密）。
+        // 老协议（v3）：`s` 是 secret 本身 —— 留着是为了还能跟旧版网页端配上。
+        val publicKey = data.getQueryParameter("k")?.trim().orEmpty()
+        val secret = data.getQueryParameter("s")?.trim().orEmpty()
+        if (publicKey.isEmpty() && secret.isEmpty()) return
         pendingPairingCode = requestId
-        webSyncViewModel.offerPairing(requestId, secret)
+        webSyncViewModel.offerPairing(requestId, secret, publicKey)
     }
 }
 
@@ -1233,6 +1237,8 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                 port = webSyncState.port,
                 pairedDevices = webSyncState.pairedDevices,
                 pendingPairing = webSyncState.pendingPairing,
+                pendingPairCode = webSyncState.pendingPairCode,
+                pendingDeviceName = webSyncState.pendingDeviceName,
                 hasPasscode = webSyncState.hasPasscode,
                 localLatestEditAt = webSyncState.localLatestEditAt,
                 remoteLatestEditAt = webSyncState.remoteLatestEditAt,

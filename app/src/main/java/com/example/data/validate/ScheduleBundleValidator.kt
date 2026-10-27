@@ -6,6 +6,7 @@ import com.example.data.calendar.ZjuCalendarAdapter
 import com.example.data.codec.AutomationBundle
 import com.example.data.codec.CalendarBundle
 import com.example.data.codec.CourseBundle
+import com.example.data.codec.ExamBundle
 import com.example.data.codec.ProvenanceBundle
 import com.example.data.codec.ScheduleBundle
 import com.example.data.codec.TermConfigBundle
@@ -14,6 +15,7 @@ import com.example.data.codec.SlotBundle
 import com.example.data.codec.academicTermOf
 import com.example.data.local.MakeupDayEntity
 import com.example.data.local.NoClassDayEntity
+import com.example.data.local.ExamEntity
 import com.example.data.local.SemesterEntity
 import com.example.data.model.COURSE_PALETTE
 import com.example.data.model.CourseCategory
@@ -46,6 +48,8 @@ data class ValidatedBundle(
     val makeupDays: List<MakeupDayEntity>,
     val courses: List<CourseBundle>,
     val categoryRules: List<CategoryRule>,
+    /** 归一化后的考试。空列表 = 这份文件没带考试，导入时不动本机的考试。 */
+    val exams: List<ExamBundle>,
     val issues: List<ImportIssue>,
     /** 归一化后的总周数，供开课周次裁剪使用 */
     val totalWeeks: Int,
@@ -82,9 +86,9 @@ data class ValidatedSemester(
  * - 手动编辑与导入文件必然走同一套规则
  * - 浙大教务网爬虫（在 App 内跑的）产出的 JSON，复用同一份判定
  *
- * 缺整块（无校历 / 无作息表 / 无类别规则）一律**不报整档失败**，按「未配置」
- * 处理：爬虫少抓一节不该让整个导入归零。只有两处无法推定的情况才整档失败：
- * 学期日期自相矛盾、`timetable.termRef` 对不上 `calendar.termConfigs`。
+ * 缺整块（无校历 / 无作息表 / 无类别规则 / 无考试）一律**不报整档失败**，
+ * 按「未配置」处理：爬虫少抓一节不该让整个导入归零。只有两处无法推定的情况
+ * 才整档失败：学期日期自相矛盾、`timetable.termRef` 对不上 `calendar.termConfigs`。
  */
 class ScheduleBundleValidator {
 
@@ -134,6 +138,9 @@ class ScheduleBundleValidator {
         // ---- 课程 ----
         val courses = validateCourses(raw.timetable?.courses.orEmpty(), periodsPerDay, totalWeeks, issues)
 
+        // ---- 考试 ----
+        val exams = validateExams(raw.exams, issues)
+
         return ValidationResult.Valid(
             ValidatedBundle(
                 provenance = raw.provenance,
@@ -143,6 +150,7 @@ class ScheduleBundleValidator {
                 makeupDays = makeup,
                 courses = courses,
                 categoryRules = raw.categoryRules,
+                exams = exams,
                 issues = issues.toList(),
                 totalWeeks = totalWeeks,
                 periodsPerDay = periodsPerDay
@@ -512,6 +520,107 @@ class ScheduleBundleValidator {
                 automation = normalizeAutomation(course.automation)
             )
         }
+    }
+
+    // ---------------------------------------------------------------- 考试
+
+    /**
+     * 归一化考试。
+     *
+     * **一场考试没有课程名就认不出来**，那种直接跳过并报 issue ——
+     * 界面上它只是一张没有名字的卡片，用户认不出是哪门课。
+     *
+     * **时刻与绝对时间各自独立**（与 `ExamEntity` 的类注释一致）：
+     * 日期没公布（`startAt = 0`）时学校照样给了「几点考」，那个时刻要保住；
+     * 反过来时刻越界（不在 0..1439）只会让这条考试在周课表里落不到任何一格，
+     * 所以归零并报 issue。
+     */
+    private fun validateExams(
+        raw: List<ExamBundle>,
+        issues: MutableList<ImportIssue>
+    ): List<ExamBundle> {
+        if (raw.isEmpty()) return emptyList()
+
+        val byKey = LinkedHashMap<String, ExamBundle>()
+        raw.forEachIndexed { index, e ->
+            val name = e.courseName?.trim().orEmpty()
+            if (name.isEmpty()) {
+                issues += ImportIssue("考试第 ${index + 1} 场", "缺少课程名，已忽略该场考试")
+                return@forEachIndexed
+            }
+            val scope = "考试「$name」"
+
+            val kind = when (e.kind?.trim()?.uppercase()) {
+                null, "" -> ExamEntity.KIND_FINAL
+                ExamEntity.KIND_MIDTERM -> ExamEntity.KIND_MIDTERM
+                ExamEntity.KIND_FINAL -> ExamEntity.KIND_FINAL
+                else -> {
+                    issues += ImportIssue(scope, "考试类型 ${e.kind} 无法识别，已按期末考处理")
+                    ExamEntity.KIND_FINAL
+                }
+            }
+
+            val startMinute = e.startMinute?.takeIf { it in 0..1439 }
+            if (e.startMinute != null && startMinute == null) {
+                issues += ImportIssue(scope, "开考时刻 ${e.startMinute} 越界，已按未知处理")
+            }
+            var endMinute = e.endMinute?.takeIf { it in 0..1439 }
+            if (e.endMinute != null && endMinute == null) {
+                issues += ImportIssue(scope, "结束时刻 ${e.endMinute} 越界，已按未知处理")
+            }
+            if (endMinute == null) endMinute = 0
+            if (startMinute != null && endMinute != 0 && endMinute < startMinute) {
+                issues += ImportIssue(scope, "结束时刻早于开考时刻，已按开考时刻处理")
+                endMinute = startMinute
+            }
+
+            // 日期没公布时两个绝对时刻都是 0；有日期时两个都要有值。
+            val startAt = e.startAt?.takeIf { it > 0L } ?: 0L
+            var endAt = e.endAt?.takeIf { it > 0L } ?: 0L
+            if (startAt == 0L) {
+                endAt = 0L
+            } else if (endAt < startAt) {
+                issues += ImportIssue(scope, "结束时间早于开始时间，已按开始时间处理")
+                endAt = startAt
+            }
+
+            val credit = e.credit?.takeIf { it >= 0.0 } ?: 0.0
+
+            val normalized = e.copy(
+                xkkh = e.xkkh?.trim()?.takeIf { it.isNotEmpty() },
+                courseCode = e.courseCode?.trim().orEmpty(),
+                courseName = name,
+                kind = kind,
+                startAt = startAt,
+                endAt = endAt,
+                startMinute = startMinute ?: 0,
+                endMinute = endMinute,
+                dateLabel = e.dateLabel?.trim().orEmpty(),
+                // 教室 / 座位的空串是「学校还没安排」，null 是「这份文件没带这一项」。
+                // 落到库里统一成空串 —— 库里没有「没带」这个状态。
+                classroom = e.classroom?.trim().orEmpty(),
+                seat = e.seat?.trim().orEmpty(),
+                credit = credit,
+                termLabel = e.termLabel?.trim().orEmpty(),
+                updatedAt = e.updatedAt ?: 0L
+            )
+
+            // 同一场考试在文件里出现两次：留**较新**的那条（同一天里教务网补发了座位号）。
+            val key = normalized.naturalKey
+            val existing = byKey[key]
+            if (existing == null) {
+                byKey[key] = normalized
+            } else {
+                val winner = if ((normalized.updatedAt ?: 0L) >= (existing.updatedAt ?: 0L)) {
+                    normalized
+                } else {
+                    existing
+                }
+                byKey[key] = winner
+                issues += ImportIssue(scope, "文件中出现两次，已保留较新的一条")
+            }
+        }
+        return byKey.values.toList()
     }
 
     private fun normalizeAutomation(raw: AutomationBundle?): AutomationBundle = AutomationBundle(

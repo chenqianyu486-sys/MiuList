@@ -1,47 +1,47 @@
 package com.example.data.transfer
 
 import com.example.data.calendar.AppZone
-import com.example.data.calendar.EpochDays
-import com.example.data.calendar.TweakKind
-import com.example.data.calendar.ZjuCalendarAdapter
+import com.example.data.calendar.WeekPlanBuilder
 import com.example.data.codec.AutomationBundle
-import com.example.data.codec.CalendarBundle
+import com.example.data.codec.CalendarBundleBuilder
 import com.example.data.codec.CourseBundle
-import com.example.data.codec.PeriodBundle
+import com.example.data.codec.ExamBundle
 import com.example.data.codec.ProvenanceBundle
 import com.example.data.codec.ScheduleBundle
 import com.example.data.codec.TaskBundle
 import com.example.data.codec.TaskRuleBundle
 import com.example.data.codec.TaskTypeBundle
-import com.example.data.codec.TermConfigBundle
 import com.example.data.codec.TermRefBundle
 import com.example.data.codec.TimetableBlockBundle
-import com.example.data.codec.TweakBundle
-import com.example.data.local.MakeupDayEntity
-import com.example.data.local.NoClassDayEntity
 import com.example.data.local.TaskEntity
 import com.example.data.model.CourseKeys
 import com.example.data.repository.AcademicCalendarRepository
 import com.example.data.repository.CourseRepository
+import com.example.data.repository.ExamRepository
 import com.example.data.repository.ScheduleSettingsRepository
 import com.example.data.repository.TaskRepository
 import com.example.data.repository.TaskTypeRepository
 import com.example.data.timetable.WeekSet
+import kotlinx.coroutines.flow.first
 import java.time.format.DateTimeFormatter
 
 /**
- * 把库里的当前状态导成同一份 JSON 契约（schemaVersion = 3）——**整机快照**。
+ * 把库里的当前状态导成同一份 JSON 契约（schemaVersion = 4）——**整机快照**。
  *
  * 与导入共用 [com.example.data.codec.ScheduleCodec]，所以「导出 → 导入」天然闭环：
  * 用户换机、重装、备份都不需要 App 之外的任何知识。
  *
  * 快照装的是**这台设备上的全部用户状态**，不只是课表：
- * 课程 / 校历 / 作息 / 类别规则 / **待办** / **自定义待办分类** / **课程级生成规则**。
+ * 课程 / 校历 / 作息 / 类别规则 / **待办** / **自定义待办分类** / **课程级生成规则** /
+ * **考试**。
  * 待办尤其不能少 —— 课表随时能从浙大重新拉一遍，勾没勾、打没打星标、拉高亮没拉高亮，
  * 服务端根本不知道。换机丢待办是最贵的一种丢。
+ * 考试同理：教务网在还没到考试季时回空，**上一份缓存才是此刻唯一有用的信息**，
+ * 少带一场考试就是少一场。
  *
- * 顶层分块（`calendar` / `timetable` / `categoryRules` / `tasks` / `taskTypes` / `taskRules`）
- * 是因为**来源不同**：前三块可以随时由浙大同步覆盖，后三块只能靠这份文件。
+ * 顶层分块（`calendar` / `timetable` / `exams` / `categoryRules` / `tasks` /
+ * `taskTypes` / `taskRules`）是因为**来源不同**：前四块可以随时由浙大同步覆盖，
+ * 后三块只能靠这份文件。
  *
  * v3 的 `calendar` / `timetable` 与 v2 逐字段相同，v2 里分两段写的停课与补课在
  * v3 仍反写回 `calendar.tweaks`。
@@ -55,7 +55,8 @@ class ScheduleExportService(
     private val calendarRepo: AcademicCalendarRepository,
     private val settingsRepo: ScheduleSettingsRepository,
     private val taskRepo: TaskRepository,
-    private val taskTypeRepo: TaskTypeRepository
+    private val taskTypeRepo: TaskTypeRepository,
+    private val examRepo: ExamRepository
 ) {
 
     /**
@@ -80,6 +81,10 @@ class ScheduleExportService(
         val noClass = calendarRepo.noClassDaysOnce()
         val makeup = calendarRepo.makeupDaysOnce()
         val rules = settingsRepo.getCategoryRulesOnce()
+        // 校历的**合成态**（学期 + 作息 + 停课 + 补课 合成一个 AcademicCalendar）。
+        // 取一次就好：它是 Flow，两次 `first()` 会取到两个不同时刻的值，
+        // 而周课表与学期得来自同一份。
+        val calendarState = calendarRepo.calendarState.first()
 
         // ---- v3：用户数据。课程的自然键在待办与生成规则里替代本地 courseId ----
         //
@@ -111,21 +116,9 @@ class ScheduleExportService(
                     .format(java.time.LocalDateTime.now(AppZone.ZONE)),
                 note = "由应用内「导出数据」生成的整机快照"
             ),
-            calendar = CalendarBundle(
-                termConfigs = semester?.toTermConfigs().orEmpty(),
-                classTerms = semester?.toTermConfigs()?.mapNotNull { it.key }.orEmpty(),
-                tweaks = toTweaks(noClass, makeup),
-                periods = periods.map {
-                    PeriodBundle(
-                        period = it.period,
-                        startTime = com.example.data.timetable.formatMinute(it.startMinute),
-                        endTime = com.example.data.timetable.formatMinute(it.endMinute),
-                        section = it.section
-                    )
-                }
-            ),
+            calendar = CalendarBundleBuilder.calendar(semester, periods, noClass, makeup),
             timetable = TimetableBlockBundle(
-                termRef = semester?.let { TermRefBundle(it.yearSpan, it.termCode()) },
+                termRef = semester?.let { TermRefBundle(it.yearSpan, CalendarBundleBuilder.termCode(it.term)) },
                 courses = courses.map { c ->
                     CourseBundle(
                         key = c.dedupeKey,
@@ -212,113 +205,40 @@ class ScheduleExportService(
                         dueBeforeMinutes = spec.dueBeforeMinutes
                     )
                 }
-            }
+            },
+            exams = examRepo.getAllExamsOnce().map { e ->
+                ExamBundle(
+                    xkkh = e.xkkh,
+                    courseCode = e.courseCode,
+                    courseName = e.courseName,
+                    kind = e.kind,
+                    startAt = e.startAt,
+                    endAt = e.endAt,
+                    startMinute = e.startMinute,
+                    endMinute = e.endMinute,
+                    dateLabel = e.dateLabel,
+                    // 教室 / 座位写成空串 = 「学校还没安排」。
+                    // 空串不是「未知」：界面要把这两种显示成不同的话。
+                    classroom = e.classroom,
+                    seat = e.seat,
+                    credit = e.credit,
+                    termLabel = e.termLabel,
+                    updatedAt = e.updatedAt
+                )
+            },
+            // 渲染好的周课表。原始规则在上面两块里，这份是**派生结果** ——
+            // 带着它是为了网页端：它只会画、不会算，而排课判定只有这一份实现。
+            weekPlan = WeekPlanBuilder.build(
+                calendar = calendarState.calendar,
+                slots = slots,
+                weeksBySlotId = weeksBySlot,
+                coursesById = courses.associateBy { it.id },
+                exams = examRepo.getExamEntries().first(),
+                periodTable = calendarState.periodTable
+            )
         )
 
         return codec.encode(bundle)
     }
 
-    /**
-     * 学期 → `termConfigs`：**一个学年学期拆成秋 + 冬两条**。
-     *
-     * 库里的 `Semester` 存的是整个学年学期（秋冬 16 周），而上游 `termConfigs`
-     * 一条只描述一个 8 周的半学期。导出时若只写一条，导回去就退化成一个没有季节名的
-     * 8 周（或 16 周但叫「秋学期」）的学期，「秋冬学期」这个名会丢。
-     *
-     * 切分点用 [HALF_WEEKS] 而不是按日期猜：前半 = 第 1–8 周，后半 = 第 9–16 周，
-     * 与 [com.example.data.codec.academicTermOf] 的口径一致。库里学期不足 8+8 周时
-     * 只写前半一条，不凭空造出后半段。
-     *
-     * `Begin` 写的是**第一周周一的日期**，而不是库里的 `startEpochDay`：
-     * 上游用它反推第一周是 `Begin − (Begin 的周几 − 1) − 7×(FirstWeekNo−1)`，
-     * 只有当 Begin 本身是周一时才能无损还原。这里固定 `FirstWeekNo = 1`，
-     * 导进去得到的周次与库里完全一致。
-     */
-    private fun com.example.data.local.SemesterEntity.toTermConfigs(): List<TermConfigBundle> {
-        val base = termCode()
-        val first = TermConfigBundle(
-            year = yearSpan,
-            term = base,
-            begin = ZjuCalendarAdapter.epochDayToYyyymmdd(firstMondayEpochDay),
-            end = ZjuCalendarAdapter.epochDayToYyyymmdd(firstHalfEnd()),
-            firstWeekNo = 1
-        )
-        // 学期不足 16 周：没有后半段可写，写一条即可（import 侧会按单半处理）
-        if (totalWeeks <= HALF_WEEKS) return listOf(first)
-        val second = first.copy(
-            term = base + 1, // 秋冬 0→1；春夏 4→5
-            begin = ZjuCalendarAdapter.epochDayToYyyymmdd(firstHalfEnd() + 1L),
-            end = ZjuCalendarAdapter.epochDayToYyyymmdd(endEpochDay)
-        )
-        return listOf(first, second)
-    }
-
-    /** 学期前半（第 1–8 周）的最后一天。不够 8 周时就是整个学期的最后一天。 */
-    private fun com.example.data.local.SemesterEntity.firstHalfEnd(): Long {
-        val byWeeks = firstMondayEpochDay + HALF_WEEKS * 7L - 1L
-        return minOf(byWeeks, endEpochDay)
-    }
-
-    /**
-     * 库里的 `term` 文案（「秋冬」「春夏」）→ zju-ical 的 `Term` 整数的**前半**代码。
-     *
-     * 只认「秋 / 春」两个字，其余一律当成 4（春）——文案本身是我们自己生成的，
-     * 枚举不出更多情况，而猜错的后果只是学期名显示得不对，不影响周次。
-     * 「秋冬」含「秋」→ 0，「春夏」不含 → 4，正好对上。
-     */
-    private fun com.example.data.local.SemesterEntity.termCode(): Int =
-        if (term.contains("秋")) 0 else 4
-
-    /**
-     * 停课日 / 补课日 → `tweaks`。
-     *
-     * - 连续的停课日合成一条 [TweakKind.CLEAR]；不相邻的各成一条（区间里夹着上课日，
-     *   合成一条会把那些天也停掉）。
-     * - 补课日合成 [TweakKind.MOVE]：`From` 写**真实的来源日**。
-     *
-     * 这里以前是反推的 —— 拿 `makeupForDayOfWeek` 去「同一周里」拼一个同周几的日子。
-     * 那个日期是编出来的：真实的 10-17 补课来自 10-02（隔了两周），反推只会得到
-     * 10-12，于是「导出 → 导入」之后这场补课的周次归属就变了。
-     * 有 `sourceEpochDay` 就用它；没有（v1 旧数据、校历弹层手工填的行）才退回反推。
-     */
-    private fun toTweaks(
-        noClass: List<NoClassDayEntity>,
-        makeup: List<MakeupDayEntity>
-    ): List<TweakBundle> {
-        val out = mutableListOf<TweakBundle>()
-
-        noClass.sortedBy { it.epochDay }.groupBy { it.note }
-            .forEach { (note, days) ->
-                val sorted = days.map { it.epochDay }.distinct().sorted()
-                if (sorted.isEmpty()) return@forEach
-                var runStart = sorted.first()
-                var prev = sorted.first()
-                for (d in sorted.drop(1)) {
-                    if (d != prev + 1) {
-                        // 一段连续停课结束：合成一条 CLEAR
-                        out += TweakBundle(TweakKind.CLEAR, note, startOf(runStart), startOf(prev))
-                        runStart = d
-                    }
-                    prev = d
-                }
-                out += TweakBundle(TweakKind.CLEAR, note, startOf(runStart), startOf(prev))
-            }
-
-        makeup.forEach {
-            val from = if (it.sourceEpochDay > 0L) {
-                it.sourceEpochDay
-            } else {
-                // 来源日未知：按旧办法在同周里拼一个同周几的日子，
-                // 至少让 dayOfWeek 能还原，闭环靠它
-                it.epochDay - (EpochDays.dayOfWeek1To7(it.epochDay) - 1L) +
-                    (it.makeupForDayOfWeek - 1L)
-            }
-            out += TweakBundle(TweakKind.MOVE, it.note, startOf(from), startOf(it.epochDay))
-        }
-        return out
-    }
-
-    /** epochDay → `YYYYMMDD` 整数；epochDay 越界（0 之类）返回 null。 */
-    private fun startOf(epochDay: Long): Int? =
-        if (epochDay <= 0) null else ZjuCalendarAdapter.epochDayToYyyymmdd(epochDay)
 }

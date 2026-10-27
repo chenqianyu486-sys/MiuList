@@ -5,6 +5,9 @@ import com.example.data.di.AppContainer
 import com.example.data.security.SecureAccountStorage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
@@ -58,17 +61,30 @@ class WebSyncService(
     /** 实际监听的端口。 */
     val port: Int get() = server?.boundPort ?: -1
 
-    /** 正在等用户确认的配对请求（二维码里带来的 secret 与它的摘要）。 */
-    @Volatile
-    var pendingPairing: PendingPairing? = null
-        private set
+    /**
+     * 正在等用户确认的配对请求（二维码里带来的 secret 与它的摘要）。
+     *
+     * **用 StateFlow 而不是普通属性**：待确认的这条是在 **HTTP 处理线程**里
+     * 被塞进来的（深链到达时），而界面若只在打开弹层时读一次，
+     * 用户**已经开着弹层**时就看不到「有一台设备请求连接」——
+     * 于是那台电脑会一直转圈，直到配对码过期。
+     */
+    private val _pendingPairing = MutableStateFlow<PendingPairing?>(null)
+    val pendingPairing: StateFlow<PendingPairing?> = _pendingPairing.asStateFlow()
 
     /** 一次待批准的配对。 */
     data class PendingPairing(
         val requestId: String,
-        /** base64url 的 secret。**只在这一瞬间存在于内存里。** */
-        val secretBase64: String,
+        /**
+         * 老协议（v3）：secret 本身（base64url）。
+         *
+         * 新协议（v3.1）是 null —— 共享密钥在手机上跟电脑**各自协商**出来，
+         * 根本不需要有一份「从对面搬过来」的 secret。
+         */
+        val secretBase64: String?,
         val deviceName: String,
+        /** **配对码**：两端一致的 6 位码，用户照着核对。 */
+        val pairCode: String,
     )
 
     init {
@@ -109,10 +125,25 @@ class WebSyncService(
                 remoteLatestEditAt = dto.latestEditAt
                 applier.apply(dto, mode)
             },
+            // 网页端「从学在浙大拉课表」的代理：浏览器自己连不上浙大，
+            // 由手机代跑那套 CAS 登录（见 ZjuProxyService 的类注释）。
+            zjuProxy = ZjuProxyService(
+                zjuImportService = container.zjuImportService,
+                syncManager = container.syncManager,
+                secureStorage = container.secureAccountStorage,
+            ),
+            // 有一条配对请求拿到公钥了 → 界面该弹那张确认卡了。
+            onPairingReady = { req ->
+                _pendingPairing.value = PendingPairing(
+                    requestId = req.requestId,
+                    secretBase64 = null,
+                    deviceName = req.deviceName.ifBlank { "网页端" },
+                    pairCode = req.pairCode,
+                )
+            },
         )
-        val http = LanHttpServer(port = 0, handler = api::handle)
+        val http = openServer(api) ?: return false
         return try {
-            http.start()
             server = http
             // 局域网发现：电脑端的网页端靠它找到「手机在哪」。
             // 起不来也不影响同步本身 —— 用户可以手填地址。
@@ -127,6 +158,34 @@ class WebSyncService(
             server = null
             false
         }
+    }
+
+    /**
+     * 开一个 HTTP 服务，**端口固定**。
+     *
+     * ## 为什么不用随机端口
+     *
+     * 随机端口（`port = 0`）是防「跟电脑上别的服务撞端口」的老办法，
+     * 但它直接挡掉了「电脑自己找到手机」这件事：电脑只知道手机在
+     * 某个地址上，**不知道该敲哪个端口** —— 而浏览器又不能发 UDP 广播。
+     *
+     * 固定端口让电脑能按「上次那个网段 + 固定端口」去扫，
+     * 扫到了就自己接上（用户什么都不用做）。
+     *
+     * 端口被占了就往后顺延 —— 宁可换个端口，也不能起不来。
+     */
+    private fun openServer(api: WebSyncApi): LanHttpServer? {
+        for (candidate in PORT_CANDIDATES) {
+            val http = LanHttpServer(port = candidate, handler = api::handle)
+            try {
+                http.start()
+                return http
+            } catch (_: Exception) {
+                // 端口被占（或别的权限问题）：试下一个。
+                runCatching { http.stop() }
+            }
+        }
+        return null
     }
 
     fun stop() {
@@ -144,52 +203,88 @@ class WebSyncService(
     // ── 配对 ────────────────────────────────────────────────────
 
     /**
-     * 深链带进来的配对请求。
+     * 深链或 HTTP 请求带来的配对请求。
      *
-     * 深链格式：`miulist://pair?v=3&s=<base64url(secret)>&r=<requestId>`。
+     * 两种形态：
      *
-     * **secret 只在这一刻存在于内存里** —— 它由网页端本地生成，
-     * 从头到尾没有经过网络（见 [PairingStore] 的说明）。
+     * - **深链** `miulist://pair?v=4&k=<公钥>&r=<requestId>`
+     *   （老版是 `s=<secret>`）—— 走二维码那条路；
+     * - **HTTP 请求** `/api/pair/request` 带 `publicKey`
+     *   —— 走「只填地址」那条路。
+     *
+     * 两条路带来的是**同一件事**：电脑的 DH 公钥。公钥不是秘密，
+     * 拿到它就能各自算出同一把共享密钥（见 [WebDh]）。
+     *
+     * @param secretBase64 老协议：secret 本身。**只在这一瞬间存在于内存里。**
+     * @param publicKeyBase64 新协议：电脑的 DH 公钥（base64url）。
      */
-    fun offerPairing(requestId: String, secretBase64: String, deviceName: String = "网页端"): Boolean {
-        if (requestId.isBlank() || secretBase64.isBlank()) return false
-        pendingPairing = PendingPairing(requestId, secretBase64, deviceName)
+    fun offerPairing(
+        requestId: String,
+        secretBase64: String? = null,
+        publicKeyBase64: String? = null,
+        deviceName: String = "网页端",
+    ): Boolean {
+        if (requestId.isBlank()) return false
+        val publicKey = publicKeyBase64
+            ?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { WebCrypto.fromBase64Url(it) }.getOrNull() }
+            ?.takeIf { it.size == WebDh.KEY_BYTES }
+
+        // **补一条 pending。**
+        //
+        // 正常顺序是「网页端先 POST /api/pair/request → 再显示二维码 → 手机扫」，
+        // 所以这条 pending 本来就在（服务端只见过摘要）。
+        //
+        // 但深链是**另一条通道**，它可能先到；也可能网页端压根还没能联系上手机
+        // （地址没填、刚开机），却已经把二维码扫出来了。
+        // 那时若不在这里补一条，[PairingStore.approve] 会因为
+        // 「找不到这个请求」直接返回 null —— 用户点了「允许」却什么都没发生。
+        //
+        // 补上它，批准与否就只取决于**用户点了什么**，而不取决于两个通道谁先到。
+        val req = pairing.request(requestId, deviceName, publicKey)
+        if (secretBase64 != null && publicKey == null) {
+            req.legacySecret = runCatching { WebCrypto.fromBase64Url(secretBase64) }.getOrNull()
+        }
+        // **没有密钥材料就还不算「可以配了」** —— 界面算不出配对码，
+        // 用户看到一张没有码的确认卡只会更困惑。
+        if (!req.hasKeyMaterial) return false
+        _pendingPairing.value = PendingPairing(
+            requestId = requestId,
+            secretBase64 = secretBase64,
+            deviceName = deviceName,
+            pairCode = req.pairCode,
+        )
         return true
     }
 
     /**
      * 用户在手机上点了「允许」。
      *
-     * 批准时会用 secret 派生密钥（**同步密码会混进去**），
+     * 批准时会用协商出来的密钥派生（**同步密码会混进去**），
      * 并把这台设备记下来。
      */
     fun approvePending(): Boolean {
-        val pending = pendingPairing ?: return false
-        val secret = runCatching { WebCrypto.fromBase64Url(pending.secretBase64) }.getOrNull()
-        if (secret == null) {
-            pendingPairing = null
-            return false
+        val pending = _pendingPairing.value ?: return false
+        val secret = pending.secretBase64?.let {
+            runCatching { WebCrypto.fromBase64Url(it) }.getOrNull()
         }
-        // 摘要对不上 = 二维码被人改过。宁可失败也不批。
-        if (pairing.requestIdOf(secret) != pending.requestId) {
-            pendingPairing = null
-            return false
-        }
+        // 新协议：secret 传 null —— [PairingStore] 用的是它跟电脑协商出来的共享密钥。
+        // 老协议：secret 从二维码过来，摘要对不上（二维码被改过）会被挡住。
         val device = pairing.approve(
             requestId = pending.requestId,
             secret = secret,
             passcode = container.secureAccountStorage.getSyncPasscode().orEmpty(),
             deviceName = pending.deviceName,
         )
-        pendingPairing = null
+        _pendingPairing.value = null
         if (device != null) persistDevice(device)
         return device != null
     }
 
     fun denyPending(): Boolean {
-        val pending = pendingPairing ?: return false
+        val pending = _pendingPairing.value ?: return false
         pairing.deny(pending.requestId)
-        pendingPairing = null
+        _pendingPairing.value = null
         return true
     }
 
@@ -406,5 +501,16 @@ class WebSyncService(
         private const val KEY_REMOTE_LATEST_EDIT = "remote_latest_edit_at"
         private const val KEY_DEVICE_NAME_PREFIX = "device_name_"
         private const val KEY_DEVICE_PAIRED_PREFIX = "device_paired_"
+
+        /**
+         * 局域网服务监听端口的候选。
+         *
+         * **第一个是固定的** —— 电脑端按「固定端口」扫网段来找手机。
+         * 后面的几个是**兜底**：万一 38780 被别的程序占了，
+         * 就往后顺延一个，而不是起不来。
+         *
+         * 电脑端扫的时候按同样的顺序试，所以它总能找对。
+         */
+        val PORT_CANDIDATES = listOf(38780, 38781, 38782, 38783, 38784)
     }
 }
