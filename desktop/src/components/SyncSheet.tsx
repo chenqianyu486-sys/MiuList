@@ -53,13 +53,14 @@ import {
   writeSnapshotNow,
 } from '../core/snapshotFile';
 import type { SyncTab, WallpaperId } from '../core/types';
+import { LicenseNotice } from './LicenseNotice';
 import { PairingCard } from './PairingCard';
 import { Sheet } from './Sheet';
 import { Button, cx } from './ui';
 
 const TABS: { id: SyncTab; label: string; icon: typeof Link2 }[] = [
   { id: 'connection', label: '连接', icon: Link2 },
-  { id: 'snapshot', label: '本机文件', icon: FileJson2 },
+  { id: 'snapshot', label: '备份', icon: FileJson2 },
   { id: 'appearance', label: '外观', icon: Palette },
   { id: 'about', label: '关于', icon: Info },
 ];
@@ -74,7 +75,7 @@ export function SyncSheet() {
       open={open}
       onClose={close}
       title="同步与设置"
-      subtitle="手机、本机数据与毛玻璃外观。"
+      subtitle="连接手机、管理数据与外观。"
       wide
     >
       <div className="sheet-tabs" role="tablist" aria-label="设置分区">
@@ -150,7 +151,7 @@ function ConnectForm({
       return;
     }
     addressRef.current?.focus();
-    pushToast('剪贴板里没读到地址 —— 在输入框里按 Ctrl+V 粘贴。', 'error');
+    pushToast('剪贴板里没有地址，请手动粘贴。', 'error');
   };
 
   return (
@@ -177,11 +178,8 @@ function ConnectForm({
         </Button>
       </div>
       <p className="field-hint">
-        地址在手机的「更多 → 网页同步」里，点「复制连接链接」；
-        粘贴到这里之后，两条路挑一条 —— <strong>手机扫电脑的码</strong>
-        （电脑出二维码，手机扫一次）或 <strong>只填地址直接连</strong>
-        （手机弹确认卡，点「允许」，全程不用摄像头）。
-        手机和电脑要在同一个 Wi-Fi。
+        在手机「更多 → 网页同步」里复制连接链接，粘贴到这里。
+        之后可以扫码配对，或让手机点一下「允许」。手机和电脑要在同一个 Wi-Fi。
       </p>
       <button type="button" className="scan-tile" onClick={openScanner}>
         <span className="scan-tile-icon">
@@ -189,7 +187,7 @@ function ConnectForm({
         </span>
         <span>
           <strong>让电脑扫手机地址码</strong>
-          <em>扫完地址码，手机上点一下「允许」就行 —— 也只扫这一次</em>
+          <em>自动填入手机地址，再按提示配对</em>
         </span>
         <span className="scan-tile-arrow">→</span>
       </button>
@@ -229,7 +227,7 @@ function ConnectionPanel() {
         ? '手机在线'
         : state.base
           ? '未连接'
-          : '还没有连接手机';
+          : '未连接手机';
 
   return (
     <div className="panel-stack">
@@ -242,8 +240,8 @@ function ConnectionPanel() {
               <Wifi size={18} />
             </span>
             <div>
-              <h3>找到手机</h3>
-              <p>第一次只需告诉电脑手机地址 —— 从手机复制粘贴过来，或手打一次。</p>
+              <h3>连接手机</h3>
+              <p>先在手机上复制连接链接，再粘贴到这里。</p>
             </div>
           </div>
           <ConnectForm
@@ -259,8 +257,8 @@ function ConnectionPanel() {
               <Smartphone size={18} />
             </span>
             <div>
-              <h3>手机扫码配对</h3>
-              <p>电脑已记住手机地址。配对由手机扫下面的码完成 —— 只扫这一次码。</p>
+              <h3>扫码配对</h3>
+              <p>用手机扫下面的码，在手机上点「允许」。</p>
             </div>
             <span className={cx('connection-chip', state.phoneReachable && 'is-online')}>
               {state.phoneReachable ? '手机在线' : '手机离线'}
@@ -356,8 +354,7 @@ function ConnectionPanel() {
       <div className="panel-note">
         <ShieldCheck size={16} />
         <p>
-          待办在两端之间自动同步；<strong>课表与考试各留一份</strong>，不会跟着同步跑。
-          配对后可在「课表与考试」里手动搬运。
+          待办会自动同步；<strong>课表和考试不会跟着同步</strong>，需要时在「课表与考试」里手动搬运。
         </p>
       </div>
     </div>
@@ -387,7 +384,7 @@ function SchedulePanel() {
         </span>
         <div>
           <h3>课表与考试</h3>
-          <p>两端各留一份。自动同步只动待办，课表不会跟着跑。</p>
+          <p>自动同步只更新待办；课表需要手动搬运。</p>
         </div>
       </div>
 
@@ -430,8 +427,8 @@ function SchedulePanel() {
 
       <p className="field-hint">
         {localCourses
-          ? '「用手机的」会覆盖这台电脑上的课表与考试；「推给手机」会覆盖手机上的。两者都只动配置，不动待办。'
-          : '这台电脑还没有课表：先「用手机的课表和考试」搬一份过来，或者导入一份备份文件。'}
+          ? '「用手机的」会覆盖这台电脑的课表和考试；「推给手机」会覆盖手机的。待办不受影响。'
+          : '这台电脑还没有课表：先「用手机的课表和考试」搬一份，或导入备份。'}
       </p>
     </div>
   );
@@ -573,8 +570,8 @@ function ZjuPanel() {
 
       <div className="switch-row">
         <div>
-          <h3>把账号记住在手机上</h3>
-          <p>存进手机的 Keystore；网页端不留密码。</p>
+          <h3>记住账号</h3>
+          <p>密码只保存在手机上，网页端不保存。</p>
         </div>
         <button
           type="button"
@@ -607,8 +604,7 @@ function ZjuPanel() {
       </div>
 
       <p className="field-hint">
-        浏览器连不上浙大，这一步由手机代跑。密码只在这条加密请求里出现一次，
-        浏览器不留；勾上「记住」就转存进手机的 Keystore。
+        这一步由手机登录学在浙大，密码不会保存在浏览器里。勾选「记住」后会保存在手机上。
       </p>
     </div>
   );
@@ -742,7 +738,7 @@ function SnapshotPanel() {
             </p>
             {!file.supported ? (
               <p className="inline-warn">
-                当前浏览器不支持直接读写本机文件，请用下面的「导出 / 导入」。Chrome / Edge 支持自动保存。
+                当前浏览器不支持自动保存，请改用 Chrome / Edge，或使用下面的导出 / 导入。
               </p>
             ) : null}
             <div className="file-actions">
@@ -807,8 +803,8 @@ function SnapshotPanel() {
       <div className="panel-note">
         <ShieldCheck size={16} />
         <p>
-          备份文件是明文的：它包含课程与待办，但<strong>不包含</strong>配对凭证和同步密码。
-          请把它当作个人数据文件保管。
+          备份文件没有加密：包含课程与待办，但<strong>不包含</strong>配对凭证和同步密码。
+          请妥善保管。
         </p>
       </div>
     </div>
@@ -860,7 +856,7 @@ function AppearancePanel() {
           ))}
         </div>
         <p className="field-hint">
-          毛玻璃依赖浏览器的 `backdrop-filter`；Chrome / Edge 效果最佳。留一点背景色，玻璃才有东西可透。
+          毛玻璃在 Chrome / Edge 上效果最佳。
         </p>
       </div>
 
@@ -895,31 +891,34 @@ function AboutPanel() {
           <h3>MiuList · 电脑网页端</h3>
           <p>打开网页就能用 · 数据存在本机 · 与手机同步</p>
         </div>
-        <span className="about-version">1.0.9</span>
+        <span className="about-version">1.0.11</span>
       </div>
       <div className="panel-card glass-soft">
-        <h3 className="about-heading">它是什么</h3>
+        <h3 className="about-heading">这是什么</h3>
         <p className="about-text">
           这是 MiuList 的电脑网页端：打开网页就能看课表、清单和考试，手机不在也能改。
         </p>
         <h3 className="about-heading">数据在哪</h3>
         <p className="about-text">
-          数据存在这台电脑上，绑定的备份文件是它的一份副本。两边各有一份完整数据，同步时合并。
+          数据保存在这台电脑上；绑定的备份文件是它的副本，同步时会与手机合并。
         </p>
-        <h3 className="about-heading">当前这份</h3>
+        <h3 className="about-heading">当前状态</h3>
         <div className="about-facts">
-          <span>连接</span>
-          <strong>同一 Wi-Fi 直连</strong>
           <span>手机</span>
           <strong>{snapshot.deviceName || '未连接'}</strong>
           <span>周课表</span>
           <strong>{snapshot.timetable ? `${snapshot.timetable.totalWeeks} 周` : '暂无'}</strong>
         </div>
       </div>
+
+      {/* GPLv3 第 5(d) 条要求界面显示适当法律声明 —— 见 LicenseNotice 的注释。 */}
+      <div className="panel-card glass-soft">
+        <LicenseNotice />
+      </div>
       <div className="panel-note">
         <Info size={16} />
         <p>
-          想改课表、考试或自动生成规则？这些仍在手机 App 上做；电脑端只同步并展示手机算好的结果。
+          课表、考试和自动生成规则仍在手机 App 上修改。
         </p>
       </div>
     </div>
