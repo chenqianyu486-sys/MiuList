@@ -6,6 +6,7 @@ import java.io.File
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.example.data.model.WallpaperConfig
+import com.example.data.model.WallpaperGradient
 import com.example.data.model.WallpaperPresets
 import com.example.data.model.WallpaperType
 
@@ -49,10 +50,8 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.example.R
 import dev.chrisbanes.haze.HazeDefaults
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.HazeStyle
@@ -94,7 +93,7 @@ import kotlinx.coroutines.delay
 val CanvasPureWhite = Color(0xFFFFFFFF)
 
 /**
- * 默认壁纸资源。
+ * 默认壁纸的渐变参数。
  *
  * **单点真源**：背景层铺它。换成别的壁纸只改这一行。
  *
@@ -103,7 +102,7 @@ val CanvasPureWhite = Color(0xFFFFFFFF)
  * 而它不存在，直接 `NoSuchMethodError` 崩在运行时（编译期完全看不出来）。
  * `val` 在这个项目里没有性能代价，别为了省一个字段去踩这个。
  */
-val DefaultWallpaperRes: Int = R.drawable.wp_default_cloudy_knoxville
+val DefaultWallpaperGradient: WallpaperGradient = WallpaperPresets.DEFAULT.gradient
 
 /**
  * haze 的兜底底色：源层里没录到内容的像素拿什么填。
@@ -686,19 +685,19 @@ fun AppBackgroundLayer(
                     )
                 }
                 wallpaperConfig.type == WallpaperType.PRESET -> {
-                    Image(
-                        painter = painterResource(WallpaperPresets.getResOrDefault(wallpaperConfig.presetId)),
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
+                    // 预设壁纸现在是**参数化的渐变**，不再是一张位图：
+                    // 见 [wallpaperGradient] —— 几何照抄原来的 cover 铺法，观感不变。
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .wallpaperGradient(WallpaperPresets.getGradientOrDefault(wallpaperConfig.presetId))
                     )
                 }
                 else -> {
-                    Image(
-                        painter = painterResource(DefaultWallpaperRes),
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .wallpaperGradient(DefaultWallpaperGradient)
                     )
                 }
             }
@@ -770,11 +769,11 @@ fun AppBackgroundLayer(
  *
  * ### 这张壁纸的物理上限（别拿它当效果没做好的证据）
  *
- * ⚠️ **下面这些取样是 Kind Steel（`wp_default_kind_steel`）的**：
+ * ⚠️ **下面这些取样是 Kind Steel（预设 `kind_steel`）的**：
  * 全图 R 233~251 / G 222~252 / B 219~250，**最大饱和度 13.1%**
  * （`#FBFCDB`，最大色差 32/255），左上暖黄、右下淡紫。
  *
- * **App 现在的默认壁纸是 Cloudy Knoxville**（`wp_default_cloudy_knoxville`），
+ * **App 现在的默认壁纸是 Cloudy Knoxville**（预设 `cloudy_knoxville`），
  * 它比 Kind Steel 还平：全图 R 235~251 / G 237~251 / B 238~251，
  * **最大饱和度只有 1.3%**（`#EBEDEE`）——那条暖黄→淡紫的轴几乎不存在，
  * 通体是一张近白的中性渐变。

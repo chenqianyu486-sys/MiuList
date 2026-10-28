@@ -235,4 +235,4 @@ KEY_PASSWORD=...
 - [Elyyyyyyyyxer/Elychron](https://github.com/Elyyyyyyyyxer/Elychron) — **@Elyyyyyyyyxer 及其贡献者**：课表与日程管理相关设计与灵感来源
 - [cxz66666/zju-ical](https://github.com/cxz66666/zju-ical) — **@cxz66666 及其贡献者**（源自 determ1ne/grsical）：浙大课表日历导出与转换参考
 - [Xecades/zju-ical-py](https://github.com/Xecades/zju-ical-py) — **@Xecades 及其贡献者**：浙大课表解析与 iCal 转换的 Python 实现参考
-- [破晓壁纸 (PXLab)](https://pxlab.cn/index.html) — **PXLab 团队**：精选高质量壁纸资源、设计美学与透光质感参考
+- [破晓壁纸 (PXLab)](https://pxlab.cn/index.html) — **PXLab 团队**：预设壁纸的渐变角度与配色参考（壁纸由本项目自行绘制，未使用其位图）

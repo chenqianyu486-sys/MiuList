@@ -50,7 +50,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,11 +60,12 @@ import com.example.data.model.PresetWallpaper
 import com.example.data.model.WallpaperConfig
 import com.example.data.model.WallpaperPresets
 import com.example.data.model.WallpaperType
-import com.example.ui.theme.DefaultWallpaperRes
+import com.example.ui.theme.DefaultWallpaperGradient
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.WallpaperCardFaceAlpha
 import com.example.ui.theme.WallpaperCardFaceTint
 import com.example.ui.theme.glassSurface
+import com.example.ui.theme.wallpaperGradient
 import java.io.File
 import kotlin.math.abs
 
@@ -478,19 +478,17 @@ private fun WallpaperLivePreviewCard(
                 )
             }
             config.type == WallpaperType.PRESET -> {
-                Image(
-                    painter = painterResource(WallpaperPresets.getResOrDefault(config.presetId)),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.matchParentSize()
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .wallpaperGradient(WallpaperPresets.getGradientOrDefault(config.presetId))
                 )
             }
             else -> {
-                Image(
-                    painter = painterResource(DefaultWallpaperRes),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.matchParentSize()
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .wallpaperGradient(DefaultWallpaperGradient)
                 )
             }
         }
@@ -586,11 +584,12 @@ private fun PresetWallpaperChip(
                 .height(64.dp)
                 .clip(RoundedCornerShape(7.dp))
         ) {
-            Image(
-                painter = painterResource(preset.resId),
-                contentDescription = preset.name,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
+            // 缩略图和整屏壁纸用的是**同一套渐变参数** —— 不用位图，也就不会缩成糊的。
+            // 名字由下面那行文字承担，所以这个纯预览方块不再重复报一次。
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .wallpaperGradient(preset.gradient)
             )
 
             if (isSelected) {
