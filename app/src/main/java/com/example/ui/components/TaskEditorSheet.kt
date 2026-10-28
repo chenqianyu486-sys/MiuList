@@ -95,7 +95,7 @@ import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
 
-private const val DEFAULT_DUE_DAYS = 3
+private const val DEFAULT_DUE_DAYS = 6
 private const val DEFAULT_DUE_HOUR = 23
 private const val DEFAULT_DUE_MINUTE = 59
 
@@ -198,7 +198,7 @@ fun TaskEditorSheet(
 
     // 截止存真实时间戳，不存「几天后」的偏移——偏移只在保存那一刻才有意义。
     // 关掉「不设截止」时 dueMillis 里的值原样留着不清零，这样用户改主意打开它，
-    // 日期回到刚才那个而不是跳成 3 天后。
+    // 日期回到刚才那个而不是跳成 6 天后。
     val initialHasDue = remember(initialTask) {
         initialTask?.let { TaskEntity.hasDue(it) } ?: true
     }
@@ -1099,11 +1099,20 @@ private fun autoTitle(typeKey: String, course: CourseEntity): String = when (typ
     else -> "${course.name} 待办"
 }
 
-/** 新建待办时的默认截止：3 天后的 23:59（北京时间）。 */
-private fun defaultDueTimestamp(): Long = AppZone.calendar().apply {
-    add(Calendar.DAY_OF_YEAR, DEFAULT_DUE_DAYS)
-    set(Calendar.HOUR_OF_DAY, DEFAULT_DUE_HOUR)
-    set(Calendar.MINUTE, DEFAULT_DUE_MINUTE)
-    set(Calendar.SECOND, 0)
-    set(Calendar.MILLISECOND, 0)
-}.timeInMillis
+/**
+ * 新建待办时的默认截止：**6 天后**的 23:59（北京时间）。
+ *
+ * 为什么是 6 天：手动记下来的事通常不是一个「今天就得做」的急活，
+ * 但也不能推到一周多以后 —— 那就等于没定截止了。6 天覆盖到下一个周期，
+ * 用户临时改的时候也只是改个日期。
+ *
+ * @param nowMillis 「现在」。默认取当前时间；单测喂一个固定值进去。
+ */
+internal fun defaultDueTimestamp(nowMillis: Long = System.currentTimeMillis()): Long =
+    AppZone.calendar(nowMillis).apply {
+        add(Calendar.DAY_OF_YEAR, DEFAULT_DUE_DAYS)
+        set(Calendar.HOUR_OF_DAY, DEFAULT_DUE_HOUR)
+        set(Calendar.MINUTE, DEFAULT_DUE_MINUTE)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
