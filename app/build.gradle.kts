@@ -121,7 +121,28 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      all {
+        // Robolectric 的临时目录名里带**测试方法名**，于是 Room 的库文件路径
+        // = 临时目录 + 方法名 + 一串哈希 + 数据目录。方法名一长，
+        // Windows 的 260 字符上限就到了 —— 表现是
+        // `SQLiteCantOpenDatabaseException: unable to open database file`：
+        // 主库文件能建，紧跟着要建的 `-wal` / `-shm` / `-journal` 建不出来。
+        //
+        // 而 `AppDatabase` 是**单例**：库文件路径由这个类里**第一个**跑到的用例
+        // 决定，后面所有用例都跟着那条路径走 —— 于是「方法名长不长」变成了
+        // 「整类能不能跑」的开关，而且顺序一变结果就变。
+        //
+        // 把测试 JVM 的临时目录指到一个短路径上，路径长度就与用例名无关了。
+        // 目录建在用户目录下（每台机器各自一份），不在仓库里。
+        val shortTmp = File(System.getProperty("user.home"), ".mt")
+        shortTmp.mkdirs()
+        it.systemProperty("java.io.tmpdir", shortTmp.absolutePath)
+      }
+    }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
