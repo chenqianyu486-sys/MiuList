@@ -169,7 +169,7 @@ fun WebSyncDialog(
                     // 放最后就永远在折叠线以下，用户得先滚一屏才找得到。
                     if (addresses.isEmpty()) {
                         Text(
-                            "没找到可用地址。请确认手机连着 Wi-Fi，或者先关掉 VPN / 代理再试。",
+                            "没找到可用地址，请确认手机已连接 Wi-Fi 后重试。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                         )
@@ -233,7 +233,7 @@ fun WebSyncDialog(
                             }
                             Spacer(Modifier.height(6.dp))
                             Text(
-                                "在电脑上粘贴这个地址，网页端会显示配对码，之后手机扫一次就能连上。",
+                                "在电脑上粘贴这个地址，再按提示完成配对。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -269,7 +269,7 @@ fun WebSyncDialog(
                                     // **说清楚代价**：走这条路电脑先扫地址码、
                                     // 手机再扫电脑的配对码 —— 是两次扫码。
                                     // 上面那条「复制连接链接」才是只扫一次的走法。
-                                    "这样要扫两次；复制链接那条路只扫一次。",
+                                    "这样需要扫两次码；复制链接只需一次。",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -329,16 +329,13 @@ fun WebSyncDialog(
                 if (running) {
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        "电脑上打开 MiuList 网页端 → 粘贴上面的连接链接 → " +
-                            "网页端会显示一张配对码 → 用手机扫它，在 MiuList 里点「允许」。" +
-                            "配对过一次，以后就不用再扫了。",
+                        "在电脑上打开网页端，粘贴连接链接，按提示配对一次即可。以后打开会自动连接。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "想在电脑上单独用？下载 MiuList-Web.html，" +
-                            "用 Chrome / Edge 打开就行 —— 不用安装，手机不在也能看能改。",
+                        "想在电脑上单独用？用 Chrome / Edge 打开网页端即可，不用安装。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -509,11 +506,10 @@ private fun PendingPairingCard(
         )
         Text(
             if (sourceKnown) {
-                "这是手机自己看到的地址，对面改不了 —— " +
-                    "用它确认是不是你眼前那台设备。"
+                "用这个地址确认是不是你眼前的设备。"
             } else {
-                "这条请求没带来源地址，核对不了来源。\n" +
-                    "除非你正看着电脑上那串配对码，否则请直接拒绝。"
+                "这条请求没有来源地址，无法核对。\n" +
+                    "除非你正在电脑上看到同一串配对码，否则请拒绝。"
             },
             style = MaterialTheme.typography.labelSmall,
             color = if (sourceKnown) {
@@ -566,8 +562,7 @@ private fun PendingPairingCard(
             fontWeight = FontWeight.Medium,
         )
         Text(
-            "设备名是对方自己填的，只能当参考；" +
-                "认设备请看上面的来源地址。",
+            "设备名由对方填写，只能参考；认设备请看上面的来源地址。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

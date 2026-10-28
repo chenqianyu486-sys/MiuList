@@ -108,7 +108,7 @@ class WebSyncPendingPairingsTest {
         composeTestRule.onNodeWithTag("web_sync_source", useUnmergedTree = true)
             .assertTextEquals("192.168.1.5:51234")
         // 设备名不再被当成「是谁」的答案。
-        composeTestRule.onNodeWithText("只能当参考", substring = true, useUnmergedTree = true)
+        composeTestRule.onNodeWithText("只能参考", substring = true, useUnmergedTree = true)
             .assertExists()
     }
 
@@ -118,7 +118,7 @@ class WebSyncPendingPairingsTest {
 
         composeTestRule.onNodeWithTag("web_sync_source", useUnmergedTree = true)
             .assertTextEquals("来源未知")
-        composeTestRule.onNodeWithText("没带来源地址", substring = true, useUnmergedTree = true)
+        composeTestRule.onNodeWithText("没有来源地址", substring = true, useUnmergedTree = true)
             .assertExists()
     }
 

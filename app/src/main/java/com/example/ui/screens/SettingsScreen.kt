@@ -186,9 +186,21 @@ fun SettingsScreen(
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "基于课程表的自动化轻量作业待办软件，提供分类清单与日程表双重视图。遵循 GNU GPLv3 协议开源，许可证继承自 Celechron。",
+                        text = "基于课程表的自动化轻量作业待办软件，提供分类清单与日程表双重视图。以 GNU GPLv3 许可证开源，许可证继承自 Celechron。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    // GPLv3 第 5(d) 条要的「适当法律声明」是四件事：
+                    // 版权声明、**不提供任何担保**、可以按本许可传递本作品、以及到哪儿看许可证副本。
+                    // 以前这里只有「GPL-3.0」四个字和一个仓库链接 —— 担保与传递许可都没写，
+                    // 缺的那两条在分发出去的 APK 里是实打实的合规缺口。
+                    Text(
+                        text = "版权 © 2026 MiuList 贡献者；继承自 Celechron 的部分版权归其原作者所有。" +
+                            "您可以在同样条款下复制、修改与再分发本程序。" +
+                            "本程序不提供任何担保。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     Row(
@@ -404,7 +416,9 @@ internal val AcknowledgementsList = listOf(
     AcknowledgementInfo(
         project = "破晓壁纸 (PXLab)",
         contributors = "PXLab 破晓团队",
-        note = "提供精选高质量壁纸资源、设计美学与透光质感参考",
+        // 只取了渐变的**角度与配色**并自己用 Compose 画，没有分发对方的位图，
+        // 所以这里是「配色参考」而不是「提供了壁纸资源」。
+        note = "预设壁纸的渐变角度与配色参考；壁纸由本项目自行绘制，未使用其位图",
         url = "https://pxlab.cn/index.html"
     )
 )

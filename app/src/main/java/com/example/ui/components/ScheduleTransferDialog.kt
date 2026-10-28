@@ -146,14 +146,14 @@ fun ScheduleTransferDialog(
                 }
 
                 Text(
-                    text = "导出的文件包含课程、考试、校历、待办、自定义分类与生成规则，不含浙大学号与密码。" +
-                        "课表随时可以用浙大同步刷新，待办只能靠这个文件带走。",
+                    text = "导出文件包含课程、考试、待办和分类规则，不含学号和密码。" +
+                        "换设备时，待办只能靠它带走。",
                     style = MaterialTheme.typography.labelSmall,
                     color = TextSecondary
                 )
 
                 Text(
-                    text = "冲突处理方式（每次导入前选择）",
+                    text = "导入方式（每次选择）",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -181,7 +181,7 @@ fun ScheduleTransferDialog(
                 // 「同步」这个词听起来像永不冲突，不说就等于让用户替我们兜底。
                 if (strategy == ImportStrategy.SNAPSHOT) {
                     Text(
-                        text = "同一条待办两台设备都改过时，较晚的那次胜出，另一台的改动会被覆盖。",
+                        text = "两台设备改过同一条待办时，以较晚保存的为准。",
                         style = MaterialTheme.typography.labelSmall,
                         color = TextSecondary
                     )
@@ -222,13 +222,13 @@ fun ScheduleTransferDialog(
                         }
                         if (r.taskMerge.losingCourse > 0) {
                             Text(
-                                "${r.taskMerge.losingCourse} 条待办的课程本机没有，已移入「未关联课程」",
+                                "${r.taskMerge.losingCourse} 条待办找不到对应课程，已移到「未关联课程」",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error
                             )
                         }
                         if (r.tasksRelinked > 0) {
-                            Text("待办保持关联 ${r.tasksRelinked} 条", style = MaterialTheme.typography.bodySmall)
+                            Text("${r.tasksRelinked} 条待办仍在原课程下", style = MaterialTheme.typography.bodySmall)
                         }
                         if (r.tasksUnlinked > 0) {
                             Text(
@@ -293,18 +293,18 @@ private fun PreviewBlock(preview: ImportPreview, issues: List<ImportIssue>) {
             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
         )
         Text(
-            text = "文件 ${preview.fileCourseCount} 门 → 新增 ${preview.newCourses.size} · " +
-                "更新 ${preview.updatedCourses.size} · 保持 ${preview.unchangedCount}",
+            text = "文件里 ${preview.fileCourseCount} 门课：新增 ${preview.newCourses.size} · " +
+                "更新 ${preview.updatedCourses.size} · 不变 ${preview.unchangedCount}",
             style = MaterialTheme.typography.bodySmall
         )
         if (preview.strategy == ImportStrategy.REPLACE) {
             Text(
                 text = buildString {
-                    append("注意：将清空现有 ${preview.existingCourseCount} 门课程，改用文件里的课程，且不可撤销。")
-                    append("现有 ${preview.existingTaskCount} 条待办不会被删除：")
-                    append("${preview.tasksKeepingCourse} 条继续挂在原课程下")
+                    append("将清空现有 ${preview.existingCourseCount} 门课程，改用文件里的课程，不可撤销。")
+                    append("现有 ${preview.existingTaskCount} 条待办会保留：")
+                    append("${preview.tasksKeepingCourse} 条仍在原课程下")
                     if (preview.tasksLosingCourse > 0) {
-                        append("，${preview.tasksLosingCourse} 条因课程不在新表里而移入「未关联课程」")
+                        append("，${preview.tasksLosingCourse} 条会移到「未关联课程」")
                     }
                     append("。")
                 },
@@ -327,9 +327,9 @@ private fun PreviewBlock(preview: ImportPreview, issues: List<ImportIssue>) {
         // 考试与课程同源（都来自教务网），所以并进课表那一段，不另起一节。
         if (preview.fileExamCount > 0) {
             Text(
-                text = "考试（文件 ${preview.fileExamCount} 场，本机 ${preview.existingExamCount} 场）：" +
-                    "新增 ${preview.examMerge.added} · 用文件覆盖 ${preview.examMerge.overwritten} · " +
-                    "保留本机较新 ${preview.examMerge.keptLocal}",
+                text = "考试：文件 ${preview.fileExamCount} 场，本机 ${preview.existingExamCount} 场 · " +
+                    "新增 ${preview.examMerge.added} · 覆盖 ${preview.examMerge.overwritten} · " +
+                    "保留本机 ${preview.examMerge.keptLocal}",
                 style = MaterialTheme.typography.bodySmall
             )
         }
@@ -351,13 +351,13 @@ private fun PreviewBlock(preview: ImportPreview, issues: List<ImportIssue>) {
                 modifier = Modifier.padding(top = 8.dp)
             )
             Text(
-                text = "新增 ${preview.taskMerge.added} · 用文件覆盖 ${preview.taskMerge.overwritten} · " +
-                    "保留本机较新 ${preview.taskMerge.keptLocal}",
+                text = "新增 ${preview.taskMerge.added} · 覆盖 ${preview.taskMerge.overwritten} · " +
+                    "保留本机 ${preview.taskMerge.keptLocal}",
                 style = MaterialTheme.typography.bodySmall
             )
             if (preview.taskMerge.losingCourse > 0) {
                 Text(
-                    "${preview.taskMerge.losingCourse} 条待办的课程本机没有，会移入「未关联课程」（待办本身不丢）",
+                    "${preview.taskMerge.losingCourse} 条待办找不到对应课程，会移到「未关联课程」（待办本身不丢）",
                     style = MaterialTheme.typography.labelSmall
                 )
             }
@@ -373,7 +373,7 @@ private fun PreviewBlock(preview: ImportPreview, issues: List<ImportIssue>) {
         }
 
         if (issues.isNotEmpty()) {
-            Text("问题 ${issues.size} 条：", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))
+            Text("需要注意 ${issues.size} 处：", style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))
             issues.take(10).forEach {
                 Text("· ${it.scope}：${it.detail}", style = MaterialTheme.typography.labelSmall)
             }

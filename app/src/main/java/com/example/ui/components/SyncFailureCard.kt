@@ -171,7 +171,7 @@ internal object SyncFailureAdvice {
         ZjuFailureKind.SESSION ->
             "重新走一次登录即可，和密码对错无关；同步时会自动重新登录。"
         ZjuFailureKind.NETWORK ->
-            "检查网络、代理或 VPN 后重试。连不上不影响已缓存的课表，本地数据可以照常用。"
+            "检查网络后重试。连不上也能继续用本地课表。"
         ZjuFailureKind.SERVER ->
             "这是浙大那边的问题，改密码没有用。等一会儿再试，或先用文件导入。"
         ZjuFailureKind.TERM ->

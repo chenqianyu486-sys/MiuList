@@ -58,7 +58,7 @@ fun QuickZjuLoginDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "绑定统一身份认证账号后，将自动同步「学在浙大」的作业与截止时间。\n凭据由 Android KeyStore 硬件加密，绝不明文落盘。",
+                    text = "绑定统一身份认证账号后，将自动同步「学在浙大」的作业与截止时间。\n密码只保存在这台手机上，不会同步到其他设备。",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextMuted,
                     fontSize = 12.sp,

@@ -143,7 +143,7 @@ val GuideSteps: List<GuideStep> = listOf(
         // 这一步**带说明**，因为一键生成默认**关着**：不告诉用户它存在，
         // 他就以为这个 App 只能手动加待办。说的两件事都对着真的行为：
         // 开启之后能生成哪三类、以及不开也能用（手动添加）。
-        description = "按课程规则把本周的作业、实验报告与预习排进清单；不想配规则就跳过，待办可以手动添加。"
+        description = "把本周的作业、实验报告和预习排进清单；不想设置规则也可以手动添加待办。"
     ),
     GuideStep(
         target = GuideTarget.COURSE_CATEGORY,
@@ -176,7 +176,7 @@ val GuideSteps: List<GuideStep> = listOf(
         // 没有这句话，用户看见「✨」不知道那是干什么的。
         // 说的三件事都对着真的行为：按类别规则生成、覆盖作业/实验报告/预习三类、
         // 同一条不重复生成（去重键是「课程 + 类型 + 周次 + 周几」）。
-        description = "顶栏的 ✨ 按钮按类别规则把本周的课后作业、实验报告与预习排入清单，同一条不重复生成。"
+        description = "点顶栏的 ✨，就能把本周的作业、实验报告和预习加入清单，同一条不会重复生成。"
     ),
     GuideStep(
         target = GuideTarget.WALLPAPER,

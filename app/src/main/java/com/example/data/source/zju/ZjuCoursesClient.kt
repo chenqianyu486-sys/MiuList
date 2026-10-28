@@ -267,7 +267,7 @@ open class ZjuCoursesClient(
     internal fun parseTodoList(text: String): List<CoursesTodoItem> {
         val json = runCatching { JSONObject(text) }.getOrNull()
             ?: throw ZjuException(
-                "学在浙大返回的数据无法解析（收到的不是 JSON）",
+                "学在浙大返回的数据无法解析，请稍后再试",
                 ZjuFailureKind.DATA_INVALID
             )
 

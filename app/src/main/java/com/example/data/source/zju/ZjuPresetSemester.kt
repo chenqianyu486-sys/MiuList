@@ -49,7 +49,7 @@ data class ZjuPresetSemester(
     val originLabel: String
         get() = when (origin) {
             CalendarOrigin.REMOTE -> "远程"
-            CalendarOrigin.CACHED -> "缓存"
+            CalendarOrigin.CACHED -> "本地"
             CalendarOrigin.BUNDLED -> "内置"
         }
 

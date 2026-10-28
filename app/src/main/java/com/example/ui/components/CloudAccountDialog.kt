@@ -133,7 +133,7 @@ fun CloudAccountDialog(
                 }
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "教务云端同步与本地缓存",
+                    text = "教务账号与同步",
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -214,7 +214,7 @@ fun CloudAccountDialog(
                     }
 
                     Text(
-                        text = "当前状态：优先读取本地缓存（断网立即可用，持久保存）",
+                        text = "当前状态：优先使用本地数据，断网也能用",
                         style = MaterialTheme.typography.labelSmall,
                         color = TextSecondary
                     )
@@ -257,7 +257,7 @@ fun CloudAccountDialog(
                         Icon(Icons.Outlined.CloudSync, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (isSyncing) "同步中…" else "立即从云端同步更新",
+                            text = if (isSyncing) "同步中…" else "立即从教务网更新",
                             color = MaterialTheme.colorScheme.onPrimary,
                             fontWeight = FontWeight.Bold
                         )
@@ -402,7 +402,7 @@ fun CloudAccountDialog(
                             Text(
                                 // 原来写「不泄露到代码库」：代码库是开发者的事，
                                 // 用户要听的是「这台手机上会不会留明文」。
-                                text = "采用 Android KeyStore 硬件 AES-256 加密存储，本机不留明文",
+                                text = "加密保存在这台手机上，不会同步到其他设备",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TextMuted
                             )
@@ -424,7 +424,7 @@ fun CloudAccountDialog(
                         Icon(Icons.Outlined.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (isSyncing) "正在拉取并落盘缓存…" else "拉取云端数据并落盘本地缓存",
+                            text = if (isSyncing) "正在更新…" else "从教务网更新课表",
                             color = MaterialTheme.colorScheme.onPrimary,
                             fontWeight = FontWeight.Bold
                         )
