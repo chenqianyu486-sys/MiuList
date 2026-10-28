@@ -211,7 +211,7 @@ class JsonSnapshotCodecTest {
     @Test
     fun `malformed json is still rejected with a readable message`() {
         val msg = failure("""{ "timetable": [ """)
-        assertTrue(msg.contains("JSON"))
+        assertTrue(msg.contains("文件"))
     }
 
     @Test

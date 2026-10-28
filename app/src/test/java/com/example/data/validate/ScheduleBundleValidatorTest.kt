@@ -471,29 +471,54 @@ class ScheduleBundleValidatorTest {
     fun `an invalid colour falls back to the palette`() {
         val b = valid(ScheduleBundle(timetable = timetable(course(color = "不是颜色"))))
         assertTrue(b.courses.first().colorHex!!.startsWith("#"))
-        assertTrue(b.issues.any { it.detail.contains("非法") })
+        assertTrue(b.issues.any { it.detail.contains("无法识别") })
     }
 
     @Test
-    fun `a course with no category gets the default one`() {
+    fun `a course with no category keeps it missing`() {
+        // 「来源没提供类别」与「类别是默认类别」是**两件事**。
+        // 早先在这里把前者补成后者，于是教务同步（教务网从不提供类别）
+        // 把用户手动整理过的类别冲成了「公共基础」。
+        // 缺失的语义必须原样传下去，默认类别改在落库那一刻推断。
         val b = valid(ScheduleBundle(timetable = timetable(course())))
-        assertEquals(com.example.data.model.DEFAULT_CATEGORY, b.courses.first().category)
+        assertNull(b.courses.first().category)
     }
 
     @Test
-    fun `a course with no category but a lab name gets the lab one`() {
-        // 文件导入也走同一套判定：教务系统导出的课表不带类别，
-        // 名字带「实验」的课不该顶着一个「公共基础」的名字混在基础课里。
+    fun `a course with no category keeps it missing even when the name looks like a lab`() {
+        // 名字像实验课也**不能**在这一层就变成「实验实践」——
+        // 这一层分不清「来源说它是实验课」与「来源什么也没说」。
         val b = valid(ScheduleBundle(timetable = timetable(course(name = "大学物理实验"))))
-        assertEquals("实验实践", b.courses.first().category)
+        assertNull(b.courses.first().category)
     }
 
     @Test
-    fun `a category written in the document wins over the guess`() {
+    fun `an empty or blank category counts as missing`() {
+        // 四种「没有类别」的形态在解码后是同一个东西：null。
+        // 空串与纯空白都算「没提供」—— 它们与 null 不可区分，
+        // 所以判据只能是「去掉空白后还剩不剩东西」。
+        listOf("", "   ", "\t").forEach { raw ->
+            val b = valid(
+                ScheduleBundle(timetable = timetable(course().copy(category = raw)))
+            )
+            assertNull("「$raw」应当按缺类别处理", b.courses.first().category)
+        }
+    }
+
+    @Test
+    fun `a category written in the document is kept`() {
         // 文档显式写了类别就照用 —— 导入不能把用户已经整理好的类别改回去。
         val explicit = course().copy(category = "通识公共")
         val b = valid(ScheduleBundle(timetable = timetable(explicit)))
         assertEquals("通识公共", b.courses.first().category)
+    }
+
+    @Test
+    fun `a category written in the document is trimmed but not emptied`() {
+        // 前后空白是排版噪声，不该进库；而只由空白组成的值等于没写。
+        val padded = course().copy(category = "  通识公共  ")
+        assertEquals("通识公共", valid(ScheduleBundle(timetable = timetable(padded))).courses.first().category)
+        assertNull(valid(ScheduleBundle(timetable = timetable(course().copy(category = "  ")))).courses.first().category)
     }
 
     // ---------------------------------------------------------------- 相连时段合并
@@ -618,7 +643,7 @@ class ScheduleBundleValidatorTest {
         val bad = course(slots = listOf(com.example.data.codec.SlotBundle(0, 1, 2, "", null)))
         val b = valid(ScheduleBundle(timetable = timetable(bad)))
         assertTrue(b.courses.first().slots.isEmpty())
-        assertTrue(b.issues.any { it.detail.contains("星期非法") })
+        assertTrue(b.issues.any { it.detail.contains("星期无法识别") })
     }
 
     @Test
@@ -627,7 +652,7 @@ class ScheduleBundleValidatorTest {
         val bad = course(slots = listOf(com.example.data.codec.SlotBundle(1, 99, 99, "", null)))
         val b = valid(ScheduleBundle(timetable = timetable(bad)))
         assertTrue(b.courses.first().slots.isEmpty())
-        assertTrue(b.issues.any { it.detail.contains("起始节超出") })
+        assertTrue(b.issues.any { it.detail.contains("超出当天节次范围") })
     }
 
     @Test

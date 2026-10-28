@@ -1035,6 +1035,70 @@ class MigrationTest {
         }
     }
 
+    // ---------------------------------------------------------------- 课程类别
+
+    /**
+     * **类别是用户自己整理出来的数据，升级一步都不能动它。**
+     *
+     * 这条与「同步会覆盖类别」是**两件事**：那条是导入管线的问题，
+     * 这条是迁移的问题。两边都坏的话症状长得一模一样 ——
+     * 「更新之后我的课程分类没了」，而查起来谁也说不清是哪一层干的。
+     *
+     * 所以这里把「迁移不动类别」单独钉住：升级只许改结构与默认值。
+     */
+    @Test
+    fun `upgrading from v3 keeps the category of every course`() = runBlocking {
+        createVersion3Database()
+        // 再插一门类别不是默认值的课：只验默认类别的话，
+        // 「迁移把类别重写成默认值」这种错会被放过。
+        val raw = SQLiteDatabase.openDatabase(
+            context.getDatabasePath(dbName).path, null, SQLiteDatabase.OPEN_READWRITE
+        )
+        raw.execSQL(
+            """
+            INSERT INTO `courses`
+              (`id`,`name`,`code`,`category`,`teacher`,`classroom`,`colorHex`,
+               `autoPreStudy`,`autoPostHomework`,`autoLabReport`,`autoReview`,
+               `defaultPostDueDays`,`preStudyEstimatedMinutes`,`postHomeworkEstimatedMinutes`,
+               `labReportEstimatedMinutes`)
+            VALUES (2,'数据结构','CS201','专业必修','李教授','教二-305','#86EFAC',1,1,0,0,3,30,60,90)
+            """.trimIndent()
+        )
+        raw.close()
+
+        val db = openWithMigrations()
+        try {
+            val categories = db.courseDao().getAllCoursesOnce().associate { it.name to it.category }
+            assertEquals("公共基础", categories["高等数学"])
+            assertEquals("迁移不许改用户整理过的类别", "专业必修", categories["数据结构"])
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun `the category is still there after the database is closed and reopened`() = runBlocking {
+        createVersion3Database()
+        var db = openWithMigrations()
+        try {
+            db.courseDao().updateCategory(1L, "专业必修")
+        } finally {
+            db.close()
+        }
+
+        // 关掉再打开：值必须真的在库里，而不是只活在内存里。
+        // 只验「打开着的时候读得到」是不够的 —— 那读的是缓存。
+        db = openWithMigrations()
+        try {
+            assertEquals(
+                "专业必修",
+                db.courseDao().getAllCoursesOnce().first().category
+            )
+        } finally {
+            db.close()
+        }
+    }
+
     /** (preStudy, postHomework, labReport) —— 类别规则与课程两个实体的列名不同，只能各写一次。 */
     private fun switchesOf(rule: CategoryRuleEntity) =
         Triple(rule.preStudy, rule.postHomework, rule.labReport)

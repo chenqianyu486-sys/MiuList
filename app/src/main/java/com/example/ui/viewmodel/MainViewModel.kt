@@ -34,6 +34,7 @@ import com.example.data.source.zju.ZjuImportService
 import com.example.data.source.weather.WeatherService
 import com.example.data.sync.SyncFailure
 import com.example.data.sync.SyncResult
+import com.example.data.transfer.CourseCategoryConflictException
 import com.example.data.transfer.ImportReport
 import com.example.data.transfer.ImportStrategy
 import com.example.data.transfer.PreviewResult
@@ -269,7 +270,7 @@ private val ruleFlow = combine(
                     is SyncResult.Success ->
                         _uiState.update {
                             it.withSyncSuccess(
-                                userMessage = "已从云端拉取 ${res.courseCount} 门课程并存入本地缓存" +
+                                userMessage = "已从教务网更新 ${res.courseCount} 门课程" +
                                     res.report.unlinkedTasksSuffix()
                             )
                         }
@@ -1015,14 +1016,36 @@ private val ruleFlow = combine(
     /** 预览确认后才落库。全程单事务，任一步失败整体回滚。 */
     fun commitImport() = viewModelScope.launch {
         val pending = pendingPreview ?: return@launch
-        _uiState.update { it.copy(isImporting = true) }
-        val report = withContext(Dispatchers.IO) { container.importService.commit(pending) }
+        _uiState.update { it.copy(isImporting = true, importError = null) }
+        val report = try {
+            withContext(Dispatchers.IO) { container.importService.commit(pending) }
+        } catch (e: CourseCategoryConflictException) {
+            // 类别冲突：这次导入被拒绝，**库里的数据一条都没动**。
+            // 预览留着 —— 用户把冲突整理好之后可以直接再点一次确认
+            // （提交时读的是那一刻的本机数据，所以不用重新预览）。
+            _uiState.update {
+                it.copy(isImporting = false, importError = e.message)
+            }
+            return@launch
+        } catch (e: Exception) {
+            // 任何别的失败也是同样处理：事务已经回滚，库里是导入前的样子。
+            // 不接住它的话，异常会从协程里逃出去把 App 带崩 ——
+            // 而用户只是导入失败了一次。
+            _uiState.update {
+                it.copy(
+                    isImporting = false,
+                    importError = "导入失败：${e.message ?: "未知原因"}"
+                )
+            }
+            return@launch
+        }
         pendingPreview = null
         val examSuffix = pendingExamSuffix
         pendingExamSuffix = null
         _uiState.update {
             it.copy(
                 isImporting = false,
+                importError = null,
                 importPreview = null,
                 importReport = report,
                 // 待办那部分也要报出来，否则用户点完「确认导入」只看到课程数字，
@@ -1195,7 +1218,7 @@ private val ruleFlow = combine(
         _uiState.update { state ->
             when (result) {
                 is SyncResult.Success -> state.withSyncSuccess(
-                    userMessage = "云端同步完成：${result.courseCount} 门课程已更新到本地缓存" +
+                    userMessage = "同步完成：${result.courseCount} 门课程已更新" +
                         result.report.unlinkedTasksSuffix() +
                         result.examSuffix(),
                     closeDialog = true
@@ -1221,7 +1244,7 @@ private val ruleFlow = combine(
         _uiState.update { state ->
             when (result) {
                 is SyncResult.Success -> state.withSyncSuccess(
-                    userMessage = "云端同步完成：已更新本地缓存（${result.courseCount} 门课程）" +
+                    userMessage = "同步完成：${result.courseCount} 门课程已更新" +
                         result.report.unlinkedTasksSuffix() +
                         result.examSuffix()
                 )
@@ -1429,7 +1452,7 @@ private val ruleFlow = combine(
                         pendingPreset = preset,
                         zjuAvailableTerms = allTerms,
                         userMessage = if (preset == null) {
-                            "校历已更新到缓存，但这一期解析不出来，没有可应用的内容"
+                            "校历已更新，但这一期解析不出来，没有可应用的内容"
                         } else {
                             "发现新版校历（${preset.versionLabel ?: "未知版本"}），可查看差异后应用"
                         }

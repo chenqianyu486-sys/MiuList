@@ -19,6 +19,7 @@ import com.example.data.local.CustomTaskTypeEntity
 import com.example.data.local.ExamEntity
 import com.example.data.local.TaskEntity
 import com.example.data.model.CategoryRule
+import com.example.data.model.CourseCategory
 import com.example.data.model.CourseKeys
 import com.example.data.model.SlotWithWeeks
 import com.example.data.model.TaskStar
@@ -139,6 +140,14 @@ class ScheduleImportService(
         val existingCourses = courseRepo.getAllCoursesOnce()
         val existingByKey = existingCourses.associateBy { it.naturalKey() }
 
+        // 本机每门课的类别。**只读，不写。**
+        val localCategories = existingCourses.toLocalCategories()
+
+        // 类别冲突要在**预览**这一层就报出来：这一份文件注定要被拒绝，
+        // 那就不该先给用户一个「可以导入」的预览、让他点完确认才被拦下。
+        val categoryConflict = categoryConflictMessage(validated.courses, localCategories)
+        if (categoryConflict != null) return PreviewResult.Failed(categoryConflict)
+
         val newCourses = mutableListOf<CourseBundle>()
         val updated = mutableListOf<Pair<String, Long>>()
         var unchanged = 0
@@ -236,6 +245,24 @@ class ScheduleImportService(
             // 用户写过什么备注。不先记下来，一次同步就会把用户写好的备注全清空。
             val localNotes = captureCourseNotes()
 
+            // 本机每门课的**类别**，同样必须在清课程之前记下来。
+            //
+            // 理由与备注完全一样：教务网的数据里没有「类别」这一项，
+            // 同步产出的文件同样没有 —— 不先记下来，用户每同步一次
+            // 就丢一次自己整理过的类别。
+            //
+            // **取的是提交时的最新数据**，不是预览时缓存的那一份：
+            // 用户在预览之后又改了一次类别的话，要保留的是后者。
+            val localCategories = captureLocalCategories()
+
+            // 最终类别在**删数据之前**就算好。两个原因：
+            //
+            // 1. 冲突要在删之前报出来 —— 本机同一门课有多个互不相同的类别时，
+            //    继承哪一个都是猜。此时抛异常，事务整体回滚，一门课都不少。
+            // 2. 最终类别必须在写库之前就定下来 —— 新建课程要按它初始化
+            //    类别规则（见 `CourseRepository.saveCourseWithSlots`）。
+            val finalCategories = resolveCategories(v.courses, localCategories)
+
             if (strategy == ImportStrategy.REPLACE) {
                 courseRepo.clearAllCourses()
                 calendarRepo.saveCalendar(
@@ -256,7 +283,7 @@ class ScheduleImportService(
                 val key = course.key ?: CourseKeys.compute(
                     course.code.orEmpty(), course.name.orEmpty(), course.teacher.orEmpty()
                 )
-                val entity = course.toEntity()
+                val entity = course.toEntity(finalCategories.getValue(key))
                 val hits = courseRepo.getByDedupeKey(key)
                 // **SNAPSHOT 的课表部分按 MERGE 处理**，理由与它对待办的态度不同：
                 // 课程是有服务端这个权威源的，整表替换一份本地快照会毁掉刚同步来的
@@ -560,6 +587,73 @@ class ScheduleImportService(
         updatedAt = updatedAt ?: 0L
     )
 
+    /**
+     * 本机每门课的类别，`自然键 → 该键下的所有类别`。
+     *
+     * **一个键可能对应多条**：`dedupeKey` 是**非唯一**索引，历史数据里同一门课
+     * 真的可能有两条。所以这里收的是**列表**而不是单个值 ——
+     * 收单个值就得用 `associate` 挑一条，而挑哪一条都是猜，
+     * 猜错就是**静默丢掉另一个类别**。
+     *
+     * 键用 [naturalKey]：老数据的 `dedupeKey` 可能为空，那种行按
+     * `CourseKeys.compute(code, name, teacher)` 现算 —— 拿空串去匹配的话
+     * 这门课认不出来，类别与待办一起丢。
+     */
+    private suspend fun captureLocalCategories(): Map<String, List<String>> =
+        courseRepo.getAllCoursesOnce().toLocalCategories()
+
+    private fun List<CourseEntity>.toLocalCategories(): Map<String, List<String>> =
+        groupBy { it.naturalKey() }.mapValues { (_, rows) -> rows.map { it.category } }
+
+    /**
+     * 算出每门课最终落库的类别，`自然键 → 最终类别`。
+     *
+     * 优先级见 [CourseCategoryResolver]：文件里明确给了就用文件的，
+     * 否则继承本机的，两者都没有才按课程名推断。
+     *
+     * 本机同一门课有**多个互不相同的类别**时抛 [CourseCategoryConflictException] ——
+     * 继承哪一个都是猜，而猜错就是静默丢数据。
+     */
+    private fun resolveCategories(
+        courses: List<CourseBundle>,
+        localCategories: Map<String, List<String>>
+    ): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        for (course in courses) {
+            val key = course.key ?: CourseKeys.compute(
+                course.code.orEmpty(), course.name.orEmpty(), course.teacher.orEmpty()
+            )
+            when (val r = CourseCategoryResolver.resolve(
+                course.category, localCategories[key].orEmpty(), course.name
+            )) {
+                is CourseCategoryResolver.Result.Resolved -> out[key] = r.category
+                is CourseCategoryResolver.Result.Conflict ->
+                    throw CourseCategoryConflictException(
+                        courseName = course.name.orEmpty(),
+                        naturalKey = key,
+                        categories = r.categories
+                    )
+            }
+        }
+        return out
+    }
+
+    /**
+     * 这份文件会不会因为「类别冲突」而被拒绝？会的话给出那句话。
+     *
+     * 预览与提交走**同一个**判定（都落在 [resolveCategories] 上），
+     * 所以预览里说的「导不进来」与提交时的结果不会互相矛盾。
+     */
+    private fun categoryConflictMessage(
+        courses: List<CourseBundle>,
+        localCategories: Map<String, List<String>>
+    ): String? = try {
+        resolveCategories(courses, localCategories)
+        null
+    } catch (e: CourseCategoryConflictException) {
+        e.message
+    }
+
     /** 文件里的一条待办 → 库里的实体。课程的三个快照字段从本机课程行取。 */
     private fun TaskBundle.toEntity(courseId: Long, course: CourseEntity?): TaskEntity = TaskEntity(
         id = 0L,
@@ -804,13 +898,20 @@ class ScheduleImportService(
     }
 
 
-    private fun CourseBundle.toEntity(): CourseEntity {
+    /**
+     * 文件里的一门课 → 库里的实体。
+     *
+     * @param finalCategory 这一门课**最终**的类别（已经按
+     *        「文件 → 本机 → 推断」的优先级算好了，见 [resolveCategories]）。
+     *        它必须在写库之前就定下来：新建课程要按它初始化类别规则。
+     */
+    private fun CourseBundle.toEntity(finalCategory: String): CourseEntity {
         val a = automation
         return CourseEntity(
             id = 0L,
             name = name.orEmpty(),
             code = code.orEmpty(),
-            category = category.orEmpty(),
+            category = finalCategory,
             teacher = teacher.orEmpty(),
             classroom = classroom.orEmpty(),
             colorHex = colorHex.orEmpty(),

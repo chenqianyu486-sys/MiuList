@@ -534,7 +534,7 @@ class SnapshotTransferRobolectricTest {
         assertEquals("库里不该多出待办", 0, a.taskRepository.countTasks())
         assertTrue(
             "必须报出来：${preview.preview.issues}",
-            preview.preview.issues.any { it.detail.contains("同步身份") }
+            preview.preview.issues.any { it.detail.contains("缺少编号") }
         )
     }
 

@@ -2,6 +2,9 @@ package com.example.data.transfer
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.codec.JsonScheduleCodec
+import com.example.data.codec.ScheduleBundle
+import com.example.data.codec.TimetableBlockBundle
 import com.example.data.di.AppContainer
 import com.example.data.local.CourseEntity
 import com.example.data.local.CourseSlotEntity
@@ -9,6 +12,8 @@ import com.example.data.local.CourseSlotWeekEntity
 import com.example.data.local.TaskEntity
 import com.example.data.model.CategoryRule
 import com.example.data.model.SlotWithWeeks
+import com.example.data.source.zju.ZjuClassRow
+import com.example.data.source.zju.ZjuScheduleMapper
 import com.example.data.timetable.PeriodTable
 import com.example.data.calendar.EpochDays
 import kotlinx.coroutines.runBlocking
@@ -83,10 +88,11 @@ class ScheduleTransferRobolectricTest {
         teacher: String = "王教授",
         weeks: Set<Int> = emptySet(),
         colorHex: String = "#93C5FD",
-        note: String = ""
+        note: String = "",
+        category: String = "公共基础"
     ): Long = c.courseRepository.saveCourseWithSlots(
         CourseEntity(
-            name = name, code = code, category = "公共基础", teacher = teacher,
+            name = name, code = code, category = category, teacher = teacher,
             classroom = "教二-301", colorHex = colorHex, note = note
         ),
         listOf(
@@ -101,7 +107,8 @@ class ScheduleTransferRobolectricTest {
         c: AppContainer,
         courseId: Long,
         title: String,
-        courseName: String = "高等数学"
+        courseName: String = "高等数学",
+        isCompleted: Boolean = false
     ) {
         val unlinked = courseId == TaskEntity.UNLINKED_COURSE_ID
         c.database.taskDao().insertTask(
@@ -111,9 +118,36 @@ class ScheduleTransferRobolectricTest {
                 courseCategory = if (unlinked) "" else "公共基础",
                 courseColorHex = if (unlinked) TaskEntity.UNLINKED_COLOR_HEX else "#93C5FD",
                 title = title, taskType = "POST_CLASS",
-                dueDateTimestamp = 1L, dueDateString = "2026-10-12 23:59"
+                dueDateTimestamp = 1L, dueDateString = "2026-10-12 23:59",
+                isCompleted = isCompleted
             )
         )
+    }
+
+    /**
+     * 一门课在文件里的 JSON。**`categoryFragment` 是原样拼进 JSON 的片段**，
+     * 所以「没有这一项」「写了 null」「写了空串」「写了纯空白」四种形态都能造出来。
+     *
+     * @param categoryFragment 空串 = 文件里**没有**「类别」这一项 ——
+     *        教务同步产出的文档就是这种形状（教务网根本没有这个字段）。
+     */
+    private fun courseJsonRaw(
+        name: String,
+        code: String = "",
+        teacher: String = "王教授",
+        categoryFragment: String = "",
+        weeks: String = "",
+        classroom: String = "教二-301"
+    ): String {
+        val cat = if (categoryFragment.isEmpty()) "" else """, "category": $categoryFragment"""
+        return """
+        {
+          "name": "$name", "code": "$code", "teacher": "$teacher"$cat,
+          "classroom": "$classroom", "colorHex": "#93C5FD",
+          "slots": [ { "dayOfWeek": 1, "startPeriod": 1, "endPeriod": 2,
+            "classroom": "$classroom" $weeks } ]
+        }
+    """.trimIndent()
     }
 
     /**
@@ -855,5 +889,503 @@ private fun document(
 
         val json = c.exportService.exportJson()
         assertTrue("手改出来的单双周也要导出：$json", json.contains("[2,4]"))
+    }
+
+    // ---------------------------------------------------------------- 课程类别
+
+    /**
+     * **这一节守的是「同步不能把用户手动整理过的类别冲掉」。**
+     *
+     * 教务网只给课程名 / 教师 / 教室，**从不提供类别**。于是导入文件里没有
+     * 「类别」这一项，而早先的管线在两处把它补成了默认值：
+     *
+     * - 解析层（`ZjuScheduleMapper`）按课程名猜一个；
+     * - 校验层（`ScheduleBundleValidator`）在文件没给时再猜一个。
+     *
+     * 猜出来的值与本机真实的类别长得一模一样（「公共基础」），于是
+     * 「来源没提供类别」与「用户就想要公共基础」这两种截然不同的情况
+     * 被压成了同一个值 —— 用户手动改成的「专业必修」在一次同步后就没了。
+     *
+     * 修法：**缺失就是缺失**，默认类别推迟到落库那一刻再推断，
+     * 并且落库那一刻先认本机已有的类别。
+     */
+
+    @Test
+    fun `replace keeps the category the user set when the file does not carry one`() = runBlocking {
+        val c = container()
+        reset(c)
+        seedCourse(c, "数据结构", code = "CS201", category = "专业必修")
+
+        // 这份文件就是教务同步产出的形状：课程对得上，但**没有 category 这一项**。
+        val preview = c.importService.preview(
+            document(courseJsonRaw("数据结构", code = "CS201")),
+            ImportStrategy.REPLACE
+        )
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "数据结构" }
+        assertEquals("用户手动整理过的类别不能被同步冲掉", "专业必修", course.category)
+    }
+
+    @Test
+    fun `merge keeps the local category when the file does not carry one`() = runBlocking {
+        val c = container()
+        reset(c)
+        seedCourse(c, "数据结构", code = "CS201", category = "专业必修")
+
+        val preview = c.importService.preview(
+            document(courseJsonRaw("数据结构", code = "CS201")),
+            ImportStrategy.MERGE
+        )
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "数据结构" }
+        assertEquals("专业必修", course.category)
+    }
+
+    @Test
+    fun `snapshot keeps the local category when the file does not carry one`() = runBlocking {
+        val c = container()
+        reset(c)
+        seedCourse(c, "数据结构", code = "CS201", category = "专业必修")
+
+        // SNAPSHOT 的课表部分按 MERGE 处理，课程这一段的口径与 MERGE 相同。
+        val preview = c.importService.preview(
+            document(courseJsonRaw("数据结构", code = "CS201")),
+            ImportStrategy.SNAPSHOT
+        )
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "数据结构" }
+        assertEquals("专业必修", course.category)
+    }
+
+    @Test
+    fun `a category written in the file wins over the local one`() = runBlocking {
+        val c = container()
+        reset(c)
+        seedCourse(c, "数据结构", code = "CS201", category = "专业必修")
+
+        val preview = c.importService.preview(
+            document(courseJsonRaw("数据结构", code = "CS201", categoryFragment = "\"通识公共\"")),
+            ImportStrategy.REPLACE
+        )
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "数据结构" }
+        assertEquals("文件里明确写了类别就以文件为准", "通识公共", course.category)
+    }
+
+    @Test
+    fun `an explicit 公共基础 is not mistaken for a missing category`() = runBlocking {
+        // 「公共基础」既可能是默认值，也可能是用户认真选的结果。
+        // 两种情况长得一模一样 —— 所以**不能**拿「是不是默认值」当「有没有提供」的判据，
+        // 只能拿「有没有这一项」当判据。
+        val c = container()
+        reset(c)
+        seedCourse(c, "数据结构", code = "CS201", category = "专业必修")
+
+        val preview = c.importService.preview(
+            document(courseJsonRaw("数据结构", code = "CS201", categoryFragment = "\"公共基础\"")),
+            ImportStrategy.REPLACE
+        )
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "数据结构" }
+        assertEquals("文件明确写了「公共基础」，那就是用户的选择", "公共基础", course.category)
+    }
+
+    @Test
+    fun `a missing category counts as missing in all four shapes`() = runBlocking {
+        val c = container()
+        val forms = listOf(
+            "这一项整个没有" to "",
+            "写了 null" to "null",
+            "写了空串" to "\"\"",
+            "写了纯空白" to "\"   \""
+        )
+        for ((label, fragment) in forms) {
+            reset(c)
+            seedCourse(c, "数据结构", code = "CS201", category = "专业必修")
+
+            val preview = c.importService.preview(
+                document(courseJsonRaw("数据结构", code = "CS201", categoryFragment = fragment)),
+                ImportStrategy.REPLACE
+            )
+            assertTrue("$label: $preview", preview is PreviewResult.Ready)
+            c.importService.commit(preview as PreviewResult.Ready)
+
+            val course = c.courseRepository.getAllCoursesOnce().single { it.name == "数据结构" }
+            assertEquals("$label 应当按缺分类处理", "专业必修", course.category)
+        }
+    }
+
+    @Test
+    fun `a brand new course still falls back to the inferred default`() = runBlocking {
+        // 缺分类只对「本机已经有这门课」才有意义。新课没有可继承的类别，
+        // 仍然按课程名推断 —— 推断从解析层挪到了落库层，**语义不能变**。
+        val c = container()
+        reset(c)
+
+        val preview = c.importService.preview(
+            document(
+                courseJsonRaw("高等数学", code = "MATH101") + "," +
+                    courseJsonRaw("大学物理实验", code = "PHY101")
+            ),
+            ImportStrategy.REPLACE
+        )
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val courses = c.courseRepository.getAllCoursesOnce()
+        assertEquals("公共基础", courses.first { it.name == "高等数学" }.category)
+        assertEquals("实验实践", courses.first { it.name == "大学物理实验" }.category)
+    }
+
+    @Test
+    fun `two courses with the same name but different teachers keep their own categories`() = runBlocking {
+        val c = container()
+        reset(c)
+        seedCourse(c, "线性代数", code = "MATH201", teacher = "王教授", category = "专业必修")
+        seedCourse(c, "线性代数", code = "MATH201", teacher = "李教授", category = "公共基础")
+
+        val preview = c.importService.preview(
+            document(
+                courseJsonRaw("线性代数", code = "MATH201", teacher = "王教授") + "," +
+                    courseJsonRaw("线性代数", code = "MATH201", teacher = "李教授")
+            ),
+            ImportStrategy.REPLACE
+        )
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val courses = c.courseRepository.getAllCoursesOnce().associateBy { it.teacher }
+        assertEquals("同名不同师的课不能串类别", "专业必修", courses.getValue("王教授").category)
+        assertEquals("同名不同师的课不能串类别", "公共基础", courses.getValue("李教授").category)
+    }
+
+    @Test
+    fun `a history course with an empty dedupe key still inherits its category`() = runBlocking {
+        val c = container()
+        reset(c)
+        // MIGRATION_3_4 补不上的老数据就是 dedupeKey 为空的样子。
+        // 拿空串当键去匹配 = 这门课认不出来 = 类别与待办一起丢。
+        c.database.courseDao().insertCourse(
+            CourseEntity(
+                name = "数据结构", code = "CS201", category = "专业必修", teacher = "王教授",
+                classroom = "教二-301", colorHex = "#93C5FD", dedupeKey = ""
+            )
+        )
+
+        val preview = c.importService.preview(
+            document(courseJsonRaw("数据结构", code = "CS201")),
+            ImportStrategy.REPLACE
+        )
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "数据结构" }
+        assertEquals("空 dedupeKey 的老课程也要认出来", "专业必修", course.category)
+    }
+
+    @Test
+    fun `the category changed after the preview is the one that gets kept`() = runBlocking {
+        val c = container()
+        reset(c)
+        val id = seedCourse(c, "数据结构", code = "CS201", category = "公共基础")
+
+        val preview = c.importService.preview(
+            document(courseJsonRaw("数据结构", code = "CS201")),
+            ImportStrategy.REPLACE
+        ) as PreviewResult.Ready
+
+        // 预览之后用户又改了一次类别 —— 提交时必须以**提交那一刻**的数据为准，
+        // 而不是预览时缓存的那一份。
+        c.courseRepository.updateCourseCategory(id, "专业必修")
+        c.importService.commit(preview)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "数据结构" }
+        assertEquals("提交时要用最新的本机类别", "专业必修", course.category)
+    }
+
+    @Test
+    fun `syncing twice keeps the category stable and still updates the slots`() = runBlocking {
+        val c = container()
+        reset(c)
+        seedCourse(c, "数据结构", code = "CS201", category = "专业必修")
+        val text = document(courseJsonRaw("数据结构", code = "CS201", weeks = """, "weeks": [1]"""))
+
+        c.importService.commit(c.importService.preview(text, ImportStrategy.REPLACE) as PreviewResult.Ready)
+        c.importService.commit(c.importService.preview(text, ImportStrategy.REPLACE) as PreviewResult.Ready)
+
+        assertEquals(1, c.courseRepository.countCourses())
+        val course = c.courseRepository.getAllCoursesOnce().single()
+        assertEquals("连着同步两次，类别不能飘", "专业必修", course.category)
+
+        // 课时、教室、周次仍然要正常更新 —— 修类别不能修坏别的
+        val slots = c.courseRepository.getSlotsForCourseSync(course.id)
+        assertEquals(1, slots.size)
+        assertEquals("教二-301", slots.first().classroom)
+        assertEquals(setOf(1), c.courseRepository.getWeeksBySlotIdOnce()[slots.first().id])
+    }
+
+    @Test
+    fun `replace keeps the tasks and the kept course's task follows the final category`() = runBlocking {
+        val c = container()
+        reset(c)
+        val id = seedCourse(c, "数据结构", code = "CS201", category = "专业必修")
+        seedTask(c, id, "第 5 周作业", "数据结构", isCompleted = true)
+
+        val preview = c.importService.preview(
+            document(courseJsonRaw("数据结构", code = "CS201")),
+            ImportStrategy.REPLACE
+        ) as PreviewResult.Ready
+        val report = c.importService.commit(preview)
+
+        assertEquals("待办一条都不能少", 1, c.database.taskDao().countTasks())
+        val task = c.database.taskDao().getAllTasksOnce().single()
+        assertEquals("第 5 周作业", task.title)
+        assertTrue("勾选状态不能被导入改掉", task.isCompleted)
+        assertEquals(1, report.tasksRelinked)
+        assertEquals(0, report.tasksUnlinked)
+        // 待办卡上的类别是**课程类别**的快照：课程最终是「专业必修」，快照就跟着它。
+        assertEquals("专业必修", task.courseCategory)
+    }
+
+    @Test
+    fun `two local courses with the same key but different categories refuse the import`() = runBlocking {
+        val c = container()
+        reset(c)
+        // 同一个自然键下两条本地课程，类别还不一样 —— 继承哪一个都是猜。
+        seedCourse(c, "数据结构", code = "CS201", teacher = "王教授", category = "专业必修")
+        seedCourse(c, "数据结构", code = "CS201", teacher = "王教授", category = "公共基础")
+
+        val preview = c.importService.preview(
+            document(courseJsonRaw("数据结构", code = "CS201")),
+            ImportStrategy.REPLACE
+        )
+        assertTrue("有冲突就不该给出可导入的预览：$preview", preview is PreviewResult.Failed)
+        assertEquals("数据一条都不能动", 2, c.courseRepository.countCourses())
+    }
+
+    @Test
+    fun `a conflict that appears after the preview stops the commit before anything is deleted`() = runBlocking {
+        val c = container()
+        reset(c)
+        seedCourse(c, "数据结构", code = "CS201", teacher = "王教授", category = "专业必修")
+
+        val preview = c.importService.preview(
+            document(courseJsonRaw("数据结构", code = "CS201")),
+            ImportStrategy.REPLACE
+        ) as PreviewResult.Ready
+
+        // 预览之后本机又出现了一条同键但类别不同的课
+        seedCourse(c, "数据结构", code = "CS201", teacher = "王教授", category = "公共基础")
+
+        var thrown: Exception? = null
+        try {
+            c.importService.commit(preview)
+        } catch (e: Exception) {
+            thrown = e
+        }
+        assertNotNull("冲突时必须拒绝提交", thrown)
+
+        val courses = c.courseRepository.getAllCoursesOnce()
+        assertEquals("拒绝提交时一门课都不能少", 2, courses.size)
+        assertEquals(
+            setOf("专业必修", "公共基础"),
+            courses.map { it.category }.toSet()
+        )
+    }
+
+    @Test
+    fun `a failure in the middle of the transaction rolls the courses and their categories back`() = runBlocking {
+        val c = container()
+        reset(c)
+        seedCourse(c, "数据结构", code = "CS201", category = "专业必修")
+
+        // 造一个「写到一半炸掉」：这门课一落库就抛。
+        // 用触发器而不是 mock —— 要验的正是**真事务**的回滚。
+        val db = c.database.openHelper.writableDatabase
+        db.execSQL("DROP TRIGGER IF EXISTS fail_on_boom_course")
+        db.execSQL(
+            """
+            CREATE TRIGGER fail_on_boom_course BEFORE INSERT ON courses
+            WHEN NEW.name = 'BOOM'
+            BEGIN SELECT RAISE(ABORT, 'boom'); END
+            """.trimIndent()
+        )
+        try {
+            val preview = c.importService.preview(
+                document(
+                    courseJsonRaw("BOOM", code = "BOOM1") + "," +
+                        courseJsonRaw("数据结构", code = "CS201")
+                ),
+                ImportStrategy.REPLACE
+            ) as PreviewResult.Ready
+
+            var thrown: Exception? = null
+            try {
+                c.importService.commit(preview)
+            } catch (e: Exception) {
+                thrown = e
+            }
+            assertNotNull("写入中途失败必须抛出来", thrown)
+
+            val courses = c.courseRepository.getAllCoursesOnce()
+            assertEquals("回滚后课程必须还在", 1, courses.size)
+            assertEquals("回滚后类别也必须还在", "专业必修", courses.single().category)
+        } finally {
+            db.execSQL("DROP TRIGGER IF EXISTS fail_on_boom_course")
+        }
+    }
+
+    @Test
+    fun `the whole pipeline from the zju mapper keeps the category the user set`() = runBlocking {
+        // 真实管线：解析层 → JSON 编解码 → 校验器 → REPLACE 落库。
+        // 中间**一环都不许**把「来源没给类别」变成一个具体的类别名。
+        val c = container()
+        reset(c)
+        // 教务网那一课的课程代码是「(学年-学期)-课程代码」这一整串，
+        // 本机存的也是同一串 —— 两边对得上，靠的是同一个算法。
+        seedCourse(c, "高等数学", code = "(2026-2027-1)-MATH101", category = "专业必修")
+
+        val rows = ZjuScheduleMapper.toCourses(
+            listOf(
+                ZjuClassRow(
+                    xkkh = "(2026-2027-1)-MATH101-0083261-1",
+                    kcb = "高等数学<br>秋冬{第1-16周|2节/周}<br>王教授<br>教二-301",
+                    xqj = "1", djj = "1", skcd = "2", dsz = "2", xxq = "秋冬", sfqd = "1"
+                )
+            ),
+            totalWeeks = 16, termCode = 0
+        )
+        assertNull("教务网没有类别这一项，解析层不能替它编一个", rows.courses.first().category)
+
+        val json = JsonScheduleCodec().encode(
+            ScheduleBundle(timetable = TimetableBlockBundle(courses = rows.courses))
+        )
+        assertTrue("编码不该凭空补出类别：$json", !json.contains("公共基础"))
+
+        val preview = c.importService.preview(json, ImportStrategy.REPLACE)
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "高等数学" }
+        assertEquals("专业必修", course.category)
+    }
+
+    // ---------------------------------------------------------------- 冲突的两面
+
+    @Test
+    fun `two local courses with the same key and the same category are not a conflict`() = runBlocking {
+        val c = container()
+        reset(c)
+        // 同一个自然键下两条本地课程，类别**一致** —— 继承那个值没有歧义，
+        // 不该被当成冲突挡在门外。
+        //
+        // 这一条与下面那条「类别不同就拒绝」是一对：只有**不一致**才是冲突。
+        seedCourse(c, "数据结构", code = "CS201", teacher = "王教授", category = "专业必修")
+        seedCourse(c, "数据结构", code = "CS201", teacher = "王教授", category = "专业必修")
+
+        val preview = c.importService.preview(
+            document(courseJsonRaw("数据结构", code = "CS201")),
+            ImportStrategy.REPLACE
+        )
+        assertTrue("类别一致不该报冲突：$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "数据结构" }
+        assertEquals("专业必修", course.category)
+    }
+
+    @Test
+    fun `a category in the file wins even when the local rows disagree`() = runBlocking {
+        val c = container()
+        reset(c)
+        // 本机同一个自然键下两条课，类别还不一样。
+        seedCourse(c, "数据结构", code = "CS201", teacher = "王教授", category = "专业必修")
+        seedCourse(c, "数据结构", code = "CS201", teacher = "王教授", category = "公共基础")
+
+        // 但**文件里明确写了类别**，就不需要继承本机的了 ——
+        // 本机有几条、类别分别是什么，都与这次导入无关，不该挡下来。
+        val preview = c.importService.preview(
+            document(courseJsonRaw("数据结构", code = "CS201", categoryFragment = "\"通识公共\"")),
+            ImportStrategy.REPLACE
+        )
+        assertTrue("文件给了类别就不该被本机的冲突挡住：$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "数据结构" }
+        assertEquals("以文件里的类别为准", "通识公共", course.category)
+    }
+
+    @Test
+    fun `a local category that is blank is not inherited`() = runBlocking {
+        val c = container()
+        reset(c)
+        // 本机这门课的类别是空的（老数据，或用户自己清过）——
+        // 空值**不是**一个可继承的类别，得当成「本机也没有类别」，
+        // 于是走推断，而不是把空串写回库里。
+        seedCourse(c, "数据结构", code = "CS201", category = "")
+        seedCourse(c, "高等数学", code = "MATH101", category = "   ")
+
+        val preview = c.importService.preview(
+            document(
+                courseJsonRaw("数据结构", code = "CS201") + "," +
+                    courseJsonRaw("高等数学", code = "MATH101")
+            ),
+            ImportStrategy.REPLACE
+        )
+        assertTrue("$preview", preview is PreviewResult.Ready)
+        c.importService.commit(preview as PreviewResult.Ready)
+
+        val courses = c.courseRepository.getAllCoursesOnce().associateBy { it.name }
+        assertEquals("空类别不是可继承的值", "公共基础", courses.getValue("数据结构").category)
+        assertEquals("纯空白类别不是可继承的值", "公共基础", courses.getValue("高等数学").category)
+    }
+
+    @Test
+    fun `replace still updates the slots the classroom and the weeks`() = runBlocking {
+        val c = container()
+        reset(c)
+        seedCourse(c, "数据结构", code = "CS201", category = "专业必修")
+
+        // 第一遍：老教室、第 1 周
+        c.importService.commit(
+            c.importService.preview(
+                document(courseJsonRaw("数据结构", code = "CS201", weeks = """, "weeks": [1]""")),
+                ImportStrategy.REPLACE
+            ) as PreviewResult.Ready
+        )
+
+        // 第二遍：教务网改了排课 —— 换了教室，周次也换了
+        c.importService.commit(
+            c.importService.preview(
+                document(
+                    courseJsonRaw(
+                        "数据结构", code = "CS201", classroom = "教三-402",
+                        weeks = """, "weeks": [2,4]"""
+                    )
+                ),
+                ImportStrategy.REPLACE
+            ) as PreviewResult.Ready
+        )
+
+        val course = c.courseRepository.getAllCoursesOnce().single()
+        assertEquals("修类别不能修坏别的：类别仍是用户整理过的那个", "专业必修", course.category)
+        val slots = c.courseRepository.getSlotsForCourseSync(course.id)
+        assertEquals(1, slots.size)
+        assertEquals("教室要跟着文件更新", "教三-402", slots.single().classroom)
+        assertEquals(
+            "周次要跟着文件更新",
+            setOf(2, 4),
+            c.courseRepository.getWeeksBySlotIdOnce()[slots.single().id]
+        )
     }
 }

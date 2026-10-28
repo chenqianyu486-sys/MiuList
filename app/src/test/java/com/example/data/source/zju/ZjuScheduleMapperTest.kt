@@ -361,37 +361,43 @@ class ZjuScheduleMapperTest {
     // ---------------------------------------------------------------- 类别判定
 
     @Test
-    fun `新导入的课默认落公共基础`() {
-        // 教务网不给类别，默认值不该替用户断言「这是专业课」。
+    fun `解析层不给课程类别`() {
+        // 教务网没有「类别」这个字段。解析层**不能替它编一个**：
+        // 编出来的「公共基础」与用户认真选出来的「公共基础」长得一模一样，
+        // 于是「来源没提供类别」这件事就消失了 —— 用户手动改成「专业必修」
+        // 的课在一次同步后就被冲掉了。
+        //
+        // 缺失的语义必须一路传下去；默认类别改在导入落库时推断
+        // （见 ScheduleTransferRobolectricTest 里「新课程」的用例）。
         val out = ZjuScheduleMapper.toCourses(listOf(row(name = "高等数学")), totalWeeks = 16, termCode = 0)
-        assertEquals("公共基础", out.courses.first().category)
+        assertNull(out.courses.first().category)
     }
 
     @Test
-    fun `名字带实验的课归入实验实践`() {
+    fun `名字带实验的课在解析层也不给类别`() {
         val out = ZjuScheduleMapper.toCourses(
             listOf(row(name = "大学物理实验")), totalWeeks = 16, termCode = 0
         )
-        assertEquals("实验实践", out.courses.first().category)
+        assertNull(out.courses.first().category)
     }
 
     @Test
-    fun `实训 实践 实习 同样归入实验实践`() {
+    fun `实训 实践 实习 在解析层同样不给类别`() {
         listOf("程序设计实训", "工程实践", "生产实习").forEach { name ->
             val out = ZjuScheduleMapper.toCourses(listOf(row(name = name)), totalWeeks = 16, termCode = 0)
-            assertEquals("$name 应该进实验实践", "实验实践", out.courses.first().category)
+            assertNull("$name 在解析层不该有类别", out.courses.first().category)
         }
     }
 
     @Test
-    fun `解析层只改类别 不替用户打开实验报告开关`() {
+    fun `解析层不替用户打开实验报告开关`() {
         // 实验报告由「实验实践」的类别规则兜底。解析层写死 true 等于凭空
         // 决定这门课要产出多少条待办 —— 同名带「实验」的课未必真交实验报告。
         val out = ZjuScheduleMapper.toCourses(
             listOf(row(name = "大学物理实验")), totalWeeks = 16, termCode = 0
         )
         val c = out.courses.first()
-        assertEquals("实验实践", c.category)
+        assertNull(c.category)
         assertEquals(false, c.automation?.labReport)
     }
 

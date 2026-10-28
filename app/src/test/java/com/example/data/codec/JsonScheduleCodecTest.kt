@@ -49,7 +49,7 @@ class JsonScheduleCodecTest {
     @Test
     fun `malformed json is rejected with a readable message`() {
         val msg = failure("""{ "timetable": [ """)
-        assertTrue("错误信息要能指出这是 JSON 语法问题：$msg", msg.contains("JSON"))
+        assertTrue("错误信息要能说明文件读取失败：$msg", msg.contains("文件"))
     }
 
     @Test
@@ -449,5 +449,45 @@ class JsonScheduleCodecTest {
         val after = decode(codec.encode(ScheduleBundle()))
         assertNull(after.timetable)
         assertNull(after.calendar)
+    }
+
+    // ---------------------------------------------------------------- 类别
+
+    @Test
+    fun `a missing category stays missing through the codec`() {
+        // 「来源没提供类别」必须原样传下去。codec 这一层要是替它补一个默认值，
+        // 「缺失」与「公共基础」就再也分不开了 —— 而教务网的文件**永远**不带类别，
+        // 于是每次同步都会把用户手动整理过的类别冲掉。
+        val original = ScheduleBundle(
+            timetable = TimetableBlockBundle(
+                courses = listOf(CourseBundle(name = "高等数学", category = null))
+            )
+        )
+        val json = codec.encode(original)
+        assertFalse("编码不该凭空补出类别：$json", json.contains("公共基础"))
+
+        val after = decode(json)
+        assertNull(after.timetable!!.courses.first().category)
+    }
+
+    @Test
+    fun `a category the user set survives the round trip`() {
+        // 反向也要守住：App 自己导出的备份必须带着数据库里的实际类别，
+        // 否则换机备份带过去的课表就没有类别了。
+        val original = ScheduleBundle(
+            timetable = TimetableBlockBundle(
+                courses = listOf(CourseBundle(name = "高等数学", category = "专业必修"))
+            )
+        )
+        val json = codec.encode(original)
+        assertTrue("导出的文件要带着类别：$json", json.contains("专业必修"))
+        assertEquals("专业必修", decode(json).timetable!!.courses.first().category)
+    }
+
+    @Test
+    fun `an explicit empty category is carried as it is`() {
+        // codec 原样保留空串；随后的 Validator 会把它与 null、纯空白一样归为缺类别。
+        val json = """{"schemaVersion":4,"timetable":{"courses":[{"name":"甲","category":""}]}}"""
+        assertEquals("", decode(json).timetable!!.courses.first().category)
     }
 }

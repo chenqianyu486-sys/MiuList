@@ -8,7 +8,6 @@ import com.example.data.codec.SlotBundle
 import com.example.data.codec.TermRefBundle
 import com.example.data.codec.TimetableBlockBundle
 import com.example.data.model.COURSE_PALETTE
-import com.example.data.model.CourseCategory
 import com.example.data.model.CourseKeys
 import com.squareup.moshi.JsonClass
 
@@ -125,9 +124,20 @@ object ZjuScheduleMapper {
                     name = p.name.orEmpty(),
                     code = p.code.orEmpty(),
                     teacher = p.teacher.orEmpty(),
-                    // 教务网不给类别，只能按课程名判定：名字带「实验/实训/实践/实习」
-                    // 的进「实验实践」，其余一律落默认类别（公共基础）。
-                    category = CourseCategory.classifyOnImport(p.name),
+                    // 教务网**没有「类别」这个字段**，所以这里给 null（= 来源没提供）。
+                    //
+                    // 早先这里按课程名猜一个（「实验/实训/实践/实习」→ 实验实践，
+                    // 其余 → 公共基础）。那个猜测有两个问题：
+                    //
+                    // 1. 它把「来源没提供类别」与「这门课就是公共基础」压成了同一个值，
+                    //    于是用户手动改成的「专业必修」在一次同步后就没了 ——
+                    //    而界面上看不出任何异常，因为猜出来的值本来就长得像默认值。
+                    // 2. 猜出来的类别会在落库时**盖掉本机真正的类别**，
+                    //    而正确做法是先认本机已有的类别，实在没有才推断。
+                    //
+                    // 推断挪到了导入提交那一层（见 `CourseCategoryResolver`），
+                    // 那里能先看本机有没有这门课。
+                    category = null,
                     // 教务网不给课程颜色；按出现顺序从调色板取，保证同一门课每次抓都同色
                     colorHex = null,
                     automation = AutomationBundle(

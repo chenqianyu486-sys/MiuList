@@ -58,8 +58,8 @@ class JsonScheduleCodec : ScheduleCodec {
             val envelope = moshi.adapter(DesktopSnapshotEnvelope::class.java).fromJson(text)
             envelope?.document ?: adapter.fromJson(text)
         } catch (e: Exception) {
-            return DecodeResult.Failure("无法解析为课表 JSON：${e.message ?: e::class.java.simpleName}")
-        } ?: return DecodeResult.Failure("文件内容不是合法的课表 JSON 对象")
+            return DecodeResult.Failure("无法读取这个文件，可能不是有效的课表备份。")
+        } ?: return DecodeResult.Failure("这个文件里没有找到课表数据。")
 
         val version = dto.schemaVersion ?: SCHEMA_VERSION
         if (version > SCHEMA_VERSION) {
@@ -213,6 +213,17 @@ class JsonScheduleCodec : ScheduleCodec {
         courses = courses.orEmpty().map { it.toCourseBundle() }
     )
 
+    /**
+     * 文件里的一门课 → Bundle。
+     *
+     * **类别是原样搬过去的**：文件里没有这一项就是 null，空串就是空串。
+     * 这一层**不许**替来源补默认类别 —— 「来源没提供类别」与
+     * 「类别是公共基础」是两件事，混成一件的话，用户手动整理过的类别
+     * 会在下一次导入/同步时被悄悄冲掉（教务网的文件永远不带类别）。
+     *
+     * 缺类别怎么算，由 [com.example.data.validate.ScheduleBundleValidator]
+     * 与 `CourseCategoryResolver` 决定，不在这一层。
+     */
     private fun CourseDto.toCourseBundle() = CourseBundle(
         key = key,
         name = name,

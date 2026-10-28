@@ -18,7 +18,6 @@ import com.example.data.local.NoClassDayEntity
 import com.example.data.local.ExamEntity
 import com.example.data.local.SemesterEntity
 import com.example.data.model.COURSE_PALETTE
-import com.example.data.model.CourseCategory
 import com.example.data.model.CourseKeys
 import com.example.data.model.isValidHexColor
 import com.example.data.model.formatPeriodRange
@@ -489,7 +488,7 @@ class ScheduleBundleValidator {
                 byKey[key] = normalized
             } else {
                 byKey[key] = existing.copy(slots = existing.slots + normalized.slots)
-                issues += ImportIssue("课程「$name」", "文件中出现两次（自然键 $key），已合并其上课时段")
+                issues += ImportIssue("课程「$name」", "文件中出现两次，已合并其上课时段")
             }
         }
 
@@ -499,7 +498,7 @@ class ScheduleBundleValidator {
                 course.colorHex!!.trim().uppercase()
             } else {
                 if (!course.colorHex.isNullOrBlank()) {
-                    issues += ImportIssue(scope, "颜色 ${course.colorHex} 非法，已改用调色板取色")
+                    issues += ImportIssue(scope, "颜色无法识别，已自动调整")
                 }
                 COURSE_PALETTE[index % COURSE_PALETTE.size]
             }
@@ -509,9 +508,18 @@ class ScheduleBundleValidator {
                 scope,
                 issues
             )
-            // 文档写了类别就照用；没写才按课程名猜（实验课 → 实验实践，其余 → 默认类别）。
+            // 文档写了类别就照用；**没写就保持缺失（null）**。
+            //
+            // 「来源没提供类别」与「类别是默认类别」是**两件事**，早先在这里被
+            // 压成了同一件：文件没给时按课程名猜一个（实验课 → 实验实践，
+            // 其余 → 公共基础）。教务网从不提供类别，于是每次同步都把用户
+            // 手动整理过的类别冲成猜出来的那个 —— 而界面上看不出异常，
+            // 因为猜出来的值本来就长得像默认值。
+            //
+            // 缺失的语义必须一路传下去；默认类别改在**导入提交时**推断
+            // （见 `ScheduleImportService` 与 `CourseCategoryResolver`），
+            // 那里能先看本机有没有这门课、能不能继承本机的类别。
             val category = course.category?.trim()?.takeIf { it.isNotEmpty() }
-                ?: CourseCategory.classifyOnImport(course.name)
             course.copy(
                 colorHex = color,
                 category = category,
@@ -555,22 +563,22 @@ class ScheduleBundleValidator {
                 ExamEntity.KIND_MIDTERM -> ExamEntity.KIND_MIDTERM
                 ExamEntity.KIND_FINAL -> ExamEntity.KIND_FINAL
                 else -> {
-                    issues += ImportIssue(scope, "考试类型 ${e.kind} 无法识别，已按期末考处理")
+                    issues += ImportIssue(scope, "考试类型无法识别，已按期末考处理")
                     ExamEntity.KIND_FINAL
                 }
             }
 
             val startMinute = e.startMinute?.takeIf { it in 0..1439 }
             if (e.startMinute != null && startMinute == null) {
-                issues += ImportIssue(scope, "开考时刻 ${e.startMinute} 越界，已按未知处理")
+                issues += ImportIssue(scope, "开考时间异常，已按未知处理")
             }
             var endMinute = e.endMinute?.takeIf { it in 0..1439 }
             if (e.endMinute != null && endMinute == null) {
-                issues += ImportIssue(scope, "结束时刻 ${e.endMinute} 越界，已按未知处理")
+                issues += ImportIssue(scope, "结束时间异常，已按未知处理")
             }
             if (endMinute == null) endMinute = 0
             if (startMinute != null && endMinute != 0 && endMinute < startMinute) {
-                issues += ImportIssue(scope, "结束时刻早于开考时刻，已按开考时刻处理")
+                issues += ImportIssue(scope, "结束时间早于开考时间，已按开考时间处理")
                 endMinute = startMinute
             }
 
@@ -646,16 +654,16 @@ class ScheduleBundleValidator {
             val dow = s.dayOfWeek
             val sp = s.startPeriod
             if (dow == null || dow !in 1..7) {
-                issues += ImportIssue(scope, "第 ${index + 1} 个时段星期非法，已跳过")
+                issues += ImportIssue(scope, "第 ${index + 1} 个时段的星期无法识别，已跳过")
                 return@forEachIndexed
             }
             if (sp == null || sp !in 1..periodsPerDay) {
-                issues += ImportIssue(scope, "第 ${index + 1} 个时段起始节超出 1–$periodsPerDay，已跳过")
+                issues += ImportIssue(scope, "第 ${index + 1} 个时段超出当天节次范围，已跳过")
                 return@forEachIndexed
             }
             val ep = (s.endPeriod ?: sp).let { if (it > periodsPerDay) periodsPerDay else it }
             if (ep < sp) {
-                issues += ImportIssue(scope, "第 ${index + 1} 个时段结束节早于起始节，已跳过")
+                issues += ImportIssue(scope, "第 ${index + 1} 个时段的结束时间早于开始，已跳过")
                 return@forEachIndexed
             }
             val parsed = WeekSet.parse(s.weeks, totalWeeks)

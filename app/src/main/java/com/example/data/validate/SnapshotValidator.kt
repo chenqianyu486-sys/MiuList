@@ -66,11 +66,11 @@ class SnapshotValidator {
                 continue
             }
             if (!seen.add(uid)) {
-                issues += ImportIssue("待办", "同步身份重复的条目已忽略：${row.title ?: uid}")
+                issues += ImportIssue("待办", "重复的待办已忽略：${row.title ?: "未命名"}")
                 continue
             }
             if (row.title.isNullOrBlank()) {
-                issues += ImportIssue("待办", "没有标题，已忽略：$uid")
+                issues += ImportIssue("待办", "没有标题，已忽略一条待办")
                 continue
             }
             out += normalize(row, uid)
@@ -78,8 +78,7 @@ class SnapshotValidator {
         if (withoutUid > 0) {
             issues += ImportIssue(
                 "待办",
-                "$withoutUid 条待办缺少同步身份，已忽略。" +
-                    "这是升级后尚未补齐的旧数据，在应用里打开一次就会自动补上。"
+                "$withoutUid 条旧待办缺少编号，已忽略。在应用里打开一次就会自动补上。"
             )
         }
         return out
@@ -118,15 +117,15 @@ class SnapshotValidator {
             val label = row.label?.takeIf { it.isNotBlank() }
             when {
                 id == null -> {
-                    issues += ImportIssue("待办分类", "缺少身份，已忽略：${row.label ?: "未命名"}")
+                    issues += ImportIssue("待办分类", "缺少名称，已忽略一条分类")
                     continue
                 }
                 label == null -> {
-                    issues += ImportIssue("待办分类", "没有名称，已忽略：$id")
+                    issues += ImportIssue("待办分类", "没有名称，已忽略一条分类")
                     continue
                 }
                 !seen.add(id) -> {
-                    issues += ImportIssue("待办分类", "身份重复的条目已忽略：$label")
+                    issues += ImportIssue("待办分类", "名称重复的分类已忽略：$label")
                     continue
                 }
             }
@@ -137,7 +136,7 @@ class SnapshotValidator {
             out += if (valid) {
                 row.copy(id = id, label = label)
             } else {
-                issues += ImportIssue("待办分类", "配色无法解析，已退回默认色：$label")
+                issues += ImportIssue("待办分类", "配色无法识别，已使用默认颜色：$label")
                 row.copy(
                     id = id,
                     label = label,
@@ -161,12 +160,12 @@ class SnapshotValidator {
             val courseKey = row.courseKey?.takeIf { it.isNotBlank() }
             val taskType = row.taskType?.takeIf { it.isNotBlank() }
             if (courseKey == null || taskType == null) {
-                issues += ImportIssue("生成规则", "缺少课程或类型，已忽略：${row.taskType ?: "未知"}")
+                issues += ImportIssue("生成规则", "缺少课程或类型，已忽略一条规则")
                 continue
             }
             // 主键就是这两列，重复意味着同一格被写了两次。
             if (!seen.add("$courseKey|$taskType")) {
-                issues += ImportIssue("生成规则", "同一门课同一类型的重复规则已忽略：$taskType")
+                issues += ImportIssue("生成规则", "同一门课同一类型的重复规则已忽略")
                 continue
             }
             out += row.copy(courseKey = courseKey, taskType = taskType)
