@@ -1,5 +1,5 @@
-import { NO_DUE, type Exam, type Snapshot, type Task } from './types';
-import { todayCoursesOf } from './todayCourses';
+import { NO_DUE, type Exam, type Snapshot, type Task } from './types.ts';
+import { todayCoursesOf } from './todayCourses.ts';
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 
@@ -113,6 +113,21 @@ export function sortOpenTasks(tasks: Task[], today: string): Task[] {
 
     return (b.createdAt || 0) - (a.createdAt || 0);
   });
+}
+
+/**
+ * 总览页"全部待办"：从所有任务中筛出未完成的，再按 sortOpenTasks 排序。
+ *
+ * 包括逾期、今天到期、未来到期、没有截止日期的未完成任务。
+ * 已完成任务不会入选。
+ *
+ * **不影响 inTodayList** —— 那个仍然只用于"今天"统计和清单页。
+ */
+export function allOpenTasks(tasks: Task[], today: string): Task[] {
+  return sortOpenTasks(
+    tasks.filter((t) => !t.isCompleted),
+    today,
+  );
 }
 
 export function sortDoneTasks(tasks: Task[]): Task[] {

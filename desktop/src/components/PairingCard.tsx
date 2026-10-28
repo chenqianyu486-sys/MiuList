@@ -93,13 +93,11 @@ export function PairingCard({
           <p>
             {mode === 'scan' ? (
               <>
-                手机相机扫码 → 在 MiuList 里点「允许」。配对方向是手机扫电脑，
-                电脑不需要摄像头 —— <strong>全程只扫这一次码</strong>。
+                手机扫码后，在 MiuList 里点「允许」即可。之后待办会自动同步。
               </>
             ) : (
               <>
-                不用摄像头：电脑已经把配对请求发给手机了，
-                手机上会弹出<strong>一张确认卡</strong>，点「允许」就好。
+                手机上会弹出<strong>一张确认卡</strong>，点「允许」即可。之后待办会自动同步。
               </>
             )}
           </p>
@@ -132,7 +130,7 @@ export function PairingCard({
               <span>配对码</span>
               <strong>{code}</strong>
               <span className="pair-code-hint">
-                {mode === 'scan' ? '手机扫电脑 · 同一 Wi-Fi' : '和手机上显示的一致即可'}
+                {mode === 'scan' ? '手机与电脑在同一 Wi-Fi' : '和手机上显示的一致即可'}
               </span>
             </div>
           ) : (
@@ -147,7 +145,7 @@ export function PairingCard({
           )}
           {!state.secret ? (
             <label className="field pair-passcode">
-              <span>手机上设了同步密码？在这里填同样的 4 位数字</span>
+              <span>同步密码（和手机上一致）</span>
               <input
                 value={passcode}
                 onChange={(event) => {
@@ -173,7 +171,7 @@ export function PairingCard({
               icon={mode === 'scan' ? Smartphone : ScanLine}
               onClick={() => void request(true, mode === 'scan' ? 'link' : 'scan')}
             >
-              {mode === 'scan' ? '不扫码，直接让手机确认' : '改用手机扫码'}
+              {mode === 'scan' ? '改用手机确认' : '改用扫码连接'}
             </Button>
             {onChangeAddress ? (
               <Button variant="ghost" onClick={onChangeAddress}>
@@ -185,7 +183,7 @@ export function PairingCard({
       ) : pair.status === 'requesting' ? (
         <div className="pair-waiting">
           <Spinner size={22} />
-          <p>正在向手机申请配对码…</p>
+          <p>正在准备配对…</p>
         </div>
       ) : pair.status === 'error' || pair.status === 'expired' || pair.status === 'denied' ? (
         <div className="pair-message is-error">
@@ -201,8 +199,8 @@ export function PairingCard({
         <div className="pair-message">
           <QrCode size={20} />
           <div>
-            <p>地址已填好，这台电脑会生成配对码。</p>
-            <p className="pair-sub">配对由手机确认，电脑不需要摄像头。</p>
+            <p>填好地址后，电脑会生成配对码。</p>
+            <p className="pair-sub">在手机上确认即可。</p>
           </div>
         </div>
       )}

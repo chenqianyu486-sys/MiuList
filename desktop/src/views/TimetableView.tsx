@@ -126,7 +126,7 @@ export function TimetableView() {
             <EmptyState
               icon={CalendarDays}
               title="这台电脑还没有周课表"
-              text="课表不会跟着待办一起同步过来。在「同步 → 连接」里点「用手机的课表和考试」搬一份，或导入一份备份文件。"
+              text="课表不会自动同步。到「同步 → 连接」里搬一份，或导入备份。"
               action={
                 <Button variant="primary" icon={ExternalLink} onClick={() => openSync('connection')}>
                   去搬课表
@@ -158,7 +158,7 @@ export function TimetableView() {
             <EmptyState
               icon={CalendarDays}
               title="还没有课程"
-              text="课表是这台电脑上独立的一份：在「同步 → 连接」里用手机的课表搬过来，或导入一份备份文件。"
+              text="课表是独立的：到「同步 → 连接」里搬过来，或导入备份。"
             />
           )}
         </section>

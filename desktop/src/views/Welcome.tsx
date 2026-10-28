@@ -53,7 +53,7 @@ export function Welcome() {
    */
   const connectWith = async (mode: 'scan' | 'link') => {
     if (!normalizeBase(address)) {
-      state.pushToast('地址看起来不对，应该是 http://192.168.x.x:端口', 'error');
+      state.pushToast('地址格式不对，请检查后重试。', 'error');
       return;
     }
     setBusy(true);
@@ -78,7 +78,7 @@ export function Welcome() {
     }
     setAddress(state.base || '');
     addressRef.current?.focus();
-    state.pushToast('剪贴板里没读到地址 —— 在输入框里按 Ctrl+V 粘贴。', 'error');
+    state.pushToast('剪贴板里没有地址，请手动粘贴。', 'error');
   };
 
   const importFile = async (file: File) => {
@@ -88,7 +88,7 @@ export function Welcome() {
 
   const skipSetup = () => {
     state.skipSetup();
-    state.pushToast('已跳过初始配置。需要时在「同步与设置」里连接手机或导入文件。');
+    state.pushToast('已进入应用。需要时可在「同步与设置」里连接手机。');
   };
 
   if (state.base && !state.secret) {
@@ -116,17 +116,13 @@ export function Welcome() {
             <p className="welcome-lead">
               {scanMode ? (
                 <>
-                  用手机相机扫页面上的二维码，在 MiuList 里点「允许」即可 ——
-                  <strong>只扫这一次码</strong>，电脑不需要摄像头。
-                  之后待办自动同步，课表各留一份，
-                  手机不在时这一端仍然能看、能改。
+                  用手机相机扫页面上的二维码，在 MiuList 里点「允许」。
+                  之后待办会自动同步；课表需要手动搬一次。手机不在时，这一端也能看、能改。
                 </>
               ) : (
                 <>
-                  电脑已经把配对请求发给手机了。手机上会弹出<strong>一张确认卡</strong>，
-                  核对上面的配对码后点「允许」即可 —— <strong>全程不用摄像头</strong>。
-                  之后待办自动同步，课表各留一份，
-                  手机不在时这一端仍然能看、能改。
+                  手机上会弹出<strong>一张确认卡</strong>，核对配对码后点「允许」。
+                  之后待办会自动同步；课表需要手动搬一次。手机不在时，这一端也能看、能改。
                 </>
               )}
             </p>
@@ -137,7 +133,7 @@ export function Welcome() {
               </li>
               <li>
                 <span>2</span>
-                {scanMode ? '用手机相机扫电脑上的配对码' : '在手机上核对那 6 位配对码'}
+                {scanMode ? '用手机扫描电脑上的二维码' : '在手机上核对 6 位配对码'}
               </li>
               <li>
                 <span>3</span>
@@ -200,7 +196,7 @@ export function Welcome() {
               <ShieldCheck size={14} /> 数据只在你自己的设备之间流动。
             </p>
             <button type="button" className="welcome-skip-link" onClick={skipSetup}>
-              手机不在身边？先跳过配对，直接进入应用
+              手机不在身边？先进入应用
               <ArrowRight size={14} aria-hidden="true" />
             </button>
             <input
@@ -231,11 +227,10 @@ export function Welcome() {
         <section className="welcome-copy">
           <Brand />
           <div className="welcome-kicker">
-            <span>单文件</span>
-            <span>数据存本机</span>
-            <span>与手机对等</span>
+            <span>打开即用</span>
+            <span>数据留在本机</span>
             <span className="is-accent">
-              <Smartphone size={11} aria-hidden="true" /> 配对：手机扫电脑
+              <Smartphone size={11} aria-hidden="true" /> 与手机同步
             </span>
           </div>
           <h1>
@@ -244,8 +239,8 @@ export function Welcome() {
             带到电脑上。
           </h1>
           <p className="welcome-lead">
-            打开一个网页，浏览器就是你的桌面端。数据留在本机，手机不在也能看、能改；
-            连上手机后待办自动同步，课表则是这台电脑上独立的一份。
+            打开网页就能看课表、清单和考试，手机不在也能改。
+            连上手机后，待办会自动同步。
           </p>
 
           <button type="button" className="scan-tile welcome-scan" onClick={openScanner}>
@@ -254,7 +249,7 @@ export function Welcome() {
             </span>
             <span>
               <strong>让电脑扫手机上的地址码</strong>
-              <em>省得手打地址，但这样整个流程要扫两次码</em>
+              <em>自动填入手机地址</em>
             </span>
             <span className="scan-tile-arrow">→</span>
           </button>
@@ -281,15 +276,15 @@ export function Welcome() {
           <div className="welcome-pair-choices">
             <button type="button" className="welcome-choice" onClick={() => void connectWith('scan')}>
               <span className="welcome-choice-title">
-                <ScanLine size={16} aria-hidden="true" /> 手机扫电脑的码
+                <ScanLine size={16} aria-hidden="true" /> 手机扫码连接
               </span>
-              <em>填完地址继续 → 电脑出二维码，手机扫一次，手机上点「允许」</em>
+              <em>电脑显示二维码，手机扫一下并点「允许」</em>
             </button>
             <button type="button" className="welcome-choice" onClick={() => void connectWith('link')}>
               <span className="welcome-choice-title">
-                <Smartphone size={16} aria-hidden="true" /> 只填地址，直接连
+                <Smartphone size={16} aria-hidden="true" /> 手机确认连接
               </span>
-              <em>填完地址继续 → 手机弹一张确认卡，点「允许」就好，全程不用摄像头</em>
+              <em>手机弹出确认卡，点「允许」即可</em>
             </button>
           </div>
 
@@ -297,11 +292,11 @@ export function Welcome() {
             type="button"
             className="welcome-skip"
             onClick={skipSetup}
-            aria-label="跳过初始配置，直接开始。电脑端可以独立使用，之后可以在同步与设置里连接手机或导入文件。"
+            aria-label="跳过初始配置，直接开始"
           >
             <span className="welcome-skip-copy">
               <strong>跳过初始配置，直接开始</strong>
-              <em>电脑端可以独立使用；之后在「同步与设置」里连接手机或导入文件</em>
+              <em>之后可以在「同步与设置」里连接手机或导入文件</em>
             </span>
             <span className="welcome-skip-arrow" aria-hidden="true">
               <ArrowRight size={18} />
@@ -310,14 +305,14 @@ export function Welcome() {
 
           <div className="welcome-links">
             <button type="button" onClick={() => inputRef.current?.click()}>
-              <FileJson2 size={15} /> 已有 JSON 文件？导入
+              <FileJson2 size={15} /> 已有备份？导入
             </button>
             <span className="welcome-dot">·</span>
             <span>手机和电脑需在同一个 Wi-Fi</span>
           </div>
 
           <p className="welcome-footnote">
-            <ShieldCheck size={14} /> 推荐 Chrome / Edge；数据保存在本机，不会上传。
+            <ShieldCheck size={14} /> 推荐 Chrome / Edge；数据只保存在本机，不会上传。
           </p>
           <input
             ref={inputRef}
@@ -385,13 +380,13 @@ export function Welcome() {
             </div>
           </div>
           <div className="preview-badge preview-badge--one">
-            <FileJson2 size={14} /> 本机 JSON
+            <FileJson2 size={14} /> 本机备份
           </div>
           <div className="preview-badge preview-badge--two">
-            <Sparkles size={14} /> 毛玻璃
+            <Sparkles size={14} /> 轻透背景
           </div>
           <p className="preview-caption">
-            课表、清单、考试都在同一块玻璃上。
+            课表、清单、考试，一页看完。
             <span>界面预览</span>
           </p>
         </section>

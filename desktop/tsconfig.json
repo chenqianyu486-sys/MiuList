@@ -15,6 +15,7 @@
     "checkJs": false,
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "allowImportingTsExtensions": true,
     "noEmit": true,
     "types": ["vite/client", "node"]
   },

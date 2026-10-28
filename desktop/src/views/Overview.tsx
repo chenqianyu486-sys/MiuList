@@ -12,15 +12,14 @@ import { ExamCard } from '../components/ExamCard';
 import { TaskCard } from '../components/TaskCard';
 import { Button, EmptyState, SectionHead, cx } from '../components/ui';
 import {
+  allOpenTasks,
   examDay,
   examIsToday,
   formatFullDate,
   formatMonthDay,
   greeting,
-  inTodayList,
   isOverdue,
   localToday,
-  sortOpenTasks,
   todayStats,
   weekdayLabel,
   weekdayOf,
@@ -37,9 +36,8 @@ export function Overview() {
   const weekday = snapshot.weekday || weekdayOf(today);
   const stats = todayStats(snapshot);
   const types = snapshot.taskTypes || [];
-  const openTasks = sortOpenTasks(snapshot.tasks || [], today);
-  const todayTasks = openTasks.filter((task) => inTodayList(task, today));
-  const overdueCount = todayTasks.filter((task) => isOverdue(task, today)).length;
+  const allTasks = allOpenTasks(snapshot.tasks || [], today);
+  const overdueCount = allTasks.filter((task) => isOverdue(task, today)).length;
   const todayCourses = todayCoursesOf(snapshot, today);
   const todayExams = (snapshot.exams || []).filter((exam) => examIsToday(exam, today));
   const upcomingExams = (snapshot.exams || [])
@@ -196,17 +194,17 @@ export function Overview() {
         <section className="section">
           <SectionHead
             icon={ListTodo}
-            title="今天的待办"
-            count={todayTasks.length}
+            title="全部待办"
+            count={allTasks.length}
             action={
               <Button variant="ghost" icon={Plus} onClick={() => openTaskEditor()}>
                 新建
               </Button>
             }
           />
-          {todayTasks.length ? (
+          {allTasks.length ? (
             <div className="task-list">
-              {todayTasks.slice(0, 6).map((task) => (
+              {allTasks.map((task) => (
                 <TaskCard
                   key={task.syncUid}
                   task={task}
@@ -220,8 +218,8 @@ export function Overview() {
           ) : (
             <EmptyState
               icon={ListTodo}
-              title="今天没有待办"
-              text="新建一条，或者去清单里看看。"
+              title="暂无待办"
+              text="新建一条，开始规划吧。"
               action={
                 <Button variant="primary" icon={Plus} onClick={() => openTaskEditor()}>
                   新建待办
@@ -229,11 +227,7 @@ export function Overview() {
               }
             />
           )}
-          {openTasks.length > todayTasks.length ? (
-            <button type="button" className="link-btn list-more" onClick={() => setView('tasks')}>
-              还有 {openTasks.length - todayTasks.length} 条待办 <ArrowRight size={14} />
-            </button>
-          ) : null}
+
         </section>
       </div>
 

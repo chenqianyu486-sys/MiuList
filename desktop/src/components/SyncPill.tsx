@@ -26,7 +26,7 @@ export function deriveSyncStatus(
     return { text: '同步失败', kind: 'error', detail: state.syncError };
   }
   if (!state.base || !state.secret || !state.deviceId) {
-    return { text: '本地模式', kind: 'local', detail: '还没有和手机配对，数据只在本机' };
+    return { text: '本地模式', kind: 'local', detail: '还没有连接手机，数据只在本机' };
   }
   if (!state.phoneReachable) {
     return { text: '未连接', kind: 'local', detail: '手机上的网页同步没开，或不在同一网络' };

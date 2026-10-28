@@ -88,8 +88,8 @@ export function Sidebar() {
             <button
               type="button"
               className="side-icon-btn has-file"
-              title="本机备份文件"
-              aria-label="本机备份文件"
+              title="备份文件"
+              aria-label="备份文件"
               onClick={() => openSync('snapshot')}
             >
               <FileJson2 size={18} />
@@ -99,8 +99,8 @@ export function Sidebar() {
           <button
             type="button"
             className="side-icon-btn"
-            title="外观与毛玻璃"
-            aria-label="外观与毛玻璃"
+            title="外观"
+            aria-label="外观"
             onClick={() => openSync('appearance')}
           >
             <Settings2 size={18} />

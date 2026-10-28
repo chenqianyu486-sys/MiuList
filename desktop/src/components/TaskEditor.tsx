@@ -121,7 +121,7 @@ export function TaskEditor() {
         </button>
 
         <p className="field-hint">
-          截止时间按手机所在时区保存；不填就是不设截止时间。编辑已有待办时，修改会覆盖手机上的对应条目。
+          截止时间可以不填；修改会在下次同步时更新手机上的同一条待办。
         </p>
 
         <div className="editor-actions">

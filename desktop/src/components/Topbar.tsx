@@ -37,12 +37,12 @@ export function Topbar() {
         {snapshotActive ? (
           <IconButton
             icon={FileJson2}
-            label="本机备份文件"
+            label="备份文件"
             onClick={() => openSync('snapshot')}
             className="has-file"
           />
         ) : null}
-        <IconButton icon={Palette} label="外观与毛玻璃" onClick={() => openSync('appearance')} />
+        <IconButton icon={Palette} label="外观" onClick={() => openSync('appearance')} />
       </div>
     </header>
   );

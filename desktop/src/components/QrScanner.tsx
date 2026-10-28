@@ -35,7 +35,7 @@ export function QrScanner() {
   const processText = (text: string) => {
     if (handledRef.current) return;
     if (text.startsWith('miulist://pair')) {
-      setMessage('这是手机扫的配对码；电脑这里只扫手机上的地址码。');
+      setMessage('这是配对码，不是手机地址。请扫手机上的地址码。');
       return;
     }
     const base = normalizeBase(text);
@@ -224,8 +224,7 @@ export function QrScanner() {
         </div>
 
         <p className="scanner-footnote">
-          摄像头只用于这一次找手机地址，不会保存画面。走这条路<strong>只扫这一次码</strong> ——
-          扫完地址码，手机上点一下「允许」就够了。
+          摄像头只用于读取地址，不会保存画面。扫完地址码后，在手机上点「允许」即可。
         </p>
       </div>
     </div>,
