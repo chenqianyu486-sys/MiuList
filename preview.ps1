@@ -80,9 +80,9 @@
     from an empty state. Without it, an existing app keeps its data.
 
 .PARAMETER NoAutoRecover
-    Do not uninstall anything by itself. When the app on the device was
-    signed with a different key, the run then fails with a clear message
-    instead of removing the old copy first.
+    Do not print the recovery advice. The script never removes an app from
+    the device by itself; with this switch it also does not suggest doing
+    it either.
 
 .PARAMETER Display
     Which display profile the emulator is put on before the app is
@@ -745,7 +745,8 @@ function Wait-ForPmReady {
 #                that window says "device is still booting". Retrying is the
 #                whole point.
 #   * signature - the app on the device was signed with another key. Nothing
-#                to do with the APK being broken; the old copy has to go.
+#                to do with the APK being broken; it needs an APK signed with
+#                the same key. The old copy is left alone.
 #   * downgrade - the app on the device is newer than this APK.
 #   * fatal    - a broken APK, no space, a split that is missing. Retrying
 #                cannot help, so the run should stop and say why.
@@ -925,36 +926,57 @@ function Remove-App {
     return ($out -match 'Success')
 }
 
-# The emulator can hold the only copy of some hand-made test data (the
-# courses and todos that were set up for the screenshot matrix). A signature
-# clash forces an uninstall, and an uninstall takes that data with it - so it
-# is copied off the device before anything is removed.
+# Stop the app before copying SQLite files so the database and WAL form one snapshot.
 function Backup-AppData {
     param([string] $Adb, [string] $Serial, [string] $AppId, [string] $DestRoot)
 
-    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
     $dest = Join-Path $DestRoot ("preview-data-{0}-{1}" -f $AppId, $stamp)
-    New-Item -ItemType Directory -Path $dest -Force | Out-Null
+    New-Item -ItemType Directory -Path $dest -ErrorAction Stop | Out-Null
 
-    # adb pull needs root on the device. The AVD allows it; a phone does not.
     $root = Invoke-NativeTimed -Exe $Adb -TimeoutSec 45 -NativeArgs @('-s', $Serial, 'root')
-    if ($root -match 'adbd cannot run as root|cannot run as root') {
-        return @{ Ok = $false; Path = $dest; Note = 'the device refuses root, so the app data cannot be backed up' }
+    if ($script:LastNativeExit -ne 0 -or $root -match 'cannot run as root') {
+        return @{ Ok = $false; Path = $dest; Note = 'root access failed; the app data was not backed up' }
     }
-    # adb root restarts adbd, so the transport needs a moment again.
-    Wait-ForDeviceOnline -Adb $Adb -Serial $Serial -TimeoutSec 60 | Out-Null
+    if (-not (Wait-ForDeviceOnline -Adb $Adb -Serial $Serial -TimeoutSec 60)) {
+        return @{ Ok = $false; Path = $dest; Note = 'the device did not reconnect after adb root' }
+    }
+    $uid = Invoke-NativeTimed -Exe $Adb -TimeoutSec 30 -NativeArgs @('-s', $Serial, 'shell', 'id', '-u')
+    if ($script:LastNativeExit -ne 0 -or $uid.Trim() -ne '0') {
+        return @{ Ok = $false; Path = $dest; Note = 'root access could not be verified' }
+    }
+    Invoke-NativeTimed -Exe $Adb -TimeoutSec 30 -NativeArgs @(
+        '-s', $Serial, 'shell', 'am', 'force-stop', $AppId) | Out-Null
+    if ($script:LastNativeExit -ne 0) {
+        return @{ Ok = $false; Path = $dest; Note = 'the app could not be stopped for a consistent backup' }
+    }
 
-    $pulled = @()
-    foreach ($dir in @('databases', 'shared_prefs', 'files')) {
-        $out = Invoke-NativeTimed -Exe $Adb -TimeoutSec 120 -NativeArgs @(
-            '-s', $Serial, 'pull', "/data/data/$AppId/$dir", $dest)
-        if ($script:LastNativeExit -eq 0) { $pulled += $dir }
+    $listing = Invoke-NativeTimed -Exe $Adb -TimeoutSec 30 -NativeArgs @(
+        '-s', $Serial, 'shell', 'ls', '-1', "/data/data/$AppId")
+    if ($script:LastNativeExit -ne 0) {
+        return @{ Ok = $false; Path = $dest; Note = 'the app data directory could not be inspected' }
     }
-    $note = if ($pulled.Count) { 'saved: ' + ($pulled -join ', ') } else { 'nothing could be pulled' }
+    $entries = @($listing -split '\r?\n' | ForEach-Object { $_.Trim() })
+    $pulled = @()
+    foreach ($dir in @('databases', 'shared_prefs', 'files', 'no_backup')) {
+        if ($dir -notin $entries) { continue }
+        Invoke-NativeTimed -Exe $Adb -TimeoutSec 120 -NativeArgs @(
+            '-s', $Serial, 'pull', "/data/data/$AppId/$dir", $dest) | Out-Null
+        if ($script:LastNativeExit -ne 0) {
+            return @{ Ok = $false; Path = $dest; Note = "incomplete backup: failed to copy $dir" }
+        }
+        $pulled += $dir
+    }
+    $note = if ($pulled.Count) { 'saved: ' + ($pulled -join ', ') } else { 'no app data directories were found' }
     return @{ Ok = ($pulled.Count -gt 0); Path = $dest; Note = $note }
 }
 
 # Installs, retrying everything that is not a real verdict about the APK.
+#
+# **这一段永远不卸载设备上的任何东西。** 覆盖安装（`adb install -r`）保住数据；
+# 签名冲突时保留旧包并把原因说清楚（见下面的 signature 分支）。
+# 唯一会主动卸载的是显式的 `-Reinstall`，那在 [Remove-AppForReinstall] 里，
+# 而且那里先备份、备份不成就停。
 function Install-Apk {
     param(
         [string] $Adb,
@@ -963,15 +985,12 @@ function Install-Apk {
         [string] $AppId = '',
         [int]    $Attempts = 6,
         [int]    $TimeoutSec = 180,
-        [bool]   $AutoRecover = $true,
-        [string] $ScriptRoot = ''
+        [bool]   $AutoRecover = $true
     )
 
     $last = ''
     $lastClass = 'transient'
     $allowDowngrade = $false
-    $removed = $false
-    $backupPath = ''
 
     for ($i = 1; $i -le $Attempts; $i++) {
         # Never install into a device that is not ready. This gate is what
@@ -992,7 +1011,7 @@ function Install-Apk {
             $out = Invoke-NativeTimed -Exe $Adb -TimeoutSec $TimeoutSec -NativeArgs ($flags + @($ApkPath))
 
             if ($script:LastNativeExit -eq 0 -and $out -notmatch '(?i)failed to install') {
-                return [pscustomobject]@{ Output = $out; Ok = $true; Attempts = $i; Class = 'ok'; BackupPath = $backupPath }
+                return [pscustomobject]@{ Output = $out; Ok = $true; Attempts = $i; Class = 'ok' }
             }
 
             # A client that hangs is not proof of a failed install: the transfer
@@ -1002,7 +1021,7 @@ function Install-Apk {
             if ($script:LastNativeExit -eq -1 -and $AppId -and
                 (Test-PackageInstalled -Adb $Adb -Serial $Serial -AppId $AppId)) {
                 Write-Warn 'adb never reported back, but the package is on the device - treating as installed'
-                return [pscustomobject]@{ Output = "$out (verified on device)"; Ok = $true; Attempts = $i; Class = 'ok'; BackupPath = $backupPath }
+                return [pscustomobject]@{ Output = "$out (verified on device)"; Ok = $true; Attempts = $i; Class = 'ok' }
             }
             $last = $out
             $lastClass = Get-InstallErrorClass -Output $out
@@ -1023,33 +1042,20 @@ function Install-Apk {
         if ($lastClass -eq 'signature') {
             Write-Warn ("install attempt {0}/{1} was rejected: the app on the device is signed with a different key" -f
                         $i, $Attempts)
-            if (-not $AppId) {
-                Write-Bad 'cannot recover without knowing the application id'
-                break
+            # **不卸载。**
+            #
+            # 签名冲突时设备上那个旧包连同它的数据是用户的东西：把旧包删掉换来
+            # 一个装得上的新包，代价是用户的数据没了 —— 而这个决定不该由一条
+            # 预览脚本替他做（早先这里默认就卸载，只在备份失败时打个警告就继续，
+            # 于是「脚本顺手把我的数据删了」这件事根本不用用户同意）。
+            #
+            # 能装上的办法只有一个：**用同一把密钥出的 APK**。没签名冲突的时候
+            # `adb install -r` 本来就保住数据，那才是正常路径。
+            Write-Warn 'the app on the device and its data are left untouched'
+            if ($AutoRecover) {
+                Write-Info 'Use an APK signed with the same key as the installed app.'
             }
-            if (-not $AutoRecover) {
-                Write-Bad ('-NoAutoRecover was given, so the old copy stays. Remove it with: ' +
-                           "adb -s $Serial uninstall $AppId")
-                break
-            }
-            # The old copy carries the only copy of some test data -> keep it.
-            if ($ScriptRoot) {
-                $backup = Backup-AppData -Adb $Adb -Serial $Serial -AppId $AppId `
-                            -DestRoot $ScriptRoot
-                if ($backup.Ok) {
-                    Write-Info "the app data was copied to $($backup.Path) ($($backup.Note))"
-                    $backupPath = $backup.Path
-                } else {
-                    Write-Warn "the app data could not be backed up: $($backup.Note)"
-                }
-            }
-            Write-Warn 'removing the old copy and installing this one instead (its data on the device is lost)'
-            if (-not (Remove-App -Adb $Adb -Serial $Serial -AppId $AppId)) {
-                Write-Bad 'could not remove the old copy - giving up'
-                break
-            }
-            $removed = $true
-            continue
+            break
         }
 
         if ($lastClass -eq 'downgrade') {
@@ -1066,15 +1072,126 @@ function Install-Apk {
         break
     }
 
-    return [pscustomobject]@{ Output = $last; Ok = $false; Attempts = $Attempts; Class = $lastClass; Removed = $removed; BackupPath = $backupPath }
+    return [pscustomobject]@{ Output = $last; Ok = $false; Attempts = $Attempts; Class = $lastClass }
+}
+
+# Removes the app from the device. **Only ever called for an explicit -Reinstall.**
+#
+# Before any of that, ask the device whether the package exists. Not installed
+# means there is nothing to back up or remove; a query that failed is not an
+# answer, so the reinstall stops instead of guessing.
+#
+# The order is not negotiable:
+#
+#   1. copy the app data off the device first;
+#   2. **stop if that did not work** - an uninstall takes the data with it,
+#      and "we could not copy it but we removed it anyway" is the one outcome
+#      that is worse than doing nothing;
+#   3. remove the app, and **stop if the removal failed** - ignoring the return
+#      value means carrying on and installing over an app that is still there.
+#
+# The copy is a copy, not a restore: the data is left in the folder for the
+# user to put back by hand. Saying "restored" here would be a lie.
+function Remove-AppForReinstall {
+    param(
+        [string] $Adb,
+        [string] $Serial,
+        [string] $AppId,
+        [string] $ScriptRoot = ''
+    )
+
+    $installState = Get-PackageInstallState -Adb $Adb -Serial $Serial -AppId $AppId
+    if ($installState -eq 'unknown') {
+        Write-Bad 'the device did not say whether the app is installed - stopping without removing or installing anything.'
+        return [pscustomobject]@{ Ok = $false; BackupPath = ''; Reason = 'could not determine whether the app is installed' }
+    }
+    if ($installState -eq 'not-installed') {
+        Write-Info '-Reinstall was given, but the app is not installed yet - skipping the backup and uninstall.'
+        return [pscustomobject]@{ Ok = $true; BackupPath = ''; Reason = '' }
+    }
+
+    Write-Warn "-Reinstall was given: the app and its data on the device are removed."
+    Write-Info 'The data is copied off the device first - but only if that works.'
+
+    if (-not $ScriptRoot) {
+        Write-Bad 'there is no folder to copy the app data into, so nothing was removed.'
+        return [pscustomobject]@{ Ok = $false; BackupPath = ''; Reason = 'no place to copy the app data to' }
+    }
+
+    $backup = Backup-AppData -Adb $Adb -Serial $Serial -AppId $AppId -DestRoot $ScriptRoot
+    if (-not $backup.Ok) {
+        Write-Bad ("the app data could not be copied off the device: {0}" -f $backup.Note)
+        Write-Bad 'nothing was removed. The old app and its data are still there.'
+        return [pscustomobject]@{ Ok = $false; BackupPath = ''; Reason = 'the app data could not be backed up' }
+    }
+    Write-Info "the app data was copied to $($backup.Path) ($($backup.Note))"
+
+    if (-not (Remove-App -Adb $Adb -Serial $Serial -AppId $AppId)) {
+        Write-Bad 'the app could not be removed - giving up'
+        return [pscustomobject]@{ Ok = $false; BackupPath = ''; Reason = 'the app could not be removed' }
+    }
+    Write-Good 'the old copy was removed'
+
+    return [pscustomobject]@{ Ok = $true; BackupPath = $backup.Path; Reason = '' }
+}
+
+# The install step of the preview: the optional -Reinstall, then the install.
+#
+# Both live in one function so that "the reinstall failed" and "the install
+# must not happen" are the same piece of code - when they were two places, the
+# second one happily ran after the first one gave up.
+function Install-AppWithOptionalReinstall {
+    param(
+        [string] $Adb,
+        [string] $Serial,
+        [string] $ApkPath,
+        [string] $AppId = '',
+        [bool]   $Reinstall = $false,
+        [string] $ScriptRoot = '',
+        [int]    $TimeoutSec = 180,
+        [bool]   $AutoRecover = $true
+    )
+
+    $backupPath = ''
+    if ($Reinstall -and $AppId) {
+        $reinstallResult = Remove-AppForReinstall -Adb $Adb -Serial $Serial -AppId $AppId -ScriptRoot $ScriptRoot
+        if (-not $reinstallResult.Ok) {
+            throw ("Reinstall stopped: {0}" -f $reinstallResult.Reason)
+        }
+        $backupPath = $reinstallResult.BackupPath
+    }
+
+    $install = Install-Apk -Adb $Adb -Serial $Serial -ApkPath $ApkPath -AppId $AppId `
+                -TimeoutSec $TimeoutSec -AutoRecover $AutoRecover
+    $install | Add-Member -NotePropertyName BackupPath -NotePropertyValue $backupPath -Force
+    return $install
 }
 
 # The device, not adb, is the authority on whether a package is there.
-function Test-PackageInstalled {
+#
+# "Not installed" and "could not ask" are different answers: a device that is
+# offline, unauthorized or too slow must never be mistaken for a clean install
+# target, because the explicit reinstall would then skip the backup and remove
+# nothing. `pm path` answers a missing package with no output at all (newer
+# versions exit 1, older ones exit 0); a transport or permission failure always
+# prints a diagnostic, so only silence or a not-found message counts as absent.
+function Get-PackageInstallState {
     param([string] $Adb, [string] $Serial, [string] $AppId)
+
     $out = Invoke-NativeTimed -Exe $Adb -TimeoutSec 30 -NativeArgs @(
         '-s', $Serial, 'shell', 'pm', 'path', $AppId)
-    return ($out -match 'package:')
+
+    if ($out -match 'package:') { return 'installed' }
+    if ($out -match '(?i)(unknown package|package\s+\S+\s+(?:was\s+)?not found)') {
+        return 'not-installed'
+    }
+    if ([string]::IsNullOrWhiteSpace($out)) { return 'not-installed' }
+    return 'unknown'
+}
+
+function Test-PackageInstalled {
+    param([string] $Adb, [string] $Serial, [string] $AppId)
+    return ((Get-PackageInstallState -Adb $Adb -Serial $Serial -AppId $AppId) -eq 'installed')
 }
 
 # pidof is silent when there is no match, and equally silent when the transport
@@ -1165,8 +1282,8 @@ try {
             'base'  { '设计基准 1080x2400 @420dpi, font 1.0 (411dp)' }
             default { 'left as it is' }
         }))
-        Write-Info ("install  : " + $(if ($Reinstall) { 'the old app is removed first (-Reinstall)' } else { 'over the existing app, keeping its data' }))
-        Write-Info ("recovery : " + $(if ($NoAutoRecover) { 'off (-NoAutoRecover)' } else { 'on - a differently signed app on the device is replaced' }))
+        Write-Info ("install  : " + $(if ($Reinstall) { 'the old app is removed first (-Reinstall - the data on the device goes with it)' } else { 'over the existing app, keeping its data' }))
+        Write-Info ("recovery : " + $(if ($NoAutoRecover) { 'off (-NoAutoRecover - only the facts are printed)' } else { 'on - a differently signed app on the device is kept, with its data' }))
         Write-Info ("launch   : " + $(if ($NoLaunch) { 'no (-NoLaunch)' } else { 'yes' }))
         Write-Info ("attached : " + $(if ($devices.Count) { $devices -join ', ' } else { '(none - would boot the AVD)' }))
         exit 0
@@ -1354,14 +1471,9 @@ try {
     }
     Write-Good 'the device is ready to accept installs'
 
-    if ($Reinstall -and $appId) {
-        Write-Info '-Reinstall was given, removing the app first ...'
-        Remove-App -Adb $tool.Adb -Serial $serial -AppId $appId | Out-Null
-    }
-
-    $install = Install-Apk -Adb $tool.Adb -Serial $serial -ApkPath $apk -AppId $appId `
-                -TimeoutSec $InstallTimeoutSec -AutoRecover (-not $NoAutoRecover) `
-                -ScriptRoot $ScriptRoot
+    $install = Install-AppWithOptionalReinstall -Adb $tool.Adb -Serial $serial -ApkPath $apk `
+                -AppId $appId -Reinstall ([bool]$Reinstall) -ScriptRoot $ScriptRoot `
+                -TimeoutSec $InstallTimeoutSec -AutoRecover (-not $NoAutoRecover)
     if (-not $install.Ok) {
         $state = Get-AdbState -Adb $tool.Adb -Serial $serial
         $log = Save-FailureLog -Adb $tool.Adb -Serial $serial -ScriptRoot $ScriptRoot `
@@ -1371,8 +1483,10 @@ try {
         if ($install.Class -eq 'signature') {
             Write-Info ''
             Write-Warn 'the app on the device is signed with a different key than this APK.'
-            Write-Info ("Remove it with:  adb -s {0} uninstall {1}" -f $serial, $appId)
-            Write-Info 'or re-run with -NoAutoRecover off (the default) to let the script do it.'
+            Write-Info 'The installed app and its data were not removed by the failed install.'
+            if (-not $NoAutoRecover) {
+                Write-Info 'Use an APK signed with the same key as the installed app.'
+            }
         }
         if ($install.Output -match '<no response from adb') {
             Write-Info ''
@@ -1407,9 +1521,9 @@ try {
 
     if ($install.BackupPath) {
         Write-Info ''
-        Write-Warn "the old copy on the device was signed with another key, so it was removed."
-        Write-Info "its data was copied to: $($install.BackupPath)"
-        Write-Info 'put it back with:'
+        Write-Info "the data of the removed app was copied to: $($install.BackupPath)"
+        # **是「复制」，不是「恢复」。** 数据就放在那个文件夹里，放不回去得用户自己动手。
+        Write-Info 'it was NOT put back - restore it by hand if you want it:'
         Write-Info ("  adb -s {0} root" -f $serial)
         Write-Info ("  adb -s {0} shell `"rm -f /data/data/{1}/databases/*`"" -f $serial, $appId)
         Write-Info ("  adb -s {0} push `"{1}/databases/.`" /data/data/{2}/databases/" -f $serial, $install.BackupPath, $appId)

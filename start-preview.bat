@@ -36,9 +36,12 @@ REM      the normal ones.
 REM
 REM  What it does about an app that is already on the device:
 REM    * same signature  -> installed over it, data kept;
-REM    * other signature -> the old copy is backed up, removed and
-REM      replaced, because that is the only way to install at all.
-REM      Use -NoAutoRecover to keep the old copy and fail instead.
+REM    * other signature -> the run stops and says so. The old copy and
+REM      its data are left untouched; an APK signed with the same key is
+REM      needed to install over it.
+REM    * -Reinstall      -> the app is removed first (its data on the
+REM      device goes with it). The data is copied off the device first,
+REM      and if that does not work nothing is removed.
 REM
 REM  Black screen on boot?  Try, in this order:
 REM      start-preview.bat -ColdBoot
