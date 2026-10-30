@@ -82,6 +82,14 @@ let pairPriv: Uint8Array | null = null;
  */
 let pairPub: Uint8Array | null = null;
 let sse: EventSource | null = null;
+/**
+ * SSE 重连的退避计数。**只在真正连上时归零** —— 失败一次就多等一会儿。
+ *
+ * 它必须能被重连**带着往下走**：每次失败 +1，等的时长 1s→2s→4s→8s→16s→30s 封顶。
+ */
+let sseRetry = 0;
+/** 待执行的重连。**非 null 就说明已经排好队了** —— 别再排第二次，否则会连成一片。 */
+let sseRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let autoTimer: ReturnType<typeof setTimeout> | null = null;
 let booted = false;
@@ -852,13 +860,79 @@ function handleUnauthorized(): void {
   toast('配对失效了，请重新配对。', 'error');
 }
 
-function connectEvents(): void {
-  stopEvents();
+/**
+ * 关掉当前这条 SSE 流。
+ *
+ * **不动退避计数** —— 那是 `stopEvents` 的活。
+ *
+ * 拆成两个是因为「关掉旧流」有两种含义完全不同的场景：
+ * 一种是**整体停**（断开配对 / 凭据失效），连排队的重连一起撤掉；
+ * 一种只是**换一条新的**（重连），这时必须保住退避计数 ——
+ * 否则每次重连都从头开始等，指数退避就退化成固定间隔了。
+ */
+function closeEventSource(): void {
+  if (sse) {
+    sse.close();
+    sse = null;
+  }
+  set({ sseConnected: false });
+}
+
+/**
+ * 排一次 SSE 重连（指数退避）。
+ *
+ * ## 为什么得自己排
+ *
+ * EventSource 按规范只会拿**同一个 URL** 重试，而签名里的 ts 有有效期、
+ * nonce 一次性 —— 拿旧 URL 重试必然被拒，而被拒在 EventSource 里是致命错误：
+ * 连接直接 CLOSED，连它自己都不再重试了。
+ * 所以只能自己把旧连接关掉，用**新签名**重新连。
+ *
+ * ## 为什么不会连成一片
+ *
+ * - 同一时刻只有一个待执行的重连（`sseRetryTimer` 非空就不再排）；
+ * - 配对没了（断开 / 凭据失效）就不再排 —— 等用户重新配对；
+ * - 时长按指数涨（1s→2s→4s→8s→16s→30s 封顶），手机不在也不会被敲醒。
+ */
+function scheduleEventsReconnect(): void {
+  if (sseRetryTimer != null) return;
+  // 配对已经没了 → 别再连了，等用户重新配对。
+  if (!isOnline() || !sessionKeys) return;
+  const delay = Math.min(30000, 1000 * 2 ** Math.min(sseRetry, 5));
+  sseRetry += 1;
+  sseRetryTimer = setTimeout(() => {
+    sseRetryTimer = null;
+    // **不能重置退避计数** —— 一归零就永远停在第一档，退化成固定间隔。
+    connectEvents(false);
+  }, delay);
+}
+
+/**
+ * 建立 SSE 连接。
+ *
+ * @param resetBackoff 是否把退避计数归零。**定时器驱动的重连要传 false** ——
+ *   归零了就每次都从第一档开始等，指数退避就没了。
+ */
+function connectEvents(resetBackoff = true): void {
+  // 有一条重连排着队 → 这次连接已经取代它了，撤掉，免得等会儿又多连一次。
+  if (sseRetryTimer != null) {
+    clearTimeout(sseRetryTimer);
+    sseRetryTimer = null;
+  }
+  // 关掉旧的那条流。**不能走 stopEvents** —— 它会把退避计数归零，
+  // 那样每次重连都从第一档开始等，指数退避就退化成固定间隔了。
+  closeEventSource();
+  // 用户主动重连 → 退避从头算；定时器驱动的重连要带上次的计数继续退避。
+  if (resetBackoff) sseRetry = 0;
   if (!isOnline() || !sessionKeys) return;
   try {
     const es = new EventSource(`${baseRoot()}/api/events?${authQuery('/api/events')}`);
     sse = es;
-    es.addEventListener('open', () => set({ sseConnected: true }));
+    es.addEventListener('open', () => {
+      // 连上了 → 退避归零，下次断线从头等。
+      sseRetry = 0;
+      set({ sseConnected: true });
+    });
     es.addEventListener('change', () => scheduleAutoSync());
     es.addEventListener('sync-request', (event: Event) => {
       let payload: any = {};
@@ -877,19 +951,36 @@ function connectEvents(): void {
       else if (direction === 'push') void syncPush();
       else void syncMerge();
     });
-    es.addEventListener('error', () => set({ sseConnected: false }));
+    es.addEventListener('error', () => {
+      // 已经被更新的连接取代了 → 那条新连接自己管自己，别插手。
+      if (sse !== es) return;
+      set({ sseConnected: false });
+      // 浏览器只会拿同一个（ts 已过期、nonce 已用掉的）URL 重试，必然被拒，
+      // 而被拒在 EventSource 里是致命错误。这里主动关掉，用新签名重连。
+      es.close();
+      sse = null;
+      scheduleEventsReconnect();
+    });
   } catch {
     sse = null;
     set({ sseConnected: false });
+    // 连都建不起来（地址不通等）→ 也得排重连，否则这条链就断在这儿了。
+    scheduleEventsReconnect();
   }
 }
 
+/**
+ * 彻底停掉 SSE：关流、撤掉排队的重连、退避归零。
+ *
+ * 排队的那个也得撤 —— 不然断开配对之后，它还会自己连回来。
+ */
 function stopEvents(): void {
-  if (sse) {
-    sse.close();
-    sse = null;
+  closeEventSource();
+  if (sseRetryTimer != null) {
+    clearTimeout(sseRetryTimer);
+    sseRetryTimer = null;
   }
-  set({ sseConnected: false });
+  sseRetry = 0;
 }
 
 function ensurePolling(): void {
@@ -1151,6 +1242,11 @@ export async function syncPush(): Promise<void> {
       method: 'POST',
       body: { mode: 'replace', snapshot: buildPushPayload('replace') },
     });
+    // 手机侧「护栏」拒收走的是 **HTTP 200 + 密文 `{"error":…}`**
+    // （见 `WebSyncApi.encryptedError`），而 api() 只在非 2xx 时抛错 ——
+    // 不在这里单独判一次，手机明明没接受，界面还弹「已把本页待办推到手机上」，
+    // 用户以为数据已经过去了，回头才发现手机上一条都没变。
+    if (resp?.error) throw new ApiError(String(resp.error), 409);
     const remoteBase = { ...get().remoteBase };
     if (resp?.appliedUids) {
       for (const uid of resp.appliedUids as string[]) {
@@ -1183,10 +1279,18 @@ export async function syncMerge(): Promise<void> {
     const remote = normalizeSnapshot(await api('/api/snapshot'));
     set({ remoteSnapshot: remote });
     applyRemote(remote);
+    // **发的必须是 merge**：按钮叫「合并」，语义是两边并成一份 ——
+    // 手机侧按 syncUid 更新/新增本页这两边的待办，**不删**它多出来的那些。
+    // 早先这里发的是 `replace`：名字叫合并、做的是整份替换，
+    // 手机上独有的待办会被删掉，而界面还会说「已合并」。
+    // 载荷仍取全量待办（`buildPushPayload('replace')` 只是「全部、不带配置」），
+    // 不带 hasXxx 标记 —— 课表 / 考试 / 分类一块都不动。
     const resp = await api('/api/snapshot/apply', {
       method: 'POST',
-      body: { mode: 'replace', snapshot: buildPushPayload('replace') },
+      body: { mode: 'merge', snapshot: buildPushPayload('replace') },
     });
+    // 与 syncPush 同一条理由：200 + 密文 error 也是失败，不能当成功报。
+    if (resp?.error) throw new ApiError(String(resp.error), 409);
     const remoteBase = { ...get().remoteBase };
     if (resp?.appliedUids) {
       for (const uid of resp.appliedUids as string[]) {
@@ -1307,7 +1411,11 @@ export type ZjuSyncResult = {
   termLabel: string;
   /** 考试没拉到时的原因；null = 一切正常（学校还没公布考试是正常状态）。 */
   examError?: string | null;
-  /** 凭据是否被转存进了手机的 Keystore。 */
+  /**
+   * 这次是不是用了**手机已存的那份**凭据（网页端没填学号密码时就是）。
+   *
+   * 注意它**不代表网页端的密码被存下了** —— 远端带来的凭据手机只用那一次。
+   */
   savedCredentials: boolean;
   error?: string;
   kind?: string;
@@ -1336,8 +1444,10 @@ export async function zjuTerms(): Promise<ZjuTerm[]> {
  * ## 密码的去向
  *
  * 密码只在这条请求的**密文**里存在（会话密钥派生，局域网上也解不开），
- * **不落浏览器存储** —— 网页端不记密码。手机侧会把它转存进 Keystore，
- * 下次就不用再填。
+ * **不落浏览器存储** —— 网页端不记密码。手机那边也**只用这一次**：
+ * 网页端带来的凭据不写回 Keystore（写回会让「网页端填的学号必须与手机
+ * 已绑定账号一致」那道闸门形同虚设），下次还得再填。
+ * 想省事就别填 —— 空着发过去，手机用它自己已存的那份。
  */
 export async function zjuSync(input: {
   studentId?: string;
