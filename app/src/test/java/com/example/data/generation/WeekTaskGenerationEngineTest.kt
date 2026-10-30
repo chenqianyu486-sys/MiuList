@@ -74,7 +74,7 @@ class WeekTaskGenerationEngineTest {
                 courseRules = courseRules,
                 categoryRules = categoryRules
             )
-        ) { courseId, type, w, day -> Triple(courseId, type.name, w) in existing }
+        ) { courseId, type, w, _, _ -> Triple(courseId, type.name, w) in existing }
         return built
     }
 
@@ -282,7 +282,7 @@ class WeekTaskGenerationEngineTest {
                 scopes = listOf(WeekScope(week = 1, weekMondayEpochDay = week1Monday, slots = listOf(slot(1, 1L, 1, 1)))),
                 coursesById = mapOf(1L to off)
             )
-        ) { _, _, _, _ -> false }
+        ) { _, _, _, _, _ -> false }
         assertTrue(built.none { it.taskType == TaskType.LAB_REPORT.name })
     }
 
@@ -317,7 +317,7 @@ class WeekTaskGenerationEngineTest {
                 ),
                 coursesById = mapOf(1L to math)
             )
-        ) { _, _, _, _ -> false }
+        ) { _, _, _, _, _ -> false }
 
         assertEquals(1, out.count { it.taskType == TaskType.POST_CLASS.name })
         assertTrue("限定了类型就不该出预习", out.none { it.taskType == TaskType.PRE_STUDY.name })
@@ -343,7 +343,7 @@ class WeekTaskGenerationEngineTest {
                 ),
                 coursesById = mapOf(1L to math)
             )
-        ) { _, _, _, _ -> false }
+        ) { _, _, _, _, _ -> false }
 
         assertEquals(listOf(3, 5), out.map { it.dayOfWeek })
     }
@@ -370,7 +370,7 @@ class WeekTaskGenerationEngineTest {
                     1L to mapOf(TaskType.PRE_STUDY to CourseRuleSpec("PER_CLASS", 0, 5))
                 )
             )
-        ) { _, _, _, _ -> false }
+        ) { _, _, _, _, _ -> false }
 
         assertEquals("只剩下午那节", 1, out.size)
         // 截止 = 开课 13:25 前 5 分钟 = 13:20，确实晚于 12:00 那个下界
@@ -401,7 +401,7 @@ class WeekTaskGenerationEngineTest {
                     1L to mapOf(TaskType.PRE_STUDY to CourseRuleSpec("PER_WEEK", 0, 5))
                 )
             )
-        ) { _, _, _, _ -> false }
+        ) { _, _, _, _, _ -> false }
 
         assertEquals(1, out.size)
         assertEquals("锚点该是过滤后最早那节（周五）", 5, out.first().dayOfWeek)
@@ -423,7 +423,7 @@ class WeekTaskGenerationEngineTest {
                 ),
                 coursesById = mapOf(1L to math)
             )
-        ) { _, _, _, _ -> false }
+        ) { _, _, _, _, _ -> false }
 
         assertTrue(out.isEmpty())
     }
@@ -459,7 +459,7 @@ class WeekTaskGenerationEngineTest {
                 ),
                 coursesById = mapOf(1L to math)
             )
-        ) { _, _, _, _ -> false }
+        ) { _, _, _, _, _ -> false }
 
         val homework = out.filter { it.taskType == TaskType.POST_CLASS.name }
         assertEquals("作业只在第 3 周出一条", 1, homework.size)
@@ -495,7 +495,7 @@ class WeekTaskGenerationEngineTest {
                 ),
                 coursesById = mapOf(1L to math)
             )
-        ) { _, _, _, _ -> false }
+        ) { _, _, _, _, _ -> false }
 
         assertEquals(listOf(3, 4), out.map { it.week })
     }
@@ -523,7 +523,7 @@ class WeekTaskGenerationEngineTest {
                 ),
                 coursesById = mapOf(1L to math)
             )
-        ) { courseId, type, w, day -> Triple(courseId, type.name, w) in existing }
+        ) { courseId, type, w, _, _ -> Triple(courseId, type.name, w) in existing }
 
         assertTrue("本周那条已存在", out.none { it.week == 3 })
         assertEquals("下周那条该照常产出", 1, out.count { it.week == 4 })

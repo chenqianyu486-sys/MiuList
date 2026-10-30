@@ -54,7 +54,7 @@ data class WeekScope(
  *
  * 改造前这里只处理**某一天**（`generateTasksForDay`），标题是「【作业】高数 习题」，
  * 去重靠 `generatedDate`。现在按**一整周**产出，标题是「【高数】第3周作业」，
- * 去重靠「同课程 + 同类型 + 同周次 + 同周几」四元组。
+ * 去重靠「同课程 + 同类型 + 同周次 + 同周几 + 开课时刻」五元组。
  *
  * 六条关键决定：
  * 1. **时段由调用方先按周过滤好再传进来**（`ScheduleResolver.slotsInWeek`），
@@ -63,7 +63,7 @@ data class WeekScope(
  * 3. **「每周一次」的锚点取该周最早的那节课**。锚点一旦确定，这条待办的截止日在一周之内
  *    就是稳定的，不会因为多开一次 App、多生成一次就往后漂。锚点在 [WeekScope.fromStartTimestamp]
  *    过滤**之后**选，「今天起」才不会锚到已经上过的课。
- * 4. 「每周一次」也照常记下锚点那天的周几进 `dayOfWeek`，于是四元组判据天然唯一，
+ * 4. 「每周一次」也照常记下锚点那天的周几进 `dayOfWeek`，于是五元组判据天然唯一，
  *    不需要为它另开一个特例。
  * 5. **不预置星标**：`priority` 恒为 `STAR_UNMARKED`。星标留给用户手动标。
  * 6. **不预置备注**：`description` 恒为空。备注是用户自己写的那部分，
@@ -84,9 +84,19 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
 
     /**
      * 去重判据。写入路径与预览路径共用同一判据。
+     *
+     * 判据是五元组：**同课程 + 同类型 + 同周次 + 同周几 + 开课时刻**。
+     * 开课时刻这一维用来区分同一天的两节课 —— 同一门课同一周几可能排两节，
+     * 只按周几判会把它们当成同一条，删掉其中一条之后另一条再也补不回来。
      */
     fun interface ExistingChecker {
-        suspend fun exists(courseId: Long, taskType: TaskType, week: Int, dayOfWeek: Int): Boolean
+        suspend fun exists(
+            courseId: Long,
+            taskType: TaskType,
+            week: Int,
+            dayOfWeek: Int,
+            startTimestamp: Long
+        ): Boolean
     }
 
     suspend fun build(input: Input, hasExisting: ExistingChecker): List<TaskEntity> {
@@ -142,10 +152,22 @@ class WeekTaskGenerationEngine(private val periodTable: PeriodTable) {
                     listOf(courseSlots.first())
                 }
 
+                // 同一门课可能在同一天排了两节**完全一样**的时段（时段表里重复录入）。
+                // 库里的判据只看得见**已经写进去**的行，看不见本批刚产出、还没落库的那条，
+                // 所以批内要先自己去一次重：同一时刻只留一条。
+                // 这个集合**按「课程 × 类型」各有一份**：不同课程在同一时刻开课是常事
+                // （一堆课都在周一 8 点），共用一份会把别的课的待办一起吃掉。
+                val seenStarts = HashSet<Long>()
+
                 for (anchor in anchors) {
                     val dayOfWeek = anchor.dayOfWeek.coerceIn(1, 7)
                     val date = classDateOf(anchor, monday)
-                    if (hasExisting.exists(courseId, type, scope.week, dayOfWeek)) continue
+                    // 开课时刻：去重键的第五维，靠它区分同一天的两节课。
+                    // 与 [buildTask] 写进待办的是同一个值（同一个算法、同一组入参），
+                    // 于是判重用的键和落库的那一列永远是同一个。
+                    val start = startTimestampOf(anchor, date, zone)
+                    if (!seenStarts.add(start)) continue
+                    if (hasExisting.exists(courseId, type, scope.week, dayOfWeek, start)) continue
                     out += buildTask(course, anchor, date, scope.week, type, rule, zone)
                 }
             }

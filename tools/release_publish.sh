@@ -52,12 +52,26 @@ case "$VERSION" in
 esac
 
 VERSION_NO_V="${VERSION#v}"
+# 版本号里的 `.` 在正则里能匹配任意字符：v1.1.0 会把 v1x1y0 一起匹配上，
+# 于是「找 release 提交」会找错提交、「列上一版 tag」会把别的版本也滤掉。
+# 用在 grep 里之前先转义。
+VERSION_RE="$(printf '%s' "$VERSION" | sed 's/\./\\./g')"
 APK_NAME="MiuList-${VERSION}.apk"
+# 优先用 .tmp 里那份副本：app/build/outputs 会被 gradle clean 抹掉，
+# 发版中断后补跑时，原路径下的产物可能已经没了。
+APK_PATH="$OUT_APK_DIR/$APK_NAME"
+if [ -f ".tmp/$APK_NAME" ]; then
+  APK_PATH=".tmp/$APK_NAME"
+fi
 RELEASE_NAME="MiuList ${VERSION}"
 if [ "$STABLE" -eq 0 ]; then
   RELEASE_NAME="MiuList ${VERSION}（测试版）"
 fi
 [ -n "$PY" ] || { echo "!! 找不到 python。" >&2; exit 1; }
+
+# .tmp 在 .gitignore 里，干净克隆的仓库上**没有**这个目录 ——
+# 不先建，后面的说明文件与载荷就写不进去。
+mkdir -p .tmp
 
 # ---------------------------------------------------------------- 产物检查
 echo "== 产物检查 =="
@@ -65,12 +79,15 @@ git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null || {
   echo "!! 本地没有 tag $VERSION —— 先把发版提交打上 tag。" >&2
   exit 1
 }
-[ -f "$OUT_APK_DIR/$APK_NAME" ] || { echo "!! 没有 $OUT_APK_DIR/$APK_NAME" >&2; exit 1; }
+[ -f "$APK_PATH" ] || { echo "!! 没有 $APK_PATH" >&2; exit 1; }
 [ -f "$WEB_HTML" ] || { echo "!! 没有 $WEB_HTML" >&2; exit 1; }
 
-BT="$(ls -d "$SDK_ROOT"/build-tools/*/ 2>/dev/null | sort -V | tail -1)"
+# build-tools 找不到时，ls 的非零退出码会顺着 pipefail 让脚本**无声地**退出 ——
+# 用户只看到命令没跑完，看不出是 SDK 路径不对。所以这里把管道兜住，再自己给一句人话。
+BT="$(ls -d "$SDK_ROOT"/build-tools/*/ 2>/dev/null | sort -V | tail -1 || true)"
+[ -n "$BT" ] || { echo "!! 在 $SDK_ROOT/build-tools 下找不到 build-tools，请检查 local.properties 的 sdk.dir" >&2; exit 1; }
 AAPT="$BT/aapt.exe"; [ -f "$AAPT" ] || AAPT="$BT/aapt"
-BADGING="$("$AAPT" dump badging "$OUT_APK_DIR/$APK_NAME" 2>/dev/null | head -1)"
+BADGING="$("$AAPT" dump badging "$APK_PATH" 2>/dev/null | head -1)"
 echo "$BADGING"
 case "$BADGING" in
   *"versionName='$VERSION_NO_V'"*) echo "✓ APK 版本号对得上" ;;
@@ -96,7 +113,7 @@ echo "== tag =="
 # **匹配时不能要求版本号后面有空格**：正式版的标题就是「release: v1.1.0」，
 # 提交时 git 会把行尾空格去掉 —— 带着空格的模式一条都匹配不上，
 # 脚本会在这里直接退出，而那时代码已经推上去了。
-REL_COMMIT="$(git log --format='%H' --grep="^release: $VERSION\( \|$\)" -1 main)"
+REL_COMMIT="$(git log --format='%H' --grep="^release: $VERSION_RE\( \|$\)" -1 main)"
 if [ -z "$REL_COMMIT" ]; then
   echo "!! 在 main 上找不到「release: $VERSION」的提交，tag 先不动。" >&2
   exit 1
@@ -120,6 +137,11 @@ if [ "$REL_COMMIT" != "$(git rev-list -n1 "$VERSION")" ]; then
   git tag -f -a "$VERSION" "$REL_COMMIT" -m "MiuList ${VERSION}$([ "$STABLE" -eq 1 ] || echo '（测试版）')"
 fi
 git push --force origin "$VERSION"
+# gitee 镜像也推一份 tag：README 推荐用户走 gitee，镜像上却缺 tag ——
+# 用户按 gitee 的 tag 找不到对应版本。推失败只警告，不阻断 GitHub 发布。
+if git remote get-url gitee >/dev/null 2>&1; then
+  git push --force gitee "$VERSION" || echo "!! tag 推到 gitee 失败（不影响 GitHub 发布）" >&2
+fi
 
 # ---------------------------------------------------------------- GitHub Release
 echo ""
@@ -133,18 +155,20 @@ if [ -n "$NOTES_FILE" ]; then
   echo "用指定的说明文件：$NOTES_FILE"
 else
   COMMITS=".tmp/release_commits_${VERSION_NO_V}.txt"
-  PREV_TAG="$(git tag --list 'v*' --sort=-v:refname | grep -v "^$VERSION$" | head -1)"
+  PREV_TAG="$(git tag --list 'v*' --sort=-v:refname | grep -v "^$VERSION_RE$" | head -1)"
   if [ -n "$PREV_TAG" ]; then
     git log --pretty=format:'%s' "$PREV_TAG..HEAD" > "$COMMITS"
   else
     git log --pretty=format:'%s' -20 > "$COMMITS"
   fi
-  "$PY" tools/release_helper.py notes \
-    --version "$VERSION" \
-    --prev-tag "${PREV_TAG:-$VERSION_NO_V}" \
-    --apk-name "$APK_NAME" \
-    --commits-file "$COMMITS" \
-    --out "$NOTES"
+  # 参数先拼成数组再展开：空字符串不会变成一个空参数，
+  # 而「正式版」这个开关更不能靠空串去表达 —— 只有 --stable 这个标志本身算数。
+  NOTES_ARGS=(--version "$VERSION" --prev-tag "${PREV_TAG:-$VERSION_NO_V}"
+              --apk-name "$APK_NAME" --commits-file "$COMMITS" --out "$NOTES")
+  if [ "$STABLE" -eq 1 ]; then
+    NOTES_ARGS+=(--stable)
+  fi
+  "$PY" tools/release_helper.py notes "${NOTES_ARGS[@]}"
 fi
 
 export GCM_INTERACTIVE=never
@@ -171,7 +195,7 @@ EXISTING="$(curl -sS "${AUTH[@]}" "$API/releases/tags/$VERSION" | "$PY" -c 'impo
 if [ -n "$EXISTING" ]; then
   echo "release 已存在（id=$EXISTING），改为更新"
   REL_ID="$EXISTING"
-  curl -sS -X PATCH "${AUTH[@]}" -H 'Content-Type: application/json; charset=utf-8' \
+  curl -fsS -X PATCH "${AUTH[@]}" -H 'Content-Type: application/json; charset=utf-8' \
     --data-binary "@$NOTES.payload.json" "$API/releases/$REL_ID" >/dev/null
 else
   echo "创建 release（prerelease=$([ "$STABLE" -eq 1 ] && echo false || echo true)）"
@@ -183,13 +207,13 @@ fi
 # 上传 APK
 echo "上传 $APK_NAME"
 UPLOAD="https://uploads.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/$REL_ID/assets?name=$APK_NAME"
-curl -sS -X POST "${AUTH[@]}" -H 'Content-Type: application/vnd.android.package-archive' \
-  --data-binary "@$OUT_APK_DIR/$APK_NAME" "$UPLOAD" >/dev/null
+curl -fsS -X POST "${AUTH[@]}" -H 'Content-Type: application/vnd.android.package-archive' \
+  --data-binary "@$APK_PATH" "$UPLOAD" >/dev/null
 
 # 上传桌面单文件网页版（产物检查已经保证它在、且版本号对）
 echo "上传 MiuList-Web.html"
 UPLOAD_WEB="https://uploads.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/$REL_ID/assets?name=MiuList-Web.html"
-curl -sS -X POST "${AUTH[@]}" -H 'Content-Type: text/html; charset=utf-8' \
+curl -fsS -X POST "${AUTH[@]}" -H 'Content-Type: text/html; charset=utf-8' \
   --data-binary "@$WEB_HTML" "$UPLOAD_WEB" >/dev/null
 
 # 核对

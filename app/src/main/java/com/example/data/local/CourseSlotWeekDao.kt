@@ -28,7 +28,19 @@ interface CourseSlotWeekDao {
     @Query("DELETE FROM course_slot_weeks WHERE week > :totalWeeks")
     suspend fun deleteWeeksAbove(totalWeeks: Int)
 
-    @Query("SELECT DISTINCT courseSlotId FROM course_slot_weeks WHERE courseSlotId NOT IN (:ids)")
+    /**
+     * 这些时段在所有周次行被删光之后，需要按「每周」重新铺回来。
+     *
+     * 学期周数变小时，越界的周次行会被删掉；某个时段若因此一行不剩，
+     * 它就成了「这学期一次都不上」，而空集合在 resolver 里表示每周 ——
+     * 所以要把它按每周重新铺成 1..totalWeeks（见 `CourseRepository.clampSlotWeeksTo`）。
+     *
+     * 判据是「**在**时段表里、却**不在**周次表里」：
+     * 反过来查（周次表里有、时段表里没有）拿到的是孤儿周次行，
+     * 正常情况下永远是空集 —— 于是「周次被裁空后退回每周」这条修复从未真正执行过。
+     */
+    @Query("SELECT id FROM course_slots WHERE id IN (:ids) " +
+           "AND id NOT IN (SELECT DISTINCT courseSlotId FROM course_slot_weeks)")
     suspend fun findSlotsMissingFrom(ids: List<Long>): List<Long>
 
     @Query("DELETE FROM course_slot_weeks")

@@ -1,5 +1,6 @@
 package com.example.data.calendar
 
+import com.example.data.local.CourseSlotEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -317,5 +318,37 @@ class AcademicCalendarTest {
         )
         assertTrue(cal.isMakeup(mon))
         assertEquals(4, cal.effectiveDayOfWeek(mon))
+    }
+
+    /**
+     * **学期外的补课日仍然是一个真实的上课日。**
+     *
+     * 真实的一条：冬季学期 2027-01-03 结束，而 12-31（周四）停课的课补到 01-04（周一）——
+     * 校历里那条 [学生节] 的 Move 就是这么写的。01-04 落在学期范围之外，
+     * 早先被判成 OUT_OF_TERM：那是**硬**闸门，[ScheduleResolver.slotsOn] 第一行就把它挡掉，
+     * 于是那天的课在总览、列表、周课表里全部消失，而界面上看不出任何异常 ——
+     * 那天看上去就是一个普通的学期外工作日。
+     *
+     * 补课是校历明确记着的「那天有课」，它比学期范围更具体，所以学期外不能盖过它。
+     */
+    @Test
+    fun `a makeup day outside the term is still a class day`() {
+        val thu = EpochDays.parse("2026-12-31")!! // 周四，停课
+        val mon = EpochDays.parse("2027-01-04")!! // 周一，补课
+        // 17 周的学期到 2027-01-03 结束：01-04 落在学期范围之外
+        val cal = AcademicCalendar(
+            semester = semester(totalWeeks = 17),
+            makeupDays = mapOf(mon to MakeupShift(thu))
+        )
+
+        assertNull("学期外的补课日不是休息日", cal.dayOffReason(mon))
+        assertFalse("补课日不能被硬闸门挡住", cal.isOffDay(mon))
+        assertEquals("补的是周四的课", 4, cal.effectiveDayOfWeek(mon))
+
+        // 周四上午第 1 节（08:00）：那天该出的就是这一节
+        val slots = listOf(
+            CourseSlotEntity(id = 1L, courseId = 1L, dayOfWeek = 4, startPeriod = 1, endPeriod = 2)
+        )
+        assertEquals(1, ScheduleResolver(cal).slotsOn(mon, slots).size)
     }
 }

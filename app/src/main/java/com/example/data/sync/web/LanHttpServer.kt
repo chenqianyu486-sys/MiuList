@@ -377,12 +377,16 @@ class LanHttpServer(
         val buf = ByteArrayOutputStream(128)
         while (true) {
             val b = input.read()
-            if (b < 0) return if (buf.size() == 0) null else buf.toString(Charsets.ISO_8859_1)
+            if (b < 0) return if (buf.size() == 0) null else String(buf.toByteArray(), Charsets.ISO_8859_1)
             if (b == '\n'.code) break
             if (b != '\r'.code) buf.write(b)
             if (buf.size() > MAX_LINE_BYTES) return null
         }
-        return buf.toString(Charsets.ISO_8859_1)
+        // 不能用 buf.toString(Charsets.ISO_8859_1)：ByteArrayOutputStream 上的
+        // toString(Charset) 是 API 33 才有的重载，而 minSdk=24，
+        // 低版本上这里是 NoSuchMethodError（Error，不是 Exception），
+        // serve() 的 catch (_: Exception) 兜不住 —— 线程直接死，连接静默断开。
+        return String(buf.toByteArray(), Charsets.ISO_8859_1)
     }
 
     private fun parseQuery(raw: String): Map<String, String> {

@@ -25,7 +25,7 @@ import com.example.data.sync.SyncResult
  * 那份密码：
  * - **只在这次请求的密文里存在**（会话密钥派生的 ChaCha20，局域网上也解不开）；
  * - **不落浏览器存储** —— 网页端不记密码；
- * - 手机这边**立刻转存进 Keystore**（`remember = true` 时），下次就能免密拉。
+ * - 手机这边**只拿它登录这一次**：不写进 Keystore，也不碰本机已存的那份。
  *
  * 不填就**用手机已存的凭据**拉 —— 那是手机 App 自己的那一份。
  */
@@ -50,7 +50,8 @@ class ZjuProxyService(
      * @param password 密码。空 = 用手机已存的凭据。
      * @param year 目标学年（`"2026-2027"`）。空 = 用上次同步的那一期。
      * @param term 目标半学期（0 = 秋，4 = 春）。空 = 用上次同步的那一期。
-     * @param remember 是否把凭据转存进 Keystore。
+     * @param remember 已不再用于落盘：远端凭据一律不写回也不清除；
+     *   参数保留是为了不改接口。
      */
     override suspend fun sync(
         studentId: String?,
@@ -100,6 +101,10 @@ class ZjuProxyService(
                 password = password!!,
                 option = option,
                 rememberCredentials = remember,
+                // 网页端带来的凭据只在这一次登录里用：既不写回，也不清除本机已存的。
+                // 清掉本机那份会把「远端学号必须与手机已绑定账号一致」那道闸门废掉，
+                // 之后网页端就能借这台手机去登任何账号，没人拦得住。
+                preserveCredentials = true,
             )
         }
 
@@ -198,7 +203,8 @@ interface ZjuProxy {
      * @param password 密码。空 = 用手机已存的凭据。
      * @param year 目标学年（`"2026-2027"`）。空 = 用上次同步的那一期。
      * @param term 目标半学期（0 = 秋，4 = 春）。空 = 用上次同步的那一期。
-     * @param remember 是否把凭据转存进 Keystore。
+     * @param remember 已不再用于落盘：远端凭据一律不写回也不清除；
+     *   参数保留是为了不改接口。
      */
     suspend fun sync(
         studentId: String?,

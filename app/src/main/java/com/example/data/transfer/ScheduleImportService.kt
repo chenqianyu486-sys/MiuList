@@ -67,6 +67,18 @@ private fun List<CourseEntity>.courseIdByNaturalKey(): Map<String, Long> =
     associate { it.naturalKey() to it.id }
 
 /**
+ * 清课程之前记下来的一条课程级生成规则。
+ *
+ * **记的是自然键而不是课程 id**：REPLACE 会把课程整表清空重建，
+ * 新插入的行拿的是全新的 id，记 id 等于记一个马上就要失效的引用。
+ */
+private data class CapturedRule(
+    val courseKey: String,
+    val taskType: String,
+    val spec: CourseRuleSpec
+)
+
+/**
  * 一场考试跨设备的自然键。**口径必须与 [ExamBundle.naturalKey] 一致**，
  * 否则文件里的那场考试在本机认不出来，会被当成一场新的插进去 ——
  * 界面上同一门课的两场考试变成三场，而且没有任何报错。
@@ -263,6 +275,10 @@ class ScheduleImportService(
             //    类别规则（见 `CourseRepository.saveCourseWithSlots`）。
             val finalCategories = resolveCategories(v.courses, localCategories)
 
+            // 清课程会经外键 CASCADE 连带删掉课程级生成规则；教务网那份文件里没有这一项，
+            // 不先记下来，用户每同步一次就丢一次自己配的节奏与截止偏移。
+            val localRules = if (strategy == ImportStrategy.REPLACE) captureTaskRules() else emptyList()
+
             if (strategy == ImportStrategy.REPLACE) {
                 courseRepo.clearAllCourses()
                 calendarRepo.saveCalendar(
@@ -316,6 +332,13 @@ class ScheduleImportService(
                     inserted++
                 }
             }
+
+            // 课程落库之后才有新 id，规则要挂到这些新 id 上 —— 顺序反了就全挂不上。
+            //
+            // 回填了多少条**不进报告**：报告里那个「生成规则 N 条已同步」说的是
+            // 「从文件里同步进来的条数」，而 REPLACE 这一路一条规则都不是从文件来的
+            // （是替用户把本机那份保住），复用到那个字段上等于对用户说假话。
+            restoreTaskRules(localRules)
 
             // 课程落库之后才有新 id，待办要挂到这些新 id 上 —— 顺序反了就全挂不上。
             val taskLinkPlan = applyTaskLinks(taskLinks)
@@ -442,6 +465,50 @@ class ScheduleImportService(
                     dueBeforeMinutes = row.dueBeforeMinutes ?: 0
                 )
             )
+            applied++
+        }
+        return applied
+    }
+
+    /**
+     * 清课程之前把课程级规则按自然键记下来（自然键算法与导入循环里一致）。
+     *
+     * **为什么必须先记**：课程行带 `ON DELETE CASCADE` 外键，
+     * `clearAllCourses()` 一执行，规则行就被数据库连带删掉 —— 而教务网那份文件里
+     * 根本没有「课程 × 类型」这一项，不先记下来，用户每同步一次就丢一次
+     * 自己配的节奏与截止偏移，而且界面上看不出任何异常。
+     */
+    private suspend fun captureTaskRules(): List<CapturedRule> {
+        val courses = courseRepo.getAllCoursesOnce()
+        if (courses.isEmpty()) return emptyList()
+        val keyById = courses.associate { it.id to it.naturalKey() }
+        return db.taskGenerationRuleDao().getAllOnce().mapNotNull { row ->
+            val key = keyById[row.courseId] ?: return@mapNotNull null
+            CapturedRule(
+                courseKey = key,
+                taskType = row.taskType,
+                spec = CourseRuleSpec(row.cadence, row.dueOffsetDays, row.dueBeforeMinutes)
+            )
+        }
+    }
+
+    /**
+     * 课程落库拿到新 id 之后，按自然键把规则回填。
+     *
+     * 课程在文件里没了就跳过那条规则：规则没有归属就等于没有，
+     * 硬挂到一个猜出来的课程上比不挂更糟。
+     *
+     * 返回回填成功的条数，**只作诊断用**：这个数字不进导入报告，
+     * 理由见调用处 —— 报告里的「生成规则 N 条已同步」说的是从文件里同步进来的条数。
+     */
+    private suspend fun restoreTaskRules(rows: List<CapturedRule>): Int {
+        if (rows.isEmpty()) return 0
+        val courseIdByKey = courseRepo.getAllCoursesOnce().courseIdByNaturalKey()
+        var applied = 0
+        for (row in rows) {
+            val courseId = courseIdByKey[row.courseKey] ?: continue
+            val type = runCatching { TaskType.valueOf(row.taskType) }.getOrNull() ?: continue
+            settingsRepo.saveTaskRule(courseId = courseId, taskType = type, spec = row.spec)
             applied++
         }
         return applied

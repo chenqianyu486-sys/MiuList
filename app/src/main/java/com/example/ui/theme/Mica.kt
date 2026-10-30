@@ -810,7 +810,9 @@ fun Modifier.wallpaperBlur(
     hazeState: HazeState? = LocalGlassHazeState.current,
 ): Modifier {
     val saturationEffect = remember(saturation) {
-        if (saturation == 1f) {
+        // RenderEffect（含 asComposeRenderEffect）是 API 31+，而 minSdk=24。
+        // 低版本退化成 null：最多是壁纸少一档提饱和，不能为它赔上一次崩溃。
+        if (saturation == 1f || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             null
         } else {
             // 亮度加权的饱和度矩阵（Rec.709）：

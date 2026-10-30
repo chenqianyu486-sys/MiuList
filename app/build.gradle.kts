@@ -83,7 +83,9 @@ android {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
       storeFile = file(keystorePath)
       storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
+      // 密钥别名也从环境变量读：keystore.properties 里的别名不一定还叫 upload，
+      // 写死会在换密钥后直接构建失败。读不到（或写成空）时回退到 upload。
+      keyAlias = System.getenv("KEY_ALIAS")?.takeIf { it.isNotBlank() } ?: "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
     create("debugConfig") {

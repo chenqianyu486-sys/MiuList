@@ -795,7 +795,7 @@ private val ruleFlow = combine(
                 courseRules = settingsRepo.getTaskRulesOnce(),
                 categoryRules = settingsRepo.getCategoryRulesOnce().associateBy { it.category }
             )
-        ) { courseId, taskType, w, day -> taskRepo.hasWeekTask(courseId, taskType.name, w, day) }
+        ) { courseId, taskType, w, day, start -> taskRepo.hasWeekTask(courseId, taskType.name, w, day, start) }
 
         return CandidateBatch(tasks, week, preStudyLastWeek)
     }

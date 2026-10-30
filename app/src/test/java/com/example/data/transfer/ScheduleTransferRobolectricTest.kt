@@ -6,12 +6,14 @@ import com.example.data.codec.JsonScheduleCodec
 import com.example.data.codec.ScheduleBundle
 import com.example.data.codec.TimetableBlockBundle
 import com.example.data.di.AppContainer
+import com.example.data.generation.CourseRuleSpec
 import com.example.data.local.CourseEntity
 import com.example.data.local.CourseSlotEntity
 import com.example.data.local.CourseSlotWeekEntity
 import com.example.data.local.TaskEntity
 import com.example.data.model.CategoryRule
 import com.example.data.model.SlotWithWeeks
+import com.example.data.model.TaskType
 import com.example.data.source.zju.ZjuClassRow
 import com.example.data.source.zju.ZjuScheduleMapper
 import com.example.data.timetable.PeriodTable
@@ -779,6 +781,46 @@ private fun document(
             PeriodTable.ZJU_PERIODS.size,
             c.calendarRepository.periodsOnce().size
         )
+    }
+
+    // ---------------------------------------------------------------- 课程级生成规则
+
+    /**
+     * REPLACE 不许把用户配好的**课程级生成规则**清掉。
+     *
+     * 课程行带 `ON DELETE CASCADE` 外键，而浙大同步走的是 REPLACE（整表清空重建）——
+     * 教务网那份文件里根本没有「课程 × 类型」这一项，
+     * 不先把规则按自然键记下来，用户每同步一次就丢一次自己配的节奏与截止偏移，
+     * 而且界面上看不出任何异常。
+     *
+     * **导两次是刻意的**：第二遍顺带证明「重复导入同一份文件」既不会炸，
+     * 也不会把上一遍刚保住的规则再冲掉。
+     */
+    @Test
+    fun `a replace import keeps the course level rules the user already set`() = runBlocking {
+        val c = container()
+        reset(c)
+        val courseId = seedCourse(c, "高等数学", code = "MATH101")
+        c.settingsRepository.saveTaskRule(
+            courseId = courseId,
+            taskType = TaskType.POST_CLASS,
+            spec = CourseRuleSpec("PER_WEEK", 6, 45)
+        )
+
+        val text = document(courseJson("高等数学", code = "MATH101"))
+        c.importService.commit(c.importService.preview(text, ImportStrategy.REPLACE) as PreviewResult.Ready)
+        c.importService.commit(c.importService.preview(text, ImportStrategy.REPLACE) as PreviewResult.Ready)
+
+        // 规则要挂在**新**课程行上：REPLACE 重建的课程是新 id。
+        val course = c.courseRepository.getAllCoursesOnce().single { it.name == "高等数学" }
+        val rules = c.settingsRepository.getTaskRulesOnce()
+        val spec = rules[course.id]?.get(TaskType.POST_CLASS)
+        assertNotNull("REPLACE 之后用户配的生成规则必须还在", spec)
+        assertEquals("PER_WEEK", spec?.cadence)
+        assertEquals(6, spec?.dueOffsetDays)
+        assertEquals(45, spec?.dueBeforeMinutes)
+        // 规则表里只该剩这一条：规则要是留在了旧课程 id 上，这里会是 2。
+        assertEquals(1, rules.size)
     }
 
     // ---------------------------------------------------------------- 导出 → 导入闭环

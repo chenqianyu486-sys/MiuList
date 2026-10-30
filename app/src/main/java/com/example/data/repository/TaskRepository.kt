@@ -75,13 +75,22 @@ class TaskRepository(private val taskDao: TaskDao) {
     }
 
     /**
-     * 「同课程 + 同类型 + 同周次 + 同周几」的自动待办是否已存在。
+     * 「同课程 + 同类型 + 同周次 + 同周几 + 开课时刻」的自动待办是否已存在。
      *
      * 抽成方法而不是让引擎直接摸 DAO：预览路径与提交路径都要它，
      * 但前者不该依赖写库能力。
+     *
+     * **开课时刻这一维区分同一天的两节课**：同一门课同一周几可能排两节，
+     * 只按周几判会把它们当成同一条 —— 被删掉的那条就再也补不回来。
      */
-    suspend fun hasWeekTask(courseId: Long, taskTypeName: String, week: Int, dayOfWeek: Int): Boolean =
-        taskDao.findExistingWeekTask(courseId, taskTypeName, week, dayOfWeek) != null
+    suspend fun hasWeekTask(
+        courseId: Long,
+        taskTypeName: String,
+        week: Int,
+        dayOfWeek: Int,
+        startTimestamp: Long
+    ): Boolean =
+        taskDao.findExistingWeekTask(courseId, taskTypeName, week, dayOfWeek, startTimestamp) != null
 
     /**
      * 这台设备上**有没有用过一键生成**（库里有没有带周次的待办）。

@@ -18,7 +18,15 @@ interface CustomTaskTypeDao {
     @Query("SELECT COUNT(*) FROM custom_task_types")
     suspend fun count(): Int
 
-    @Insert(onConflict = OnConflictStrategy.ABORT)
+    /**
+     * 插入一条自定义待办类型。
+     *
+     * **冲突时覆盖而不是报错**：导入的语义是「另一台设备上的我更权威」，
+     * 那边最新的名字与配色就是用户改完的样子。同一份整机快照导第二次时 id 会撞上，
+     * 而报错的话整个导入事务都回滚 —— 用户做的事只是把同一份文件又导了一遍，
+     * 看到的结果却是「导不进来」。
+     */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: CustomTaskTypeEntity)
 
     /**

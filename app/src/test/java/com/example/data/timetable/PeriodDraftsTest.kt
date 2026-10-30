@@ -54,6 +54,16 @@ class PeriodDraftsTest {
         assertNull(parseMinuteOfDay("080"))
     }
 
+    @Test
+    fun `rejects overflowing digits instead of throwing`() {
+        // 粘贴进来的超长数字会溢出 Int，转换必须失败即返 null 而不是抛异常：
+        // 这段解析在重组期就会被求值（isValid → startMinute），
+        // 抛出来等于用户还没点保存，界面先崩了
+        assertNull(parseMinuteOfDay("9999999999:00"))
+        assertNull(parseMinuteOfDay("10:9999999999"))
+        assertFalse(PeriodDraft(1, "9999999999", "11:00", "上午").isValid)
+    }
+
     // ------------------------------------------------------------ 草稿合法性
 
     @Test

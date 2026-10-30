@@ -167,7 +167,7 @@ class AcademicCalendar(
      *
      * - [DayOffReason.NO_CLASS] —— 校历明确记的停课日（放假）。硬闸门。
      * - [DayOffReason.VACATED] —— 课被搬到别的日子去了（调休让出）。硬闸门。
-     * - [DayOffReason.OUT_OF_TERM] —— 落在学期范围之外。硬闸门。
+     * - [DayOffReason.OUT_OF_TERM] —— 落在学期范围之外。硬闸门。**补课日除外**（见下）。
      * - [DayOffReason.WEEKEND] —— 普通周末。**软**闸门：周末是「默认没课」，
      *   不是「一定没课」；用户自己排了课，周末就该上课。
      *   周末到底有没有课，要连排课数据一起看，见 [ScheduleResolver.slotsOn]。
@@ -181,11 +181,18 @@ class AcademicCalendar(
      * 2. **学期外排在周末前面**：学期外那一周的周六周日不是休息日，
      *    是这一天根本不属于这个学期。先判周末会把整个学期外的周说成
      *    「两个休息日 + 五天正常」，与周次条上的「不在学期范围内」自相矛盾。
+     * 3. **补课日不受学期外约束**：补课是校历明确记着的「那天有课」，
+     *    它落在学期范围之外也照样是一个真实的上课日。
+     *    真实的一条：冬季学期 2027-01-03 结束，而 12-31 停课的课补到 01-04 ——
+     *    01-04 在学期外，却要出周四的课。早先把它判成学期外的话，
+     *    [ScheduleResolver.slotsOn] 的闸门（硬闸门）会把那天的课整批挡掉，
+     *    总览、列表、周课表里一节课都不剩，而界面上看不出任何异常 ——
+     *    那天看上去就是一个普通的学期外工作日。
      */
     fun dayOffReason(epochDay: Long): DayOffReason? = when {
         isNoClass(epochDay) -> DayOffReason.NO_CLASS
         isVacatedForShift(epochDay) -> DayOffReason.VACATED
-        !isInTerm(epochDay) -> DayOffReason.OUT_OF_TERM
+        !isMakeup(epochDay) && !isInTerm(epochDay) -> DayOffReason.OUT_OF_TERM
         !isMakeup(epochDay) && EpochDays.isWeekend(epochDay) -> DayOffReason.WEEKEND
         else -> null
     }

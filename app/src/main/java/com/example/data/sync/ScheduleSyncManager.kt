@@ -62,12 +62,15 @@ class ScheduleSyncManager(
      * @param password 密码
      * @param option 目标学期
      * @param rememberCredentials 是否安全保存凭据到 AndroidKeyStore
+     * @param preserveCredentials 远端带来的凭据只用于这一次登录：**不写、也不删**。
+     *   删掉本机已存的会连带废掉账号一致性闸门。
      */
     suspend fun sync(
         studentId: String,
         password: String,
         option: ZjuImportService.TermOption,
-        rememberCredentials: Boolean = true
+        rememberCredentials: Boolean = true,
+        preserveCredentials: Boolean = false
     ): SyncResult = withContext(Dispatchers.IO) {
         if (studentId.isBlank() || password.isBlank()) {
             return@withContext fail(
@@ -127,7 +130,12 @@ class ScheduleSyncManager(
             committed = true
 
             // 4. 更新安全凭据与缓存元信息
-            if (rememberCredentials) {
+            if (preserveCredentials) {
+                // 远端凭据用完即弃，凭据存储一行都不碰。
+                // 早先这里走的是 saveMaskedStudentIdOnly，而它会把本机已存的
+                // 学号密码删掉 —— 远端一次同步就把「学号必须与手机已绑定账号一致」
+                // 那道闸门废掉了，之后谁都拿远端的学号来借这台手机都没人拦。
+            } else if (rememberCredentials) {
                 secureStorage.saveCredentials(studentId, password, remember = true)
             } else {
                 secureStorage.saveMaskedStudentIdOnly(studentId)

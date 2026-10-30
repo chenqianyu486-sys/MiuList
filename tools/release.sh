@@ -166,7 +166,19 @@ OLD_CODE="$(sed -n 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*\([0-9]\+
 OLD_NAME="$(sed -n 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle.kts | head -1)"
 NEW_CODE=$((OLD_CODE + 1))
 [ -n "$OLD_CODE" ] && [ -n "$OLD_NAME" ] || { echo "!! 读不到 versionCode / versionName。" >&2; exit 1; }
+# 版本号只许往前，不许倒退。
+#
+# 以前只校验「长得像 vX.Y.Z」，于是 v1.0.2 之后发一个 v1.0.1 也能过 ——
+# 结果是 GitHub 上多一个比当前更旧的 tag，用户点「最新 release」拿到的是旧版。
+# sort -V 取两个版本里较小的那个：它等于 OLD_NAME 才说明目标版本不低于当前版本。
+if [ "$(printf '%s\n%s\n' "$OLD_NAME" "$VERSION_NO_V" | sort -V | head -1)" != "$OLD_NAME" ]; then
+  echo "!! 目标版本 $VERSION_NO_V 低于当前 $OLD_NAME —— 发版不允许版本号倒退" >&2; exit 1
+fi
 echo "versionCode $OLD_CODE → $NEW_CODE    versionName $OLD_NAME → $VERSION_NO_V"
+
+# .tmp 在 .gitignore 里，干净克隆的仓库上**没有**这个目录 ——
+# 不先建，后面的备份 cp 与重定向会直接报 "No such file or directory"。
+mkdir -p .tmp
 
 # 备份（dry-run 要还原）
 cp app/build.gradle.kts ".tmp/release_backup_build.gradle.kts"
@@ -245,21 +257,35 @@ while IFS='=' read -r key value; do
   value="${value%$'\r'}"
   value="$(printf '%s' "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
   case "$key" in
-    KEYSTORE_PATH|STORE_PASSWORD|KEY_PASSWORD) export "$key=$value" ;;
+    KEYSTORE_PATH|STORE_PASSWORD|KEY_PASSWORD|KEY_ALIAS) export "$key=$value" ;;
   esac
 done < keystore.properties
 export KEYSTORE_PATH="${KEYSTORE_PATH:-$ROOT/my-upload-key.jks}"
 
-./gradlew.bat :app:assembleRelease --console=plain 2>&1 | tail -5
+# 构建日志全量落盘。
+#
+# 以前只 tail -5 行，Gradle 失败时那 5 行几乎全是无关噪音，
+# 真正的原因（哪个任务、哪条报错）在几百行之前，谁也翻不到。
+# tee 一份完整的，屏幕上仍然只看末尾 40 行。
+if ! ./gradlew.bat :app:assembleRelease --console=plain 2>&1 | tee .tmp/build.log | tail -40; then
+  echo "!! 构建失败，完整日志见 .tmp/build.log" >&2
+  exit 1
+fi
 SRC_APK="$OUT_APK_DIR/app-release.apk"
 [ -f "$SRC_APK" ] || { echo "!! 没构建出 $SRC_APK" >&2; exit 1; }
 cp "$SRC_APK" "$OUT_APK_DIR/$APK_NAME"
+# 再留一份到 .tmp：app/build/outputs 会被下一次 gradle clean 抹掉，
+# 发版中断后再跑发布脚本时，原路径的产物可能已经没了。
+mkdir -p .tmp && cp "$OUT_APK_DIR/$APK_NAME" ".tmp/$APK_NAME"
 echo "产物: $OUT_APK_DIR/$APK_NAME ($(du -m "$OUT_APK_DIR/$APK_NAME" | cut -f1) MB)"
 
 # ---------------------------------------------------------------- 校验
 echo ""
 echo "== 校验 =="
-BT="$(ls -d "$SDK_ROOT"/build-tools/*/ 2>/dev/null | sort -V | tail -1)"
+# build-tools 找不到时，ls 的非零退出码会顺着 pipefail 让脚本**无声地**退出 ——
+# 用户只看到命令没跑完，看不出是 SDK 路径不对。所以这里把管道兜住，再自己给一句人话。
+BT="$(ls -d "$SDK_ROOT"/build-tools/*/ 2>/dev/null | sort -V | tail -1 || true)"
+[ -n "$BT" ] || { echo "!! 在 $SDK_ROOT/build-tools 下找不到 build-tools，请检查 local.properties 的 sdk.dir" >&2; exit 1; }
 AAPT="$BT/aapt.exe"; [ -f "$AAPT" ] || AAPT="$BT/aapt"
 APKSIGNER="$BT/apksigner.bat"; [ -f "$APKSIGNER" ] || APKSIGNER="$BT/apksigner"
 
@@ -329,13 +355,15 @@ else
   else
     git log --pretty=format:'%s' -20 > "$COMMITS"
   fi
-  "$PY" tools/release_helper.py notes \
-    --version "$VERSION" \
-    --prev-tag "${PREV_TAG:-$VERSION_NO_V}" \
-    --summary "$SUMMARY" \
-    --apk-name "$APK_NAME" \
-    --commits-file "$COMMITS" \
-    --out "$NOTES"
+  # 参数先拼成数组再展开：空字符串（比如 --summary 没给）才不会变成一个空参数，
+  # 而「正式版」这个开关更不能靠空串去表达 —— 只有 --stable 这个标志本身算数。
+  NOTES_ARGS=(--version "$VERSION" --prev-tag "${PREV_TAG:-$VERSION_NO_V}"
+              --summary "$SUMMARY" --apk-name "$APK_NAME"
+              --commits-file "$COMMITS" --out "$NOTES")
+  if [ "$STABLE" -eq 1 ]; then
+    NOTES_ARGS+=(--stable)
+  fi
+  "$PY" tools/release_helper.py notes "${NOTES_ARGS[@]}"
 fi
 
 # API 的 JSON 载荷在发布那一步生成（见 tools/release_publish.sh）。
@@ -395,6 +423,11 @@ git push origin main || {
   git pull --rebase origin main
   git push origin main
 }
+# gitee 镜像顺带推一份：README 里推荐用户走 gitee，镜像却停在旧提交上，
+# 用户按 README 拉到的却不是刚发布的版本。推失败只警告，不阻断 GitHub 发布。
+if git remote get-url gitee >/dev/null 2>&1; then
+  git push gitee main || echo "!! 推 gitee 失败（不影响 GitHub 发布）" >&2
+fi
 
 # ---------------------------------------------------------------- 发布
 #
@@ -409,4 +442,6 @@ if [ "$STABLE" -eq 1 ]; then
 else
   PUBLISH_ARGS=()
 fi
-tools/release_publish.sh "$VERSION" "${PUBLISH_ARGS[@]}" --notes "$NOTES"
+# 用 bash 显式调用：文件在仓库里的可执行位不一定被检出（Windows 上 clone 常常拿到 100644），
+# 直接 ./tools/release_publish.sh 会 "Permission denied"。
+bash tools/release_publish.sh "$VERSION" "${PUBLISH_ARGS[@]}" --notes "$NOTES"

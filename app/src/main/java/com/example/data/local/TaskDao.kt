@@ -72,13 +72,17 @@ interface TaskDao {
     fun getTasksByType(taskType: String): Flow<List<TaskEntity>>
 
     /**
- * 自动生成待办的唯一性判据：**同课程 + 同类型 + 同周次 + 同周几**。
+ * 自动生成待办的唯一性判据：**同课程 + 同类型 + 同周次 + 同周几 + 开课时刻**。
  *
  * 原来是「同课程 + 同类型 + generatedDate（同一天）」。改成周次之后，
  * 一次生成一整周也不会互相盖掉，而连点两次同一个周次仍然只出一份。
+ *
+ * **开课时刻这一维区分同一天的两节课**：同一门课同一周几可能排两节，
+ * 只按周几判会把它们算成同一条 —— 于是删掉其中一条之后，
+ * 另一条还占着这个键，被删的那条再也补不回来。
  */
-@Query("SELECT * FROM tasks WHERE courseId = :courseId AND taskType = :taskType AND week = :week AND dayOfWeek = :dayOfWeek LIMIT 1")
-    suspend fun findExistingWeekTask(courseId: Long, taskType: String, week: Int, dayOfWeek: Int): TaskEntity?
+@Query("SELECT * FROM tasks WHERE courseId = :courseId AND taskType = :taskType AND week = :week AND dayOfWeek = :dayOfWeek AND startTimeTimestamp = :startTimestamp LIMIT 1")
+    suspend fun findExistingWeekTask(courseId: Long, taskType: String, week: Int, dayOfWeek: Int, startTimestamp: Long): TaskEntity?
 
     /**
      * 有没有**按周次生成**出来的待办。
@@ -88,7 +92,7 @@ interface TaskDao {
      * 等于所有人都会被判成用过一键生成。
      *
      * `week` 才是分水岭：手工待办没有周次（0），只有生成引擎排出来的才带周次
-     * （生成时的去重键就是「课程 + 类型 + 周次 + 周几」）。
+     * （生成时的去重键就是「课程 + 类型 + 周次 + 周几 + 开课时刻」）。
      */
     @Query("SELECT EXISTS(SELECT 1 FROM tasks WHERE week > 0)")
     suspend fun hasGeneratedWeekTasks(): Boolean

@@ -399,6 +399,28 @@ class SnapshotTransferRobolectricTest {
     }
 
     @Test
+    fun `importing the same snapshot twice does not blow up on the custom types`() = runBlocking {
+        // 自定义类型的落库是按 id 插入的，而这份快照里带着它的 id ——
+        // 同一份文件导第二次时 id 必然撞上。撞上就报错的话整个导入事务都回滚，
+        // 用户做的事只是把同一份文件又导了一遍，看到的结果却是「导不进来」。
+        val a = container()
+        val json = snapshotJson(
+            taskTypes = listOf(
+                com.example.data.codec.TaskTypeBundle(
+                    id = "ct-1", label = "竞赛", colorHex = "#A6D6E4", inkHex = "#3F5F69", sortOrder = 1
+                )
+            )
+        )
+
+        importSnapshot(a, json)
+        importSnapshot(a, json)
+
+        val custom = a.taskTypeRepository.getAllOnce()
+        assertEquals(1, custom.size)
+        assertEquals("竞赛", custom.single().label)
+    }
+
+    @Test
     fun `course level generation rules come across keyed by the course natural key`() = runBlocking {
         val a = container()
         val courseId = seedCourse(a)

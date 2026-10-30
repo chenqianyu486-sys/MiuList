@@ -407,13 +407,15 @@ class MigrationTest {
             dao.insertTask(existing.copy(id = 0, week = 3, dayOfWeek = 3, title = "高等数学 第3周作业"))
             assertEquals(3, dao.getAllTasksOnce().size)
 
-            // 判据是四元组：少一个维度都会判错 —— 只看课程+类型会把两周都当成重复，
+            // 判据是五元组：少一个维度都会判错 —— 只看课程+类型会把两周都当成重复，
             // 只看课程+周次会把作业和预习混成一条。
-            assertNotNull(dao.findExistingWeekTask(1L, TaskType.POST_CLASS.name, 5, 3))
-            assertNotNull(dao.findExistingWeekTask(1L, TaskType.POST_CLASS.name, 3, 3))
-            assertNull("第 9 周还没有", dao.findExistingWeekTask(1L, TaskType.POST_CLASS.name, 9, 3))
-            assertNull("类型不同不算重复", dao.findExistingWeekTask(1L, TaskType.PRE_STUDY.name, 5, 3))
-            assertNull("周几不同不算重复", dao.findExistingWeekTask(1L, TaskType.POST_CLASS.name, 5, 5))
+            val start = existing.startTimeTimestamp
+            assertNotNull(dao.findExistingWeekTask(1L, TaskType.POST_CLASS.name, 5, 3, start))
+            assertNotNull(dao.findExistingWeekTask(1L, TaskType.POST_CLASS.name, 3, 3, start))
+            assertNull("第 9 周还没有", dao.findExistingWeekTask(1L, TaskType.POST_CLASS.name, 9, 3, start))
+            assertNull("类型不同不算重复", dao.findExistingWeekTask(1L, TaskType.PRE_STUDY.name, 5, 3, start))
+            assertNull("周几不同不算重复", dao.findExistingWeekTask(1L, TaskType.POST_CLASS.name, 5, 5, start))
+            assertNull("开课时刻不同不算重复", dao.findExistingWeekTask(1L, TaskType.POST_CLASS.name, 5, 3, start + 1))
         } finally {
             db.close()
         }

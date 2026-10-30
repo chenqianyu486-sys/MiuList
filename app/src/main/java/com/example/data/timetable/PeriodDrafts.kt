@@ -83,8 +83,11 @@ fun parseMinuteOfDay(text: String): Int? {
             val mm = parts[1].trim()
             if (hh.isEmpty() || mm.isEmpty()) return null
             if (!hh.all { it.isDigit() } || !mm.all { it.isDigit() }) return null
-            h = hh.toInt()
-            m = mm.toInt()
+            // 用 toIntOrNull 而不是 toInt：粘贴进来的超长数字会溢出 Int，
+            // toInt() 抛的是 NumberFormatException。而这段解析在重组期就会被求值
+            // （isValid → startMinute），抛异常等于用户还没点保存界面就崩了。
+            h = hh.toIntOrNull() ?: return null
+            m = mm.toIntOrNull() ?: return null
         }
         // 纯 4 位数字：`0800`
         1 -> {
