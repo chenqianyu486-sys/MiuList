@@ -129,13 +129,19 @@ gradlew.bat assembleDebug
 
 ### 桌面网页端
 
-需要 Node.js 20+。桌面端用 React + TypeScript + Vite 构建，产物是**单个 HTML**：
+需要 Node.js 22+（LTS）。桌面端用 React + TypeScript + Vite 构建，产物是**单个 HTML**：
 
 ```bash
 cd desktop
 npm install
 npm run build     # → desktop/dist/MiuList-Web.html
 ```
+
+> **为什么不是 Node 20**：`npm test` 用的是 `node --test "test/*.test.mjs"` ——
+> 带引号的 glob 由 Node 自己的测试运行器展开，而**这个能力是 Node 21 才加的**
+> （Node 21.0.0 发布说明：「测试运行器对 glob 表达式的支持」）。
+> Node 20 会把带引号的 glob 当成一个普通路径，找不到文件直接报错。
+> 引号不能去掉：Windows 的 cmd 不展开 glob，去掉引号在 Windows 上同样找不到文件。
 
 开发时 `npm run dev`；用 mock 手机联调、截图验收的步骤见
 [desktop/README.md](desktop/README.md)。手机侧的同步单测：
@@ -159,7 +165,7 @@ start-preview.bat -Display base  # 换成设计基准 411dp
 ### 跑测试
 
 ```bash
-# JVM 单测（98 个测试类、941 个用例，默认不联网）
+# JVM 单测（110 个测试类、1068 个用例，默认不联网）
 gradlew.bat :app:testDebugUnitTest
 
 # 插桩测试（需要连着设备或模拟器）
@@ -182,6 +188,14 @@ STORE_PASSWORD=...
 KEY_ALIAS=upload
 KEY_PASSWORD=...
 ```
+
+`keystore.properties` 里的四项会由发版脚本导出成环境变量喂给构建：
+
+- `KEYSTORE_PATH` —— 上传密钥（`.jks`）文件路径；
+- `STORE_PASSWORD` —— 密钥库口令；
+- `KEY_ALIAS` —— 上传密钥别名。构建脚本从环境变量 `KEY_ALIAS` 读取；
+  未设置时回退为 `upload`；
+- `KEY_PASSWORD` —— 别名对应的密钥口令。
 
 ### 改了界面想验证
 

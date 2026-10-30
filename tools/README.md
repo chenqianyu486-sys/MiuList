@@ -248,7 +248,7 @@ tools/release.sh v1.0.2 --summary "一句话概述"
 
 - 工作区**必须干净**（发版前先把改动提交）。
 - `keystore.properties` 在仓库根（已被 gitignore）：`KEYSTORE_PATH` / `STORE_PASSWORD` /
-  `KEY_PASSWORD`。构建脚本读的是**环境变量**，`release.sh` 负责从 properties 导进去。
+  `KEY_ALIAS` / `KEY_PASSWORD`。构建脚本读的是**环境变量**，`release.sh` 负责从 properties 导进去。
 - GitHub 凭据走系统凭据管理器（`git credential fill` 能取到），不需要额外配置。
 
 ### 三个踩过的坑（脚本里都注释了）

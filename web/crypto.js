@@ -3,8 +3,9 @@
  * ## 为什么不用 WebCrypto
  *
  * `crypto.subtle` **只在 secure context 里存在**（https 或 localhost）。
- * 我们的网页端是手机在局域网里用 http://192.168.x.x 直接发的，
- * 那个页面**不是 secure context** —— `crypto.subtle` 是 undefined。
+ * 网页端是**本地单文件 HTML**（file://），但也可能被放到局域网里的
+ * http://192.168.x.x 上打开 —— 那种页面**不是 secure context**，
+ * `crypto.subtle` 是 undefined。
  * `crypto.getRandomValues` 不受限（非 secure context 也有），所以随机数用它。
  *
  * 于是 HMAC 与 ChaCha20 只能自己实现。
@@ -315,7 +316,7 @@ export function open(keys, sealed) {
  * ## 为什么用 MODP 群而不是 ECDH
  *
  * - 浏览器端：`crypto.subtle` 只在 secure context 里存在，而网页端
- *   可能跑在 `http://192.168.x.x` 上（手机托管网页端那条路）——
+ *   可能跑在 `http://192.168.x.x` 上（局域网里用 http 打开那条路）——
  *   那里 `crypto.subtle` 是 undefined，**连 BigInt 之外的密钥协商都做不了**；
  * - 手机端：`KeyAgreement("ECDH")` 在各家 Android 厂商的 JCE 上
  *   能不能用、用的哪条曲线，行为并不一致（老版本 AndroidOpenSSL
