@@ -69,8 +69,8 @@ android {
     applicationId = "com.aistudio.scheduletodo.unmq"
     minSdk = 24
     targetSdk = 36
-    versionCode = 12
-    versionName = "1.0.11"
+    versionCode = 13
+    versionName = "1.1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     testInstrumentationRunnerArguments["miulist.instrumentedNet"] = liveNetFlag
