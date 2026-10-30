@@ -5,13 +5,14 @@
 #
 # 一条命令走完整个发版流程，顺序是「先验证、后发布」：
 #
-#   1. 提版本号（versionCode +1 / versionName）
+#   1. 提版本号（versionCode +1 / versionName；桌面端 package.json 跟着走）
 #   2. 同步 README 的下载入口
 #   3. 用上传密钥构建 release APK，并复制成 MiuList-vX.Y.Z.apk
 #   4. 校验：版本号对不对、签名有效吗、证书和上一版**同一把**吗（决定能不能覆盖升级）
-#   5. 生成发布说明
-#   6. 提交 → 打 tag → 推送
-#   7. 建 GitHub Release（测试版 = pre-release）并上传 APK
+#   5. 构建桌面单文件网页版，并检查产物里的版本号就是这一版
+#   6. 生成发布说明
+#   7. 提交 → 打 tag → 推送
+#   8. 建 GitHub Release（测试版 = pre-release）并上传 APK 与桌面网页版
 #
 # ## 用法
 #
@@ -161,6 +162,8 @@ echo "versionCode $OLD_CODE → $NEW_CODE    versionName $OLD_NAME → $VERSION_
 # 备份（dry-run 要还原）
 cp app/build.gradle.kts ".tmp/release_backup_build.gradle.kts"
 cp README.md ".tmp/release_backup_README.md"
+cp desktop/package.json ".tmp/release_backup_desktop_package.json"
+cp desktop/package-lock.json ".tmp/release_backup_desktop_package-lock.json"
 
 # **任何退出都要还原**（dry-run 模式下）。
 # 上一版就栽在这：构建失败时脚本直接退出，版本号就留在 1.0.2 没还原，
@@ -169,6 +172,8 @@ restore_versions() {
   if [ "$DRY_RUN" -eq 1 ] && [ "$RESTORED" -eq 0 ] && [ -f ".tmp/release_backup_build.gradle.kts" ]; then
     cp ".tmp/release_backup_build.gradle.kts" app/build.gradle.kts
     cp ".tmp/release_backup_README.md" README.md
+    cp ".tmp/release_backup_desktop_package.json" desktop/package.json
+    cp ".tmp/release_backup_desktop_package-lock.json" desktop/package-lock.json
     RESTORED=1
     echo ""
     echo "（已还原版本号到 $OLD_NAME / versionCode $OLD_CODE）"
@@ -179,6 +184,33 @@ trap restore_versions EXIT
 
 sed -i "s/^\([[:space:]]*\)versionCode[[:space:]]*=[[:space:]]*[0-9]\+/\1versionCode = $NEW_CODE/" app/build.gradle.kts
 sed -i "s/^\([[:space:]]*\)versionName[[:space:]]*=[[:space:]]*\"[^\"]*\"/\1versionName = \"$VERSION_NO_V\"/" app/build.gradle.kts
+
+# 桌面端的版本号**跟着这一版走**。
+#
+# 以前它是手写在「关于」面板里的，于是每次发版都要另开一条
+# `chore(desktop): 版本号对齐` 的提交去补；忘了补，界面上就摆着一个旧版本号
+# —— 而那是用户能直接看到的地方。现在发版时一起提，不再靠人记。
+#
+# 只改**前几处** version：package-lock.json 里每个依赖项也各有自己的 version，
+# 一把 sed 全表替换会把依赖的版本号也改掉。
+"$PY" - "$VERSION_NO_V" <<'PYEOF'
+import re, sys
+version = sys.argv[1]
+# package.json 1 处（根包）；package-lock.json 2 处（根包 + packages.""）
+for path, limit in (("desktop/package.json", 1), ("desktop/package-lock.json", 2)):
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    text, n = re.subn(
+        r'("version"\s*:\s*")[^"]*(")',
+        lambda m: m.group(1) + version + m.group(2),
+        text,
+        count=limit,
+    )
+    if n != limit:
+        sys.exit("!! %s 里改了 %d 处 version（预期 %d 处）" % (path, n, limit))
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+PYEOF
 # README 的下载入口跟着换
 if grep -q 'MiuList-v[0-9.]*\.apk' README.md; then
   sed -i "s/MiuList-v[0-9.]*\.apk/$APK_NAME/g" README.md
@@ -249,6 +281,31 @@ if [ -n "$PREV_TAG" ]; then
   fi
 fi
 
+# ---------------------------------------------------------------- 桌面单文件网页版
+#
+# 这一段是**必须有**的：以前脚本只做「文件在就上传、不在就跳过」，
+# 于是「改了版本号但忘了重新构建」也会静静地把**旧产物**发出去 ——
+# 不报错，界面上还摆着上一个版本号。
+#
+# 现在改成：发版时**当场构建**，并检查产物里的版本号就是这一版。
+# 构建失败 / 版本号对不上 → 直接退出，不发布。
+echo ""
+echo "== 构建桌面单文件网页版 =="
+WEB_HTML="desktop/dist/MiuList-Web.html"
+if [ ! -d desktop/node_modules ]; then
+  echo "（没装依赖，先 npm ci）"
+  (cd desktop && npm ci --no-audit --no-fund)
+fi
+(cd desktop && npm run build)
+[ -f "$WEB_HTML" ] || { echo "!! 没构建出 $WEB_HTML" >&2; exit 1; }
+# 版本号就在「关于」面板里（构建期从 package.json 注入）。
+# 找「about-version」附近的那个版本号 —— 单独 grep 版本号会误伤别的数字。
+if ! grep -o "about-version[^}]\{0,40\}$VERSION_NO_V" "$WEB_HTML" | grep -q "$VERSION_NO_V"; then
+  echo "!! 桌面产物里没有版本号 $VERSION_NO_V（重新构建后再发）" >&2
+  exit 1
+fi
+echo "✓ 桌面产物 $WEB_HTML ($(du -m "$WEB_HTML" | cut -f1) MB)，版本号 $VERSION_NO_V"
+
 # ---------------------------------------------------------------- 发布说明
 echo ""
 echo "== 发布说明 =="
@@ -291,6 +348,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
   echo "dry-run 结果："
   echo "  版本号   $OLD_NAME → $VERSION_NO_V（versionCode $NEW_CODE）"
   echo "  产物     $OUT_APK_DIR/$APK_NAME"
+  echo "  桌面产物 $WEB_HTML（版本号 $VERSION_NO_V）"
   echo "  证书     $CERT"
   echo "  说明     $NOTES"
   exit 0
@@ -299,7 +357,7 @@ fi
 # ---------------------------------------------------------------- 提交与 tag
 echo ""
 echo "== 提交与 tag =="
-git add app/build.gradle.kts README.md
+git add app/build.gradle.kts README.md desktop/package.json desktop/package-lock.json
 MSG=".tmp/release_commit_msg_${VERSION_NO_V}.txt"
 cat > "$MSG" <<EOF
 release: $VERSION $([ "$STABLE" -eq 1 ] && echo '' || echo '测试版')
@@ -405,14 +463,11 @@ UPLOAD="https://uploads.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/$REL_ID
 curl -sS -X POST "${AUTH[@]}" -H 'Content-Type: application/vnd.android.package-archive' \
   --data-binary "@$OUT_APK_DIR/$APK_NAME" "$UPLOAD" >/dev/null
 
-# 上传桌面单文件网页版（若已构建）
-WEB_HTML="desktop/dist/MiuList-Web.html"
-if [ -f "$WEB_HTML" ]; then
-  echo "上传 MiuList-Web.html"
-  UPLOAD_WEB="https://uploads.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/$REL_ID/assets?name=MiuList-Web.html"
-  curl -sS -X POST "${AUTH[@]}" -H 'Content-Type: text/html; charset=utf-8' \
-    --data-binary "@$WEB_HTML" "$UPLOAD_WEB" >/dev/null
-fi
+# 上传桌面单文件网页版（构建那一步已经保证它在、且版本号对）
+echo "上传 MiuList-Web.html"
+UPLOAD_WEB="https://uploads.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/$REL_ID/assets?name=MiuList-Web.html"
+curl -sS -X POST "${AUTH[@]}" -H 'Content-Type: text/html; charset=utf-8' \
+  --data-binary "@$WEB_HTML" "$UPLOAD_WEB" >/dev/null
 
 # 核对
 echo ""
