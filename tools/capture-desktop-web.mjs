@@ -15,8 +15,8 @@
  *
  * ## 用法
  *
- *   node tools/web-mock-server.mjs --port 8801 --auto-secret   # 另开一个终端
- *   node tools/capture-desktop-web.mjs --port 8801 --secret <打印出来的值> --out .tmp/desktop-shots
+ *   node tools/web-mock-server.mjs --port 8801                 # 另开一个终端
+ *   node tools/capture-desktop-web.mjs --port 8801 --out .tmp/desktop-shots
  *
  * ## 为什么走 CDP 而不是 --window-size
  *
@@ -41,7 +41,6 @@ function arg(name, fallback) {
 }
 
 const PORT = Number(arg('--port', 8801));
-const SECRET = arg('--secret', '');
 const OUT = path.resolve(REPO, arg('--out', '.tmp/desktop-shots'));
 const CHROME = arg('--chrome', 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe');
 const ONLY = arg('--only', '');
@@ -59,20 +58,10 @@ const SKIP_SHOTS = argv.includes('--no-shots');
 const MODE = arg('--mode', 'paired');
 
 const FILE_URL = `file:///${HTML.replace(/\\/g, '/')}`;
-/**
- * 带上手机地址。
- *
- * `devsecret` 是**老协议**（v3，secret 从二维码搬过去）才需要的 ——
- * mock 用它自己那把 secret 算 `requestId`，网页端若自己随机生成一把就对不上。
- * 新协议（v3.1，DH 协商）两边各算各的，**不需要这个参数**。
- */
-const QUERY = `base=${encodeURIComponent(`http://127.0.0.1:${PORT}`)}${
-  SECRET ? `&devsecret=${encodeURIComponent(SECRET)}` : ''
-}`;
+/** 带上手机地址。DH 协商由两端各自生成临时密钥，不需要任何额外参数。 */
+const QUERY = `base=${encodeURIComponent(`http://127.0.0.1:${PORT}`)}`;
 const APP_URL = `${FILE_URL}?${QUERY}`;
-/**
- * 有地址、还没批准 → 网页端停在配对页（二维码那张）。
- */
+/** 有地址、还没批准 → 网页端停在配对卡（6 位码 + 等手机点允许）。 */
 const APP_URL_PAIRING = `${FILE_URL}?${QUERY}`;
 /** 什么都没有 → 首次进入的欢迎页。 */
 const APP_URL_INTRO = FILE_URL;
@@ -118,23 +107,14 @@ const SCENES = {
  *
  * 每个场景有自己的 URL —— 「有地址没密钥」与「什么都没有」是两个界面：
  *
- * - `intro`：首次进入的欢迎页（粘贴按钮、手打地址、扫码入口）；
- * - `pairing-card`：地址已填、配对码已生成 —— 二维码与同步密码输入框在这里；
+ * - `intro`：首次进入的欢迎页（粘贴按钮、手打地址、连接按钮）；
+ * - `pairing-card`：地址已填、配对请求已发出 —— **配对卡只显示 6 位码与等待提示，不再画任何图形**，
+ *   同步密码输入框也在这里；
  * - `sync-connect`：跳过初始配置后，设置面板「连接」分区里的「找到手机」。
  */
 const PAIRING_SCENES = {
   intro: { url: APP_URL_INTRO, steps: [] },
   'pairing-card': { url: APP_URL_PAIRING, steps: [] },
-  /**
-   * 「只填地址」那条路：不出二维码，等手机上点「允许」。
-   *
-   * 它跟 `pairing-card` 是**两个界面**（一个画码、一个只显示配对码），
-   * 所以要单独拍 —— 拍出来的图得能看出「这条路没有二维码」。
-   */
-  'link-card': {
-    url: APP_URL_PAIRING,
-    steps: [`clickText('不扫码，直接让手机确认')`],
-  },
   'sync-connect': {
     url: APP_URL_INTRO,
     steps: [`clickText('跳过初始配置')`, `document.querySelector('.side-status')?.click()`],
@@ -408,12 +388,6 @@ async function captureScene(cdp, sessionId, size, scene, url, steps, reset = fal
 async function main() {
   if (!fs.existsSync(CHROME)) throw new Error(`找不到 Chrome：${CHROME}`);
   if (!fs.existsSync(HTML)) throw new Error(`找不到构建产物：${HTML}（先 npm run build）`);
-  // `--secret` 只在**老协议**下需要（网页端用 ?devsecret= 把 secret 固定住）。
-  // 新协议（v3.1，DH 协商）两边各算各的，网页端与 mock 用自己的临时密钥对，
-  // 不需要这把固定的 secret —— 所以它现在是**可选**的。
-  if (!SECRET) {
-    console.log('（没给 --secret：走新协议 DH 协商，网页端与 mock 各自生成临时密钥）');
-  }
   fs.mkdirSync(OUT, { recursive: true });
 
   const { proc, port, profile } = await launchChrome();
@@ -433,8 +407,8 @@ async function main() {
 
     // ── 配对模式：只拍配对流程那几个页面 ──
     //
-    // mock 必须是 `--no-auto-approve`：配对码页面存在的**前提**就是
-    // 「还没被批准」。mock 自动批准的话，那张二维码一眨眼就没了。
+    // mock 必须是 `--no-auto-approve`：配对卡存在的**前提**就是
+    // 「还没被批准」。mock 自动批准的话，那张卡一眨眼就没了。
     if (MODE === 'pairing') {
       if (!SKIP_SHOTS) {
         const sizes = ONLY ? SIZES.filter((s) => s.name === ONLY) : SIZES;
@@ -457,26 +431,6 @@ async function main() {
       await sleep(500);
       paired = await evaluate(cdp, sessionId, 'window.__miu.paired()');
       if (paired) break;
-    }
-    if (!paired) {
-      /**
-       * 兜底：**切到「只填地址」那条路**。
-       *
-       * 默认那条路是「手机扫电脑的码」：网页端**故意不带公钥**发请求
-       * （手机在用户扫码之前不该弹确认卡），公钥是跟着二维码深链走的 ——
-       * 真机上那一步由手机扫码完成，而 **mock 不会扫码**，于是这条路永远停在半路。
-       *
-       * 「只填地址」那条路把公钥**跟着请求一起发过去**，mock 收到就自动批准 ——
-       * 等价于「手机上有人点了允许」。而且两端仍然各自算配对码并互相核对，
-       * 所以「码对不对得上」这件事照样被验到。
-       */
-      const switched = await evaluate(cdp, sessionId, `clickText('不扫码，直接让手机确认')`);
-      if (switched !== 'ok') throw new Error('切不到「不扫码，直接让手机确认」那条路');
-      for (let i = 0; i < 40; i++) {
-        await sleep(500);
-        paired = await evaluate(cdp, sessionId, 'window.__miu.paired()');
-        if (paired) break;
-      }
     }
     check('配对成功（mock 自动批准）', paired === true);
     if (!paired) throw new Error('没配上对，后面的验证没意义');

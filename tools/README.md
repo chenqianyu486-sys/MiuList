@@ -273,7 +273,7 @@ tools/release.sh v1.0.2 --summary "一句话概述"
 **beta 起桌面端改为单文件静态页面**：`desktop/dist/MiuList-Web.html`。
 Chrome / Edge 打开，浏览器直接当桌面端；没有 exe、没有本地服务，也没有
 Windows 的「未知发布者」弹窗。数据用 localStorage + 可选本机 JSON 快照
-（不含配对密钥）；手机地址扫手机「网页同步」里的地址码，之后让手机扫配对码。
+（不含配对密钥）；手机地址从手机「网页同步」复制，配对在手机上点「允许」。
 
 ```bash
 cd desktop
@@ -285,8 +285,8 @@ npm run build     # → desktop/dist/MiuList-Web.html
 联调（mock 手机）：
 
 ```bash
-node tools/web-mock-server.mjs --port 8801 --auto-secret
-# 打开 …/MiuList-Web.html?base=http://127.0.0.1:8801&devsecret=<打印出来的 secret>
+node tools/web-mock-server.mjs --port 8801
+# 打开 …/MiuList-Web.html?base=http://127.0.0.1:8801
 ```
 
 - 新桌面端源码/说明：[../desktop/README.md](../desktop/README.md)

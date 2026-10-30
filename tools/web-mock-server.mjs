@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* MiuList 网页端的本地 mock 服务（协议 v3 / 配对 v3.2）。
+/* MiuList 网页端的本地 mock 服务（协议 v3 / 配对协议 6）。
  *
  * 用途：不开手机也能把网页端跑起来 —— 开发时调样式、截图验收时出图。
  *
@@ -11,17 +11,13 @@
  * mock 就照着这个来：网页端 POST 来的公钥它接着，
  * 算出一把共享密钥，然后按 `--no-auto-approve` 决定批不批。
  *
- * 老协议（把 secret 从二维码搬过去）也留着：`--secret <base64url>`。
- * 桌面端**已经不走**那条路了（v3.2 起强制核对配对码），留它只是为了
- * `--legacy-pairing` 能模拟一台旧手机、验版本闸门。
- *
  * 密码学直接 import 网页端那份 `web/crypto.js` ——
  * 这样 mock 与手机端的算法**不可能**对不齐（那是「配对过了但一直解密失败」的元凶）。
  *
  * 用法：
  *   node tools/web-mock-server.mjs --port 8777
  *   node tools/web-mock-server.mjs --port 8777 --no-auto-approve
- *   node tools/web-mock-server.mjs --port 8778 --secret <base64url> --no-timetable
+ *   node tools/web-mock-server.mjs --port 8778 --no-timetable
  *
  * 最后一个 `--no-timetable` 是**模拟旧版本手机**：快照里不带 `timetable`，
  * 好验网页端在没有周课表时的那条降级路径（「周视图」那一档藏起来）。
@@ -34,8 +30,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import {
-  sha256, hmacSha256, chacha20, deriveKeys, seal, open, signRequest,
-  toBase64Url, fromBase64Url, randomBytes, utf8Bytes,
+  hmacSha256, chacha20, deriveKeys, seal, open, signRequest,
+  toBase64Url, fromBase64Url, utf8Bytes,
   dhGenerateKeypair, dhSharedSecret, pairCodeOf,
 } from '../web/crypto.js';
 
@@ -59,21 +55,6 @@ const HOST = arg('--host', '0.0.0.0');
 const PASSCODE = arg('--passcode', '');
 
 /**
- * 配对 secret。
- *
- * `--secret <base64url>` 给一把固定的；`--auto-secret` 自己随机生成一把
- * 并把它打印出来。
- *
- * 这把 secret 是**给老协议（v3）用的**：桌面端从 v3.2 起不再走那条路，
- * 所以它现在只服务于 `--legacy-pairing`（模拟一台只认老协议的手机）。
- *
- * 两个都不给 = **故意配不成**：悄悄跳过鉴权会让「配对成功但连不上」
- * 这类问题变成玄学。
- */
-const SECRET = arg('--secret', '') || (argv.includes('--auto-secret')
-  ? toBase64Url(randomBytes(32))
-  : '');
-/**
  * 不发周课表 —— 模拟**旧版本手机**的快照。
  *
  * 网页端据此把「周视图」那一档藏起来、落在「课程」上：
@@ -84,18 +65,18 @@ const NO_TIMETABLE = argv.includes('--no-timetable');
 /**
  * 不自动批准配对 —— 模拟「手机上还没点允许」。
  *
- * 真机上，手机扫了码之后要人点「允许」，这之前网页端一直停在配对页。
- * 自动批准是 mock 的默认（方便截图），但要拍**配对页那张二维码**就得关掉它。
+ * 真机上要人点「允许」，这之前网页端一直停在配对页。
+ * 自动批准是 mock 的默认（方便截图），但要拍**等待手机确认那张配对卡**就得关掉它。
  */
 const NO_AUTO_APPROVE = argv.includes('--no-auto-approve');
 /**
  * 模拟**旧版手机**的配对协议（v3）。
  *
- * 现在的协议是 **v3.2**：DH 协商 + **双方公钥的转录绑定**（配对码 = H(A‖B)），
+ * 现在的协议是 **v6**：DH 协商 + **双方公钥的转录绑定**（配对码 = H(A‖B)），
  * 网页端与手机必须同一版才可能算出同一个码。
  *
  * `--legacy-pairing` 让 mock 报 `pairing: 3`，桌面端会**直接拒绝配对**，
- * 并提示「手机版本太旧，需要支持配对协议 v3.2 的版本」。
+ * 并提示「手机版本太旧，请更新 MiuList App 后再配对」。
  * 与 `--no-timetable` 是同一个思路：**模拟一个旧版本的手机**，
  * 用来验桌面端的版本闸门与提示文案。
  */
@@ -416,28 +397,25 @@ function deriveTodayCourses(courses) {
 
 const DEVICE_ID = 'mock-device';
 let keys = null;
-let secretBytes = null;
 /**
- * 待批准的配对（DH 协议 v3.2）。
+ * 待批准的配对（DH 协商）。
  *
  * 网页端带着自己的**公钥**来，mock 拿它算出一把共享密钥 ——
- * 两边都有 secret，而它**从不过网**。
+ * 两边都有同一把共享密钥，而它**从不过网**。
  */
 let pendingPair = null;
 const usedNonces = new Map();
 
-/** secret → requestId（与手机端同一套算法：摘要前 16 字节的 base64url）。 */
-function requestIdOf(secret) {
-  return toBase64Url(sha256(secret).slice(0, 16));
-}
-
-/** mock 模式下自动批准：它自己就是那台「手机」。 */
-function ensureKeys() {
-  if (keys) return keys;
-  if (!SECRET) return null;
-  secretBytes = fromBase64Url(SECRET);
-  keys = deriveKeys(secretBytes, PASSCODE);
-  return keys;
+/**
+ * 带签名的接口只放行「已经配对协商出密钥」的请求。
+ *
+ * 未配对就 401，而不是偷偷给一把固定密钥 —— 悄悄跳过鉴权会让
+ * 「配对成功但连不上」这类问题变成玄学。
+ */
+function ensureKeys(res) {
+  if (keys) return true;
+  json(res, 401, { error: '还没配对：先让网页端配对' });
+  return false;
 }
 
 function verifySignature(url, req, body) {
@@ -630,11 +608,11 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (p === '/api/health') {
-      // `pairing: 5` —— 网页端据此知道这台「手机」支持 **DH 协商**
-      // （公钥过网、密钥各自算）**外加 v3.2 的转录绑定配对码**（H(A‖B)）。
+      // `pairing: 6` —— 网页端据此知道这台「手机」支持 **DH 协商**
+      // （公钥过网、密钥各自算）**外加转录绑定配对码**（H(A‖B)）。
       // `--legacy-pairing` 时报 3，网页端会直接拒绝配对并提示版本太旧
       // （见那个开关的说明）。
-      return json(res, 200, { ok: true, app: 'MiuList', appVersion: '1.0.4', protocol: 3, pairing: LEGACY_PAIRING ? 3 : 5, deviceName: 'Mock 手机', serverTime: Date.now() });
+      return json(res, 200, { ok: true, app: 'MiuList', appVersion: '1.1.0', protocol: 3, pairing: LEGACY_PAIRING ? 3 : 6, deviceName: 'Mock 手机', serverTime: Date.now() });
     }
 
     // ── 调试：换掉这台「手机」的课表 ────────────────────────────
@@ -668,123 +646,48 @@ const server = http.createServer(async (req, res) => {
       let body = {};
       try { body = JSON.parse(raw.toString('utf8') || '{}'); } catch (_) { /* 坏体当空 */ }
 
-      // ── 新协议（v3.2）：DH 协商 ────────────────────────────────
-      //
-      // 网页端带着自己的**公钥**来。它是公钥不是秘密 ——
-      // mock 拿它跟自己的一对临时密钥算出同一把共享密钥，
-      // 于是两边都有 secret，而它**从不过网**。
-      if (body.publicKey) {
-        const peerPub = fromBase64Url(body.publicKey);
-        if (peerPub.length !== 256) {
-          return json(res, 400, { error: 'publicKey 长度不对' });
-        }
-        const keypair = dhGenerateKeypair();
-        const shared = dhSharedSecret(keypair.priv, peerPub);
-        pendingPair = {
-          requestId: body.requestId || '',
-          priv: keypair.priv,
-          pub: keypair.pub,
-          secret: shared,
-          // 配对码 = H(A‖B)：A = 电脑的公钥（对端），B = mock 自己的公钥。
-          // **顺序与手机端一致** —— 反了两端就永远对不上。
-          code: pairCodeOf(peerPub, keypair.pub),
-          approved: !NO_AUTO_APPROVE,
-        };
-        keys = deriveKeys(shared, PASSCODE);
-        return json(res, 200, {
-          state: pendingPair.approved ? 'approved' : 'pending',
-          expiresAt: Date.now() + 300000,
-          deviceId: pendingPair.approved ? DEVICE_ID : undefined,
-        });
+      // **公钥必填。** 配对只有「电脑发请求、手机确认」这一条链路，
+      // 公钥就是手机当场算出共享密钥所需的全部信息（它本身不是秘密）。
+      if (!body.publicKey || typeof body.publicKey !== 'string') {
+        return json(res, 400, { error: '网页端版本太旧：配对请求必须带公钥，请重新下载网页端' });
       }
-
-      // ── 老协议（v3）：secret 从二维码搬过来 ───────────────────
-      //
-      // 判据是**requestId 对不对得上那把事先约好的 secret** ——
-      // 对得上就是老协议，对不上就不是。
-      if (SECRET) {
-        ensureKeys();
-        const expected = requestIdOf(secretBytes);
-        if (body.requestId === expected) {
-          // --no-auto-approve：停在「等手机上点允许」这一步。
-          if (NO_AUTO_APPROVE) {
-            return json(res, 200, { state: 'pending', expiresAt: Date.now() + 300000 });
-          }
-          return json(res, 200, { state: 'approved', expiresAt: Date.now() + 300000, deviceId: DEVICE_ID });
-        }
+      let peerPub;
+      try {
+        peerPub = fromBase64Url(body.publicKey);
+      } catch (_) {
+        return json(res, 400, { error: 'publicKey 不是合法的 base64url' });
       }
-
-      // ── 新协议（v3.2），但**公钥还没到** ─────────────────────
-      //
-      // 「手机扫电脑的码」那条路：网页端**故意不带**公钥 ——
-      // 手机在用户扫码之前不该弹确认卡，否则「扫码」就不是那一步了。
-      // 公钥是跟着**二维码深链**走的（`miulist://pair?v=5&k=…`），
-      // 手机扫到才收得到。
-      //
-      // 所以在新协议里，「请求里没有 publicKey」是一种**正常状态**，
-      // 不是错误 —— 它表示「已受理，等对方扫码」。
-      // （真机上这一步由深链完成；`POST /__mock/pair/key` 模拟的就是它。）
-      pendingPair = {
-        requestId: body.requestId || '',
-        priv: null,
-        pub: null,
-        secret: null,
-        // 公钥还没到 → 配对码还**算不出来**（码是双方公钥的哈希，缺一边都不行）。
-        code: null,
-        approved: false,
-      };
-      return json(res, 200, { state: 'pending', expiresAt: Date.now() + 300000 });
-    }
-
-    /**
-     * **mock 专用**：把电脑的公钥「送」过来，模拟「手机扫了那张二维码」。
-     *
-     * 真机上这一步是**深链**干的（`miulist://pair?v=5&k=<公钥>&r=<requestId>`），
-     * 走的是视觉通道 —— mock 不会扫码，所以给它开一个同款入口。
-     *
-     * 为什么要留这个口子：没有它，mock 就**只能**测「只填地址」那条路，
-     * 「手机扫电脑的码」那条路在 mock 上永远停在「等公钥」，
-     * 那条路的**配对码核对**（两端算出的 6 位码对不对得上）就没法验。
-     */
-    if (p === '/__mock/pair/key' && req.method === 'POST') {
-      const raw = await readBody(req);
-      let body = {};
-      try { body = JSON.parse(raw.toString('utf8') || '{}'); } catch (_) { /* 坏体当空 */ }
-      const requestId = body.requestId || '';
-      if (!pendingPair || pendingPair.requestId !== requestId) {
-        return json(res, 400, { error: '没有这条待批准的请求' });
-      }
-      const peerPub = fromBase64Url(body.publicKey || '');
       if (peerPub.length !== 256) {
         return json(res, 400, { error: 'publicKey 长度不对' });
       }
-      // 已经有密钥材料就不覆盖：与手机端一致（同一请求重复到达时保留第一次协商的结果）。
-      if (!pendingPair.priv) {
-        const keypair = dhGenerateKeypair();
-        const shared = dhSharedSecret(keypair.priv, peerPub);
-        pendingPair.priv = keypair.priv;
-        pendingPair.pub = keypair.pub;
-        pendingPair.secret = shared;
+      const keypair = dhGenerateKeypair();
+      const shared = dhSharedSecret(keypair.priv, peerPub);
+      pendingPair = {
+        requestId: body.requestId || '',
+        priv: keypair.priv,
+        pub: keypair.pub,
+        secret: shared,
         // 配对码 = H(A‖B)：A = 电脑的公钥（对端），B = mock 自己的公钥。
-        pendingPair.code = pairCodeOf(peerPub, keypair.pub);
-        keys = deriveKeys(shared, PASSCODE);
-      }
+        // **顺序与手机端一致** —— 反了两端就永远对不上。
+        code: pairCodeOf(peerPub, keypair.pub),
+        approved: !NO_AUTO_APPROVE,
+      };
+      keys = deriveKeys(shared, PASSCODE);
       return json(res, 200, {
-        ok: true,
-        pairCode: pendingPair.code,
-        publicKey: toBase64Url(pendingPair.pub),
+        state: pendingPair.approved ? 'approved' : 'pending',
+        expiresAt: Date.now() + 300000,
+        deviceId: pendingPair.approved ? DEVICE_ID : undefined,
       });
     }
 
     if (p === '/api/pair/status') {
       const requestId = url.searchParams.get('requestId') || '';
-      // 新协议：回自己的公钥 + 配对码，网页端拿它们算出同一把密钥。
+      // 回自己的公钥 + 配对码，网页端拿它们算出同一把密钥并核对。
       if (pendingPair && pendingPair.requestId === requestId) {
-        const base = {};
-        // 公钥还没送到（还没「扫码」）时，这两样都**没有** ——
-        // 别塞空串过去：网页端会拿它去核对配对码。
-        if (pendingPair.pub) base.publicKey = toBase64Url(pendingPair.pub);
-        if (pendingPair.code) base.pairCode = pendingPair.code;
+        const base = {
+          publicKey: toBase64Url(pendingPair.pub),
+          pairCode: pendingPair.code,
+        };
         if (!pendingPair.approved) return json(res, 200, { state: 'pending', ...base });
         return json(res, 200, {
           state: 'approved',
@@ -793,15 +696,7 @@ const server = http.createServer(async (req, res) => {
           ...base,
         });
       }
-      if (!SECRET) return json(res, 400, { error: 'mock 需要 --secret' });
-      ensureKeys();
-      if (requestId !== requestIdOf(secretBytes)) {
-        return json(res, 200, { state: 'expired' });
-      }
-      if (NO_AUTO_APPROVE) {
-        return json(res, 200, { state: 'pending' });
-      }
-      return json(res, 200, { state: 'approved', deviceId: DEVICE_ID, deviceName: 'Mock 手机' });
+      return json(res, 200, { state: 'expired' });
     }
 
     // 静态文件（不需要 token）
@@ -819,10 +714,8 @@ const server = http.createServer(async (req, res) => {
       return fs.createReadStream(file).pipe(res);
     }
 
-    // 以下都要签名
-    if (!ensureKeys()) {
-      return json(res, 401, { error: 'mock 需要 --secret' });
-    }
+    // 以下都要签名；没协商出密钥就先配对
+    if (!ensureKeys(res)) return;
     const rawBody = await readBody(req);
     let bodyBytes = new Uint8Array(rawBody);
     const enc = req.headers['x-ml-enc'];
@@ -924,12 +817,11 @@ server.listen(PORT, HOST, () => {
   console.log(`[miulist-mock] 本机:   http://127.0.0.1:${PORT}/`);
   for (const a of addrs) console.log(`[miulist-mock] 局域网: http://${a}:${PORT}/`);
   console.log(`[miulist-mock] 静态目录: ${WEB_DIR}`);
-  if (SECRET) {
-    console.log(`[miulist-mock] secret = ${SECRET}`);
-    console.log('[miulist-mock] 这把是给老协议（v3）用的 —— 桌面端 v3.2 走 DH 协商，不带它');
-  } else {
-    console.log('[miulist-mock] 未给 --secret：配对会失败（这是有意的，别偷偷跳过鉴权）');
-  }
+  console.log(
+    NO_AUTO_APPROVE
+      ? '[miulist-mock] 不自动批准：网页端会停在「等手机上点允许」，用来拍配对卡'
+      : '[miulist-mock] 自动批准：网页端发来带公钥的配对请求就直接完成配对'
+  );
 });
 
 // ── 局域网发现：应答 UDP 探测包 ──────────────────────────────
