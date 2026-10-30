@@ -13,6 +13,7 @@
 #   6. 生成发布说明
 #   7. 提交 → 打 tag → 推送
 #   8. 建 GitHub Release（测试版 = pre-release）并上传 APK 与桌面网页版
+#      —— 这一半在 `tools/release_publish.sh` 里，**中断了可以单独补跑**。
 #
 # ## 用法
 #
@@ -21,6 +22,9 @@
 #   tools/release.sh v1.0.2 --dry-run       # 只构建与校验，不提交不推送不发布（版本号会还原）
 #   tools/release.sh v1.0.2 --notes my.md   # 用自己写的发布说明
 #   tools/release.sh v1.0.2 --summary "一句话概述"
+#
+#   # 中途断了（代码推了、Release 还没建）时，把剩下的补上：
+#   tools/release_publish.sh v1.0.2 --stable --notes .tmp/release_notes_1.0.2.md
 #
 # ## 为什么用「先校验后发布」
 #
@@ -37,6 +41,11 @@
 #   `GCM_INTERACTIVE=never` 兜底。
 # - JSON 载荷用 `tools/release_helper.py` 拼（PowerShell 的 ConvertTo-Json 会把字符串
 #   序列化成对象，GitHub 判非法）→ 这里一律用 curl + 文件。
+# - 找「release: vX.Y.Z」那个提交时**不能要求版本号后面有空格**：正式版的标题就是
+#   「release: v1.1.0」，提交时 git 会把行尾空格去掉 —— 带着空格的模式一条都匹配不上，
+#   脚本会在「代码已经推上去了、Release 还没建」的位置直接退出。
+# - 发布那一半（推 tag → 建 Release → 传资产）单独成 `tools/release_publish.sh`：
+#   发版中断在中间时，从头再跑一遍会被前置检查挡住（tag 已存在、工作区不干净）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -57,7 +66,7 @@ NOTES_FILE=""
 SUMMARY=""
 
 usage() {
-  sed -n '2,40p' "$0"
+  sed -n '2,47p' "$0"
   exit 1
 }
 
@@ -329,14 +338,7 @@ else
     --out "$NOTES"
 fi
 
-# API 的 JSON 载荷也在这里生成（拼 JSON 的事交给 Python，见 release_helper.py 的说明）
-# --tag 不能省：tag_name 是 GitHub 建 release 的必填项，缺了 API 直接 422。
-"$PY" tools/release_helper.py payload \
-  --name "$RELEASE_NAME" \
-  --tag "$VERSION" \
-  --notes-file "$NOTES" \
-  --out "$NOTES.payload.json" \
-  $([ "$STABLE" -eq 0 ] && echo "--prerelease")
+# API 的 JSON 载荷在发布那一步生成（见 tools/release_publish.sh）。
 
 # ---------------------------------------------------------------- dry-run 收尾
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -394,94 +396,17 @@ git push origin main || {
   git push origin main
 }
 
-# ---------------------------------------------------------------- 重新指向 tag
+# ---------------------------------------------------------------- 发布
 #
-# tag 是在 rebase **之前**打的，而 rebase 会改写提交哈希 —— 于是 tag 会指着一个
-# 已经不在 main 上的旧提交（v1.0.3 就撞上了：远端有个 Actions 的定时天气提交，
-# rebase 之后 tag 指向的提交成了孤儿，GitHub 上那个 release 会挂在「本地有、
-# 远端没有」的历史上）。
-#
-# 所以推完之后要重新对一次：把 tag 移到 main 上那个「release: $VERSION」的提交，
-# 再强推 tag。移动之前先核对两边**内容**一致（差异只能落在 CI 自动生成的文件上，
-# 比如 Actions 每天同步的 weather.json），内容变了就不该随手挪 tag。
-REL_COMMIT="$(git log --format='%H' --grep="^release: $VERSION " -1 main)"
-if [ -z "$REL_COMMIT" ]; then
-  echo "!! 在 main 上找不到「release: $VERSION」的提交，tag 先不动。" >&2
-  exit 1
-fi
-if [ "$REL_COMMIT" != "$(git rev-list -n1 "$VERSION")" ]; then
-  echo "tag 指向的提交被 rebase 改写了，重新指向 $REL_COMMIT"
-  OLD_TREE="$(git rev-parse "$(git rev-list -n1 "$VERSION")^{tree}")"
-  NEW_TREE="$(git rev-parse "$REL_COMMIT^{tree}")"
-  if [ "$OLD_TREE" != "$NEW_TREE" ]; then
-    CHANGED="$(git diff --name-only "$(git rev-list -n1 "$VERSION")" "$REL_COMMIT")"
-    echo "   差异文件: ${CHANGED:-（无）}"
-    case "$CHANGED" in
-      *weather.json|"") ;;
-      *)
-        echo "!! 差异里有非 CI 生成的文件，tag 先不动，请人工确认。" >&2
-        exit 1
-        ;;
-    esac
-    echo "   差异只在 CI 自动生成的文件上，安全"
-  fi
-  git tag -f -a "$VERSION" "$REL_COMMIT" -m "MiuList ${VERSION}$([ "$STABLE" -eq 1 ] || echo '（测试版）')"
-fi
-git push --force origin "$VERSION"
-
-# ---------------------------------------------------------------- GitHub Release
+# 发布那一半单独成脚本（tools/release_publish.sh）：发版有可能**中断在中间** ——
+# 版本号提了、APK 编了、代码也推上去了，却卡在「建 Release」之前。
+# 那时候总不能再从头跑一遍（tag 已经在了、工作区也不干净，前置检查会直接拒绝），
+# 单独跑那个脚本就能把剩下的补上。
 echo ""
-echo "== GitHub Release =="
-export GCM_INTERACTIVE=never
-export GCM_GUI_PROMPT=0
-TOKEN="$(printf 'protocol=https\nhost=github.com\n\n' | git credential fill | sed -n 's/^password=//p')"
-[ -n "$TOKEN" ] || { echo "!! 拿不到 GitHub 凭据（发布已跳过，代码与 tag 已推上去）" >&2; exit 1; }
-
-API="https://api.github.com/repos/$REPO_OWNER/$REPO_NAME"
-AUTH=(-H "Authorization: Bearer $TOKEN"
-      -H "Accept: application/vnd.github+json"
-      -H "X-GitHub-Api-Version: 2022-11-28"
-      -H "User-Agent: MiuList-release")
-
-# 已存在就更新，不存在就新建
-EXISTING="$(curl -sS "${AUTH[@]}" "$API/releases/tags/$VERSION" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("id",""))' 2>/dev/null || true)"
-if [ -n "$EXISTING" ]; then
-  echo "release 已存在（id=$EXISTING），改为更新"
-  REL_ID="$EXISTING"
-  curl -sS -X PATCH "${AUTH[@]}" -H 'Content-Type: application/json; charset=utf-8' \
-    --data-binary "@$NOTES.payload.json" "$API/releases/$REL_ID" >/dev/null
+echo "== 发布 =="
+if [ "$STABLE" -eq 1 ]; then
+  PUBLISH_ARGS=(--stable)
 else
-  echo "创建 release（prerelease=$([ "$STABLE" -eq 1 ] && echo false || echo true)）"
-  REL_ID="$(curl -sS -X POST "${AUTH[@]}" -H 'Content-Type: application/json; charset=utf-8' \
-    --data-binary "@$NOTES.payload.json" "$API/releases" | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("id",""))')"
-  [ -n "$REL_ID" ] || { echo "!! 建 release 失败" >&2; exit 1; }
+  PUBLISH_ARGS=()
 fi
-
-# 上传 APK
-echo "上传 $APK_NAME"
-UPLOAD="https://uploads.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/$REL_ID/assets?name=$APK_NAME"
-curl -sS -X POST "${AUTH[@]}" -H 'Content-Type: application/vnd.android.package-archive' \
-  --data-binary "@$OUT_APK_DIR/$APK_NAME" "$UPLOAD" >/dev/null
-
-# 上传桌面单文件网页版（构建那一步已经保证它在、且版本号对）
-echo "上传 MiuList-Web.html"
-UPLOAD_WEB="https://uploads.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/$REL_ID/assets?name=MiuList-Web.html"
-curl -sS -X POST "${AUTH[@]}" -H 'Content-Type: text/html; charset=utf-8' \
-  --data-binary "@$WEB_HTML" "$UPLOAD_WEB" >/dev/null
-
-# 核对
-echo ""
-echo "== 核对 =="
-curl -sS "${AUTH[@]}" "$API/releases/tags/$VERSION" | "$PY" -c "
-import json,sys
-d=json.load(sys.stdin)
-print('标题:  ', d.get('name'))
-print('tag:   ', d.get('tag_name'))
-print('类型:  ', 'Pre-release（测试版）' if d.get('prerelease') else '正式版')
-print('页面:  ', d.get('html_url'))
-for a in d.get('assets', []):
-    print(f'  资产: {a[\"name\"]}  {round(a[\"size\"]/1048576,1)} MB  {a[\"state\"]}')
-"
-
-echo ""
-echo "发版完成：$VERSION  ($APK_NAME)"
+tools/release_publish.sh "$VERSION" "${PUBLISH_ARGS[@]}" --notes "$NOTES"
