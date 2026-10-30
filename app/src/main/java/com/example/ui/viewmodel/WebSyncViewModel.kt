@@ -54,7 +54,7 @@ class WebSyncViewModel(
 
     init {
         // 「有一台设备请求连接」可能**在弹层开着的时候**才出现 ——
-        // 深链是在 HTTP 处理线程里到的，弹层开着不代表界面会重读一次状态。
+        // 配对请求是在 HTTP 处理线程里到的，弹层开着不代表界面会重读一次状态。
         // 所以这里订阅服务上的那个流，而不是只在 refresh() 时读一次。
         //
         // 订阅的是**列表**：后来的请求不再顶掉先来的。
@@ -132,32 +132,6 @@ class WebSyncViewModel(
             SyncDirection.MERGE -> "已让网页端合并两边"
         }
         _uiState.value = _uiState.value.copy(message = text)
-    }
-
-    /**
-     * 配对请求来了（二维码深链，或「只填地址」那条路的 HTTP 请求）。
-     *
-     * **只记下来，不批准。** 批准必须由用户在界面上点一下 ——
-     * 局域网里任何设备都能构造出这个深链，自动批准等于把门开着。
-     *
-     * @param requestId 这次配对的 id。
-     * @param secretBase64 老协议：secret 本身（base64url）。**它只在这一刻存在于内存里。**
-     * @param publicKeyBase64 新协议：电脑的 DH 公钥（base64url）。
-     * @param sourceAddress 服务端观察到的来源地址。**扫码深链那条路没有** —— 留空即可。
-     */
-    fun offerPairing(
-        requestId: String,
-        secretBase64: String = "",
-        publicKeyBase64: String = "",
-        sourceAddress: String = "",
-    ) {
-        service.offerPairing(
-            requestId = requestId,
-            secretBase64 = secretBase64.ifBlank { null },
-            publicKeyBase64 = publicKeyBase64.ifBlank { null },
-            sourceAddress = sourceAddress,
-        )
-        refresh()
     }
 
     /**

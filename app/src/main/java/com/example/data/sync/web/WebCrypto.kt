@@ -129,8 +129,8 @@ object WebCrypto {
      * 标签（label）必须与 `web/crypto.js` **逐字相同**，
      * 否则两端派生出的密钥不同 —— 症状是「配对成功但之后全都解密失败」。
      *
-     * @param passcode 同步密码（可空）。它会先混进 secret，
-     *   于是「二维码被别人拍到」不足以解密，还得知道这个密码。
+     * @param passcode 同步密码（可空）。它会先混进共享密钥，
+     *   于是只拿到公钥或抓到密文都不足以解密，还得知道这个密码。
      */
     fun deriveKeys(secret: ByteArray, passcode: String = ""): Keys {
         val effective = if (passcode.isEmpty()) {

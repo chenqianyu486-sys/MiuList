@@ -207,8 +207,6 @@ dependencies {
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
   implementation(libs.haze)
-  // 局域网配对的二维码（zxing core 是纯 Java，无原生库，不给 APK 增加 ABI 负担）。
-  implementation(libs.zxing.core)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)

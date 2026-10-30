@@ -279,14 +279,8 @@ fun CategoryRulesDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                // 「应用」的作用范围要说出来：它套到**全部类别**上，没改动也能按。
-                // 不说清楚的话，用户会以为「没改就没必要按」而永远不按 ——
-                // 而改完某门课的类别之后，恰恰只能靠这一步把它纳入新类别。
-                Text(
-                    text = "「应用」会套用到全部类别的课程，没有改动时也可以按。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                // 「应用」的作用范围由按钮上的「应用到 N 门课程」自己说，
+                // 不再另写一段解释「它套用到全部类别、没改动也能按」。
 
                 staged.forEach { rule ->
                     val courseCount = courseCountByCategory[rule.category] ?: 0

@@ -1,11 +1,9 @@
 package com.example.ui.components
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,8 +16,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -29,6 +27,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,8 +35,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
@@ -46,28 +43,34 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.sync.web.PairingStore
-import com.example.data.sync.web.QrCodes
 import com.example.data.sync.web.SyncDirection
 import com.example.data.sync.web.WebSyncService
+import kotlinx.coroutines.delay
 
 /**
  * 「网页同步」弹层。
  *
- * ## 这一屏要回答三个问题
+ * ## 配对只有一条链路
  *
- * 1. **服务开着吗？** —— 一个开关，开着的时候下面才有地址和二维码。
- * 2. **网页端在哪个地址？** —— 局域网地址 + 扫码直接打开。
- * 3. **谁连上了？** —— 已配对的设备列表，可以随时撤销。
+ * 手机开开关 → 复制连接链接 → 电脑粘贴地址点「连接」→ 电脑发一条**带 DH 公钥**
+ * 的配对请求 → 手机弹确认卡 → 核对 6 位码点「允许」。
  *
- * ## 为什么二维码是「打开网页」而不是「配对」
+ * 不再有第二条路：手机不再生成地址图片，电脑也不用摄像头。
+ * 每条旁路都要求用户在另一台设备上再做一次「对准 / 找角度 / 授摄像头权限」，
+ * 而真正决定安全性的从来不是「码怎么搬过去」。
  *
- * 配对是**网页端发起**的（它先拿一个配对码，再把配对码画成二维码让手机扫），
- * 所以手机这边看到的二维码是**网页地址**。用户拿另一台设备扫它，
- * 就能打开网页端；网页端再把配对请求发回来，手机确认之后就连上了。
+ * ## 6 位配对码和来源地址为什么仍然重要
  *
- * 这和「手机显示配对二维码」的直觉是反的，但反过来的话，
- * **扫的那台设备就是发起方**——网页端没法主动去扫，
- * 而让用户在电脑上装一个扫码器显然更麻烦。
+ * - **6 位码**（`H(A‖B)`）绑定的是**双方公钥**：中间人换掉任何一把公钥，
+ *   两端算出来的码就对不上。它是用户唯一能亲手做的一次端到端校验。
+ * - **来源地址**（`ip:port`）是服务端从 TCP 连接上读出来的，客户端伪造不了；
+ *   设备名谁都能写成「我的电脑」，地址不能。
+ *
+ * ## 为什么手机不再生成地址图片
+ *
+ * 图片方案要求电脑有摄像头、用户点一次摄像头权限，并且把「配对」和
+ * 「搬地址」两件事混在一起。复制粘贴两个动作就够了，而且从 v3.2 起
+ * 电脑本来就要主动发请求 —— 一张地址图片只会多出一条需要维护的旁路。
  */
 @Composable
 fun WebSyncDialog(
@@ -101,12 +104,18 @@ fun WebSyncDialog(
     onDismiss: () -> Unit,
 ) {
     var passcodeInput by remember { mutableStateOf("") }
+    var copied by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val primaryUrl = remember(addresses, port) {
         addresses.firstOrNull()?.let { "http://$it:$port/" }
     }
-    val qrBitmap = remember(primaryUrl) {
-        primaryUrl?.let { QrCodes.bitmap(it, 360) }
+
+    // 「已复制」只亮 1.6 秒 —— 够用户看见，又不至于一直占着按钮文案。
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1600)
+            copied = false
+        }
     }
 
     GlassOverlayHost(
@@ -163,10 +172,8 @@ fun WebSyncDialog(
                 }
 
                 if (running) {
-                    // ── 地址 + 二维码（放最前面） ────────────────────
-                    //
-                    // 顺序是有讲究的：**二维码是这一屏最该被看见的东西**，
-                    // 放最后就永远在折叠线以下，用户得先滚一屏才找得到。
+                    // ── 连接电脑 ──────────────────────────────────────
+                    SectionLabel("连接电脑")
                     if (addresses.isEmpty()) {
                         Text(
                             "没找到可用地址，请确认手机已连接 Wi-Fi 后重试。",
@@ -174,9 +181,8 @@ fun WebSyncDialog(
                             color = MaterialTheme.colorScheme.error,
                         )
                     } else {
-                        SectionLabel("① 把地址交给电脑")
-                        addresses.forEach { address ->
-                            val url = "http://$address:$port/"
+                        // 主地址：只读展示第一个，不点它。
+                        primaryUrl?.let { url ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -190,35 +196,14 @@ fun WebSyncDialog(
                                     style = MaterialTheme.typography.bodyMedium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Icon(
-                                    imageVector = Icons.Outlined.ContentCopy,
-                                    contentDescription = "复制地址",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier
-                                        .size(18.dp)
-                                        .testTag("web_sync_copy")
-                                        .clickable { clipboard.setText(AnnotatedString(url)) },
                                 )
                             }
-                            Spacer(Modifier.height(6.dp))
-                        }
-
-                        // 「复制连接链接」做成一个**整行的大按钮**，而不是地址行里
-                        // 那个 18dp 的小图标 ——
-                        //
-                        // 电脑端是**扫一次码**就能连上的（配对码由电脑显示、手机扫），
-                        // 所以电脑唯一需要从手机这边拿走的就是「地址」这一个字符串。
-                        // 让用户去点一排小图标里的某一个，是把「复制」变成了猜谜：
-                        // 哪个地址才是该复制的那一个？虚拟网卡、VPN 适配器都会冒出来。
-                        //
-                        // 复制**第一个**地址（主地址）就够了：它就是 WebSyncDialog
-                        // 里生成二维码用的那一个，电脑端与手机端看到的是同一个。
-                        primaryUrl?.let { link ->
+                            Spacer(Modifier.height(8.dp))
                             Button(
-                                onClick = { clipboard.setText(AnnotatedString(link)) },
+                                onClick = {
+                                    clipboard.setText(AnnotatedString(url))
+                                    copied = true
+                                },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("web_sync_copy_link"),
@@ -229,82 +214,110 @@ fun WebSyncDialog(
                                     modifier = Modifier.size(18.dp),
                                 )
                                 Spacer(Modifier.width(8.dp))
-                                Text("复制连接链接")
+                                Text(if (copied) "已复制" else "复制连接链接")
                             }
                             Spacer(Modifier.height(6.dp))
                             Text(
-                                "在电脑上粘贴这个地址，再按提示完成配对。",
+                                "在电脑上打开 MiuList 网页端，把链接粘贴到「手机地址」；电脑发出请求后，这里会出现确认卡。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            Spacer(Modifier.height(6.dp))
                         }
 
-                        qrBitmap?.let { bmp ->
-                            Column(
+                        if (addresses.size > 1) {
+                            Spacer(Modifier.height(6.dp))
+                            Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(160.dp)
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(Color.White)
-                                        .padding(8.dp),
-                                ) {
-                                    Image(
-                                        bitmap = bmp.asImageBitmap(),
-                                        contentDescription = "手机地址二维码",
-                                        modifier = Modifier.fillMaxWidth(),
-                                    )
-                                }
-                                Spacer(Modifier.height(6.dp))
                                 Text(
-                                    "不想复制？让电脑扫这个码",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Spacer(Modifier.height(2.dp))
-                                Text(
-                                    // **说清楚代价**：走这条路电脑先扫地址码、
-                                    // 手机再扫电脑的配对码 —— 是两次扫码。
-                                    // 上面那条「复制连接链接」才是只扫一次的走法。
-                                    "这样需要扫两次码；复制链接只需一次。",
+                                    "其他地址：",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                                addresses.drop(1).forEachIndexed { offset, address ->
+                                    val url = "http://$address:$port/"
+                                    Text(
+                                        text = address,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier
+                                            .testTag("web_sync_copy_alt_${offset + 1}")
+                                            .clickable {
+                                                clipboard.setText(AnnotatedString(url))
+                                                copied = true
+                                            },
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                }
                             }
                         }
                     }
                 }
 
-                // ── 两端各自改到什么时候 ──────────────────────────
-                // 自动同步只在「没有冲突」时进行；一旦有冲突，
-                // 用户要靠这两个时间判断该往哪边同步 —— 所以它们摆在一起。
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    TimeCard(
-                        label = "本机最后编辑",
-                        value = formatEditTime(localLatestEditAt),
-                        modifier = Modifier.weight(1f),
-                    )
-                    TimeCard(
-                        label = "网页端最后编辑",
-                        value = if (remoteLatestEditAt > 0) formatEditTime(remoteLatestEditAt) else "还没同步过",
-                        modifier = Modifier.weight(1f),
-                    )
+                // ── 已连接的设备 ─────────────────────────────────────
+                if (pairedDevices.isNotEmpty()) {
+                    SectionLabel("已连接的设备")
+                    pairedDevices.forEach { device ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Computer,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(device.deviceName, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "配对于 " + formatPairedAt(device.pairedAt),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = { onRevoke(device.deviceId) },
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                    horizontal = 12.dp,
+                                    vertical = 0.dp,
+                                ),
+                            ) {
+                                Text("移除", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
                 }
 
-                if (running) {
-                    // ── 方向选择 ──────────────────────────────────────
-                    SectionLabel("手动同步")
-                    Text(
-                        "没冲突时会自动同步；需要的话可以手动指定方向。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                if (running && pairedDevices.isNotEmpty()) {
+                    // ── 两端各自改到什么时候 ──────────────────────────
+                    // 自动同步只在「没有冲突」时进行；一旦有冲突，
+                    // 用户要靠这两个时间判断该往哪边同步 —— 所以它们摆在一起。
+                    SectionLabel("同步")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        TimeCard(
+                            label = "本机最后编辑",
+                            value = formatEditTime(localLatestEditAt),
+                            modifier = Modifier.weight(1f),
+                        )
+                        TimeCard(
+                            label = "网页端最后编辑",
+                            value = if (remoteLatestEditAt > 0) formatEditTime(remoteLatestEditAt) else "还没同步过",
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
                     Spacer(Modifier.height(6.dp))
                     DirectionButton(
                         title = "以手机为准",
@@ -323,26 +336,16 @@ fun WebSyncDialog(
                         desc = "两边的待办改动都保留",
                         onClick = { onRequestSync(SyncDirection.MERGE) },
                     )
-                    Spacer(Modifier.height(10.dp))
-                }
-
-                if (running) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        "在电脑上打开网页端，粘贴连接链接，按提示配对一次即可。以后打开会自动连接。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "想在电脑上单独用？用 Chrome / Edge 打开网页端即可，不用安装。",
+                        "没冲突时会自动同步；也可以指定方向。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
 
                 // ── 同步密码 ────────────────────────────────────────
-                // 它会混进配对密钥里：**二维码被别人拍到，光有码也解不开**。
+                // 它会混进配对密钥里：**光有共享密钥也解不开**。
                 // 配对时网页端要填同一个密码；改了密码，已配对的设备要重新配。
                 SectionLabel("同步密码")
                 Row(
@@ -384,46 +387,6 @@ fun WebSyncDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-
-                // ── 已配对设备 ─────────────────────────────────────
-                if (pairedDevices.isNotEmpty()) {
-                    SectionLabel("已配对的设备")
-                    pairedDevices.forEach { device ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {                            Icon(
-                                imageVector = Icons.Outlined.QrCode2,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp),
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(device.deviceName, style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    "配对于 " + formatPairedAt(device.pairedAt),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            OutlinedButton(
-                                onClick = { onRevoke(device.deviceId) },
-                                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                                    horizontal = 12.dp,
-                                    vertical = 0.dp,
-                                ),
-                            ) {
-                                Text("移除", style = MaterialTheme.typography.labelMedium)
-                            }
-                        }
-                        Spacer(Modifier.height(6.dp))
-                    }
-                }
             }
         },
         confirmButton = {
@@ -447,8 +410,6 @@ fun WebSyncDialog(
  *    设备名谁都能自报成「我的电脑」，这个地址不能 —— 所以它排在最上面。
  * 2. **配对码**：跟电脑上显示的那 6 位一致才点允许；对不上就是有人中间换过公钥。
  * 3. **设备名**（副信息）：对方自报的，**只能当参考**。
- *
- * 配对码那段的样式沿用原来的，只是外面多了来源地址、下面多了不可信提示。
  */
 @Composable
 private fun PendingPairingCard(
@@ -484,7 +445,7 @@ private fun PendingPairingCard(
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            "确认之后它就能看到你的待办、课程和考试，并且能改待办。",
+            "允许后，它能查看并修改你的待办、课程与考试。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -497,7 +458,7 @@ private fun PendingPairingCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            if (sourceKnown) source else "来源未知",
+            if (sourceKnown) source else "未知地址",
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
@@ -505,12 +466,7 @@ private fun PendingPairingCard(
             modifier = Modifier.testTag("web_sync_source$tagSuffix"),
         )
         Text(
-            if (sourceKnown) {
-                "用这个地址确认是不是你眼前的设备。"
-            } else {
-                "这条请求没有来源地址，无法核对。\n" +
-                    "除非你正在电脑上看到同一串配对码，否则请拒绝。"
-            },
+            if (sourceKnown) "确认这是你眼前的设备。" else "如果不是你发起的，请拒绝。",
             style = MaterialTheme.typography.labelSmall,
             color = if (sourceKnown) {
                 MaterialTheme.colorScheme.onSurfaceVariant
@@ -520,38 +476,36 @@ private fun PendingPairingCard(
         )
 
         // ── 配对码 ─────────────────────────────────────────────
-        if (pending.pairCode.isNotBlank()) {
-            Spacer(Modifier.height(12.dp))
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
-                    .padding(vertical = 10.dp, horizontal = 12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    "配对码",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    pending.pairCode,
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 4.sp,
-                    modifier = Modifier.testTag("web_sync_pair_code$tagSuffix"),
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    // 这个码是公钥的哈希（见 [WebDh.pairCode]）——
-                    // 有人在中间把公钥换掉的话，两边显示的码就对不上，用户一眼能看出来。
-                    "和电脑上显示的 6 位码一致再点允许；对不上就别允许。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        Spacer(Modifier.height(12.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+                .padding(vertical = 10.dp, horizontal = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                "配对码",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                pending.pairCode,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 4.sp,
+                modifier = Modifier.testTag("web_sync_pair_code$tagSuffix"),
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                // 这个码是双方公钥的哈希（见 [com.example.data.sync.web.WebDh.pairCode]）——
+                // 有人在中间把公钥换掉的话，两边显示的码就对不上，用户一眼能看出来。
+                "和电脑上显示的 6 位码一致再点允许。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
 
         // ── 设备名（副信息，不可信） ───────────────────────────
@@ -562,7 +516,7 @@ private fun PendingPairingCard(
             fontWeight = FontWeight.Medium,
         )
         Text(
-            "设备名由对方填写，只能参考；认设备请看上面的来源地址。",
+            "设备名由对方填写，只能参考。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -146,8 +146,7 @@ fun ScheduleTransferDialog(
                 }
 
                 Text(
-                    text = "导出文件包含课程、考试、待办和分类规则，不含学号和密码。" +
-                        "换设备时，待办只能靠它带走。",
+                    text = "导出文件包含课程、考试、待办和分类规则，不含学号和密码。",
                     style = MaterialTheme.typography.labelSmall,
                     color = TextSecondary
                 )
@@ -169,13 +168,17 @@ fun ScheduleTransferDialog(
                         )
                     }
                 }
-                Text(
-                    text = strategy.description,
-                    style = MaterialTheme.typography.labelSmall,
-                    // 这段是用户真正要读的内容（选了「整机同步」会覆盖什么），
-                    // 用 onSurfaceVariant（TextMuted）实测只有 3.74:1，不过 AA。
-                    color = TextSecondary
-                )
+                // 「整机同步」没有说明文字（说明已按文案简化删掉），
+                // 空着不渲染，免得留一行空白的间隔。
+                if (strategy.description.isNotBlank()) {
+                    Text(
+                        text = strategy.description,
+                        style = MaterialTheme.typography.labelSmall,
+                        // 这段是用户真正要读的内容（选了「替换」会覆盖什么），
+                        // 用 onSurfaceVariant（TextMuted）实测只有 3.74:1，不过 AA。
+                        color = TextSecondary
+                    )
+                }
 
                 // 「两台设备同时离线各改一条」的代价必须说清楚。
                 // 「同步」这个词听起来像永不冲突，不说就等于让用户替我们兜底。

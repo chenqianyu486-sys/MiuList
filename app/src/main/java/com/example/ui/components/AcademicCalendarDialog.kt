@@ -451,13 +451,6 @@ fun AcademicCalendarDialog(
 
                 // ---- 补课 ----
                 SectionLabel("补课日期（哪天要补 · 补的是哪一天的课）")
-                // 说明只写一遍，放在段标题下：原来挂在每一行下面，8 条补课就是 8 段
-                // 一样的字，把真正要看的日期挤到视口外。
-                Text(
-                    text = "来源日就是那份课原本所在的那一天：补周几和第几周都由它算出来，不用另填。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
                 makeupDrafts.forEachIndexed { index, draft ->
                     Row(
                         modifier = Modifier.padding(bottom = 2.dp),

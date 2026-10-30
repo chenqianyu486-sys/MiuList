@@ -29,7 +29,9 @@ class WebSyncApiTest {
     private var now = 1_000_000L
     private var nonceSeq = 0
 
-    private val secret = ByteArray(32) { it.toByte() }
+    /** 测试用的一把合法 DH 公钥。 */
+    private val desktopPublicKey: ByteArray = WebDh.generateKeypair().second
+    private val desktopPublicKeyText: String = WebCrypto.base64Url(desktopPublicKey)
 
     private lateinit var pairing: PairingStore
     private lateinit var device: PairingStore.PairedDevice
@@ -45,10 +47,12 @@ class WebSyncApiTest {
             appliedSnapshot = dto
             SnapshotApplier.Report(tasks = dto.tasks.size, appliedUids = dto.tasks.map { it.syncUid })
         },
+        onPairingReady: (PairingStore.PendingRequest) -> Unit = {},
     ): WebSyncApi {
         pairing = PairingStore(clock = { now }, idGenerator = { "dev-1" })
-        val req = pairing.request(pairing.requestIdOf(secret), "网页端")
-        device = pairing.approve(req.requestId, secret, passcode = "", deviceName = "网页端")!!
+        // 走完整的 DH 链路造一台已配对设备：请求必须带公钥。
+        val req = pairing.request("req-device-01", "网页端", desktopPublicKey)
+        device = pairing.approve(req.requestId, passcode = "", deviceName = "网页端")!!
         return WebSyncApi(
             pairing = pairing,
             assets = WebAssetProvider { path ->
@@ -75,7 +79,6 @@ class WebSyncApiTest {
                 override suspend fun delete(syncUid: String) =
                     TaskWriteService.Result.Ok(WebTaskDto(syncUid = syncUid))
             },
-            qr = { text -> "<svg data=\"$text\"/>".toByteArray(StandardCharsets.UTF_8) },
             broadcaster = object : SyncEventBroadcaster {
                 override fun subscribe(device: PairingStore.PairedDevice, sink: HttpReply.EventSink) = Unit
                 override fun unsubscribe(sink: HttpReply.EventSink) = Unit
@@ -86,6 +89,7 @@ class WebSyncApiTest {
             appVersion = { "1.0.4" },
             snapshotApplier = snapshotApplier,
             zjuProxy = zjuProxy,
+            onPairingReady = onPairingReady,
         )
     }
 
@@ -134,17 +138,90 @@ class WebSyncApiTest {
         assertEquals(200, statusOf(reply))
         assertTrue(reply.fullBody().contains("\"ok\":true"))
         assertTrue(reply.fullBody().contains("测试手机"))
+        // **协议版本也要报出来** —— 网页端的版本闸门就靠这两个字段：
+        // protocol 是数据协议，pairing 是配对协议（6 = DH 协商 + 转录绑定配对码）。
+        // 少报一个，网页端就分不清「手机太旧」和「地址不对」。
+        assertTrue(reply.fullBody().contains("\"protocol\":3"))
+        assertTrue(reply.fullBody().contains("\"pairing\":6"))
     }
 
     @Test
-    fun `申请配对只要摘要 - secret 不许出现`() {
+    fun `同一个 requestId 重放 - 不会重新协商也不会再弹一张卡`() {
+        var cards = 0
+        val api = setUpApi(onPairingReady = { cards++ })
+        val requestId = "req-replay-01"
+        val body = """{"requestId":"$requestId","deviceName":"网页端","publicKey":"$desktopPublicKeyText"}"""
+
+        val first = api.handle(
+            HttpRequest("POST", "/api/pair/request", emptyMap(), emptyMap(), body.toByteArray())
+        )
+        assertEquals(200, statusOf(first))
+        assertTrue(first.fullBody().contains("\"state\":\"pending\""))
+        assertEquals(1, cards)
+
+        // 用户在手机上点了「允许」。
+        pairing.approve(requestId)
+
+        // 重放：同一个 requestId 又来一次（这个接口是免鉴权的）。
+        val again = api.handle(
+            HttpRequest("POST", "/api/pair/request", emptyMap(), emptyMap(), body.toByteArray())
+        )
+        assertEquals(409, statusOf(again))
+        assertTrue(again.fullBody().contains("已经处理过"))
+        assertTrue("不能再回 pending —— 对一条已批准的请求说「还在等确认」是假话", again.fullBody().contains("approved"))
+        assertEquals("不能再弹一张卡 —— 卡上的码是旧那把密钥算出来的", 1, cards)
+    }
+
+    @Test
+    fun `申请配对必须带公钥 - 旧网页端会被 400 拒绝`() {
         val api = setUpApi()
-        val body = """{"requestId":"${pairing.requestIdOf(secret)}","deviceName":"网页端"}"""
+        val body = """{"requestId":"req-no-key-01","deviceName":"网页端"}"""
+        val reply = api.handle(
+            HttpRequest("POST", "/api/pair/request", emptyMap(), emptyMap(), body.toByteArray())
+        )
+        assertEquals(400, statusOf(reply))
+        assertTrue(reply.fullBody().contains("网页端版本太旧"))
+    }
+
+    @Test
+    fun `publicKey 长度不对就 400`() {
+        val api = setUpApi()
+        val tooShort = WebCrypto.base64Url(ByteArray(10) { 1 })
+        val body = """{"requestId":"req-short-key","deviceName":"网页端","publicKey":"$tooShort"}"""
+        val reply = api.handle(
+            HttpRequest("POST", "/api/pair/request", emptyMap(), emptyMap(), body.toByteArray())
+        )
+        assertEquals(400, statusOf(reply))
+        assertTrue(reply.fullBody().contains("publicKey 长度不对"))
+    }
+
+    @Test
+    fun `退化公钥就 400`() {
+        val api = setUpApi()
+        // 256 字节、值 1：共享值会退化成公开常量，必须在入口挡掉。
+        val degenerate = WebCrypto.base64Url(ByteArray(WebDh.KEY_BYTES).also { it[it.lastIndex] = 1 })
+        val body = """{"requestId":"req-degenerate","deviceName":"网页端","publicKey":"$degenerate"}"""
+        val reply = api.handle(
+            HttpRequest("POST", "/api/pair/request", emptyMap(), emptyMap(), body.toByteArray())
+        )
+        assertEquals(400, statusOf(reply))
+        assertTrue(reply.fullBody().contains("publicKey 不合法"))
+    }
+
+    @Test
+    fun `带公钥的申请会进待确认列表`() {
+        var ready: PairingStore.PendingRequest? = null
+        val api = setUpApi(onPairingReady = { ready = it })
+        val body =
+            """{"requestId":"req-ready-01","deviceName":"电脑网页端","publicKey":"$desktopPublicKeyText"}"""
         val reply = api.handle(
             HttpRequest("POST", "/api/pair/request", emptyMap(), emptyMap(), body.toByteArray())
         )
         assertEquals(200, statusOf(reply))
-        assertFalse("请求里不该出现 secret", reply.fullBody().contains(WebCrypto.base64Url(secret)))
+        assertTrue(reply.fullBody().contains("\"state\":\"pending\""))
+        assertEquals("req-ready-01", ready?.requestId)
+        assertEquals(6, ready?.pairCode?.length)
+        assertEquals(PairingStore.State.PENDING, pairing.status("req-ready-01").state)
     }
 
     @Test
@@ -161,6 +238,7 @@ class WebSyncApiTest {
         requestId: String,
         host: String,
         port: Int,
+        publicKey: String = desktopPublicKeyText,
     ): Int = statusOf(
         api.handle(
             HttpRequest(
@@ -168,7 +246,7 @@ class WebSyncApiTest {
                 path = "/api/pair/request",
                 query = emptyMap(),
                 headers = emptyMap(),
-                body = """{"requestId":"$requestId"}""".toByteArray(),
+                body = """{"requestId":"$requestId","publicKey":"$publicKey"}""".toByteArray(),
                 remoteAddress = "$host:$port",
                 remoteHost = host,
                 remotePort = port,
@@ -241,7 +319,7 @@ class WebSyncApiTest {
         val reply = api.handle(
             HttpRequest(
                 "GET", "/api/pair/status",
-                mapOf("requestId" to pairing.requestIdOf(secret)),
+                mapOf("requestId" to "req-device-01"),
                 emptyMap(), ByteArray(0),
             )
         )
@@ -249,8 +327,12 @@ class WebSyncApiTest {
         val body = reply.fullBody()
         assertTrue(body.contains("\"state\":\"approved\""))
         assertTrue(body.contains("\"deviceId\""))
+        assertTrue("手机的一次性公钥要回给电脑", body.contains("\"publicKey\""))
+        val pairCode = Regex("\"pairCode\":\"([^\"]+)\"").find(body)?.groupValues?.get(1)
+        assertEquals("配对码是 6 位", 6, pairCode?.length)
         assertFalse("状态里不该有密钥相关的东西", body.contains("token"))
         assertFalse(body.contains("kEnc"))
+        assertFalse(body.contains("secret"))
     }
 
     // ── 认证 ────────────────────────────────────────────────────

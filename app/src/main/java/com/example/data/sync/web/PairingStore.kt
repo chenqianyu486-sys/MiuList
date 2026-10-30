@@ -3,23 +3,17 @@ package com.example.data.sync.web
 import kotlin.math.abs
 
 /**
- * 配对与设备凭据（协议 v3）。
+ * 配对与设备凭据。
  *
- * ## 与 v2 最大的差别：**配对码不再上网络**
+ * ## 配对只有一条链路：电脑发起、手机确认
  *
- * v2 的配对码是网页端生成、服务端保存、网页端用**查询参数**轮询状态 ——
- * 于是局域网里任何人只要抓到那次轮询请求，就拿到了配对码，
- * 紧接着就能自己去领 token。**抓包 = 拿到钥匙。**
+ * 1. 电脑生成一对临时 DH 密钥，`POST /api/pair/request` 把**公钥**带过来；
+ * 2. 手机收到后当场生成自己的一对临时密钥，算出共享密钥，并推出确认卡；
+ * 3. 用户在手机上核对 6 位配对码（两端公钥的转录哈希 `H(A‖B)`）再点「允许」；
+ * 4. 电脑轮询到 approved，用自己的私钥和手机的公钥算出**同一把**共享密钥。
  *
- * v3 改成：
- *
- * 1. 网页端本地生成 32 字节随机 secret（`crypto.getRandomValues`），
- *    只把它的**摘要**（`requestId`）发给服务端；
- * 2. 二维码里带的是 **secret 本身** —— 它只走「二维码 → 手机相机」这条视觉通道，
- *    **从来不经过网络**；
- * 3. 手机扫到 secret 后自己算一遍摘要，跟服务端那条对上才批准。
- *
- * 于是抓包能看到的只有 `requestId`（sha256 摘要，不可逆）与之后的一切密文。
+ * **过网的只有公钥** —— 抓包的人看到公钥也算不出共享密钥（DH 的单向性），
+ * 密钥自始至终没有在链路上出现过。
  *
  * ## 之后的每次请求：挑战-应答
  *
@@ -61,15 +55,10 @@ class PairingStore(
     /**
      * 一次待批准的配对请求。
      *
-     * ## 里面能装两种密钥材料
+     * 电脑的公钥一到，手机就**当场**生成自己的一次性密钥对、算出共享密钥 ——
+     * 配对码要立刻显示出来让用户核对，协商不能等到「允许」那一刻。
      *
-     * - **老协议（v3）**：`legacySecret` —— secret 本身从二维码过来。
-     *   服务端只见到它的摘要（`requestId`），抓包的人拿不到 secret。
-     * - **新协议（v3.1）**：`peerPublicKey` + `sharedSecret` ——
-     *   电脑的 DH 公钥换来的共享密钥。**过网的只有公钥**。
-     *
-     * 两者的差别只在「密钥怎么到手机上」，后面的密钥派生、
-     * 签名、加密全都一样。
+     * 密钥材料只在内存里：请求过期或被清理时一起丢掉。
      */
     data class PendingRequest(
         val requestId: String,
@@ -78,16 +67,14 @@ class PairingStore(
         var state: State = State.PENDING,
         var deviceId: String? = null,
         var deviceName: String = "",
-        /** 电脑的 DH 公钥。null = 还没拿到（老协议，或深链还没到）。 */
-        var peerPublicKey: ByteArray? = null,
+        /** 电脑的 DH 公钥。 */
+        val peerPublicKey: ByteArray,
         /** 手机自己的一次性私钥。**只在内存里。** */
-        var ephemeralPrivate: ByteArray? = null,
+        val ephemeralPrivate: ByteArray,
         /** 手机的一次性公钥 —— 要回给电脑，它靠它算出同一把共享密钥。 */
-        var ephemeralPublic: ByteArray? = null,
+        val ephemeralPublic: ByteArray,
         /** 协商出来的共享密钥（32 字节）。 */
-        var sharedSecret: ByteArray? = null,
-        /** 老协议：secret 本身（二维码带来的）。 */
-        var legacySecret: ByteArray? = null,
+        val sharedSecret: ByteArray,
         /**
          * **服务端观察到的对端地址**（`ip:port`）。
          *
@@ -100,32 +87,17 @@ class PairingStore(
         /**
          * **配对码**：给用户肉眼核对的两端一致的 6 位码。
          *
-         * - 新协议（v3.2）：**双方公钥的转录绑定哈希** `H(A‖B)`；
-         * - 老协议：`requestId` 的前 6 位（老网页端显示的就是这个）。
-         *
-         * 新协议下两端都能算这个码：电脑有 A 与手机回的 B，
+         * 它是**双方公钥的转录绑定哈希** `H(A‖B)`：电脑有 A 与手机回的 B，
          * 手机有 A 与自己的 B。中间人换掉任何一个，两端就对不上。
          */
-        val pairCode: String
-            get() {
-                val a = peerPublicKey
-                if (a != null) {
-                    val b = ephemeralPublic ?: return ""
-                    return WebDh.pairCode(a, b)
-                }
-                return requestId.take(6).uppercase()
-            }
-
-        /** 这条请求现在**配不配得成** —— 没有密钥材料就还不成。 */
-        val hasKeyMaterial: Boolean
-            get() = sharedSecret != null || legacySecret != null
+        val pairCode: String get() = WebDh.pairCode(peerPublicKey, ephemeralPublic)
     }
 
     /**
      * 一台已配对的设备。
      *
-     * [keys] 是从 secret 派生的三把子密钥 —— **它等价于 secret 本身**，
-     * 泄露了它就等于泄露了密钥，所以存盘时要加密（见 `WebSyncService`）。
+     * [keys] 是从**协商出来的共享密钥**派生的三把子密钥 ——
+     * 它等价于共享密钥本身，所以存盘时要加密（见 `WebSyncService`）。
      */
     data class PairedDevice(
         val deviceId: String,
@@ -144,7 +116,7 @@ class PairingStore(
          * 手机的一次性公钥 —— 电脑靠它算出**同一把**共享密钥。
          *
          * **它是公钥，不是秘密**：抓包的人看到它也算不出共享密钥
-         * （DH 的单向性）。没有它，电脑就没有 secret可用。
+         * （DH 的单向性）。没有它，电脑就算不出共享密钥。
          */
         val publicKey: ByteArray? = null,
         /** 配对码。电脑拿它跟自己算出来的一比 —— 对不上就是有人在中间换公钥。 */
@@ -162,6 +134,25 @@ class PairingStore(
     private val pending = LinkedHashMap<String, PendingRequest>()
     private val devices = LinkedHashMap<String, PairedDevice>()
 
+    /**
+     * 已经处理完的 requestId —— 连同处理完的时刻。
+     *
+     * ## 为什么待确认表不够
+     *
+     * 待确认表里处理完的条目只留到 [CODE_TTL_MS]（见 [purgeExpiredLocked]），
+     * 过了就被清掉。但「这条已经批准过了」这件事**不该跟着表一起被忘掉**：
+     * 同一个 requestId 再来一次时，服务端要是忘了、重新协商一把新密钥，
+     * 手机就会**再弹一张确认卡** —— 卡上的码是那把**新密钥**算出来的，
+     * 电脑手里那把对不上，用户看到的只是「怎么一直对不上」。
+     *
+     * `/api/pair/request` 是免鉴权的，第三方脚本重放一次就能触发。
+     * 所以这里另记一份账本，保留得比待确认表久（[PROCESSED_TTL_MS]）。
+     */
+    private val processed = LinkedHashMap<String, Processed>()
+
+    /** 一条「已经处理完」的记录。 */
+    private data class Processed(val state: State, val at: Long)
+
     /** deviceId → (nonce → 用掉的时间)。用来挡重放。 */
     private val usedNonces = HashMap<String, HashMap<String, Long>>()
 
@@ -175,43 +166,44 @@ class PairingStore(
     /**
      * 申请配对。
      *
-     * @param requestId `requestIdOf(secret)`（老协议），或一个随机 id（新协议）。
-     * @param peerPublicKey 电脑的 DH 公钥。**给了它，手机就能自己算出共享密钥** ——
-     *   这条「只填地址」的路就是这样走通的：过网的只有公钥。
+     * @param peerPublicKey 电脑的 DH 公钥。**公钥不是秘密**，
+     *   但有了它手机就能当场算出共享密钥 —— 过网的也只有它。
      * @param sourceAddress 服务端观察到的对端地址。**客户端伪造不了**，
      *   所以它才是确认卡上能安全展示的「是谁在请求连接」。
      */
     fun request(
         requestId: String,
         deviceName: String = "",
-        peerPublicKey: ByteArray? = null,
+        peerPublicKey: ByteArray,
         sourceAddress: String = "",
-        legacySecret: ByteArray? = null,
     ): PendingRequest = synchronized(lock) {
         purgeExpiredLocked()
         val now = clock()
         val existing = pending[requestId]
-        if (existing != null && existing.state == State.PENDING) {
-            // **补公钥**：两条通道（HTTP 请求 / 二维码深链）谁先到都行 ——
-            // 先到的那条只带 requestId，后到的那条把公钥补上。
-            if (peerPublicKey != null) attachPeerKeyLocked(existing, peerPublicKey)
-            // 老协议：secret 从二维码那条路补进来。已经有共享密钥时不覆盖。
-            if (legacySecret != null && existing.sharedSecret == null && existing.legacySecret == null) {
-                existing.legacySecret = legacySecret
-            }
-            // 返回快照而不是表里的可变对象：调用方（HTTP/UI 线程）之后读到的
-            // 字段不会再被另一条线程改掉。密钥材料字段只在锁内赋值一次。
+        if (existing != null) {
+            // 同一个 requestId **只协商一次**。
+            //
+            // 重复到达时重新协商 = 换一把密钥 = 两端算出的配对码对不上；
+            // 手机那边还会**再弹一张卡**，而卡上的码是旧那次协商的。
+            // 所以这里**任何状态**都复用原来那一条（包括已批准的），
+            // 真实状态由调用方回给客户端（见 [WebSyncApi.requestPairing]）。
             return@synchronized existing.copy()
         }
+        // **退化公钥一律拒收**：公钥 = 1 会让共享密钥变成公开常量
+        // （详见 [WebDh.validatePublicKey]）。不合法就让它抛出去。
+        WebDh.validatePublicKey(peerPublicKey)
+        val (priv, pub) = WebDh.generateKeypair()
         val req = PendingRequest(
             requestId = requestId,
             requestedAt = now,
             expiresAt = now + CODE_TTL_MS,
             deviceName = deviceName,
+            peerPublicKey = peerPublicKey,
+            ephemeralPrivate = priv,
+            ephemeralPublic = pub,
+            sharedSecret = WebDh.sharedSecret(priv, peerPublicKey),
             sourceAddress = sourceAddress,
         )
-        if (peerPublicKey != null) attachPeerKeyLocked(req, peerPublicKey)
-        if (legacySecret != null && req.sharedSecret == null) req.legacySecret = legacySecret
         pending[requestId] = req
         req.copy()
     }
@@ -261,37 +253,12 @@ class PairingStore(
     }
 
     /**
-     * 把电脑的 DH 公钥接到一条待批准的请求上，并**当场协商出共享密钥**。
-     *
-     * 为什么「当场」：共享密钥一旦定下来，配对码也就定下来了 ——
-     * 界面要立刻把它显示出来让用户核对。
-     */
-    private fun attachPeerKeyLocked(req: PendingRequest, peerPublicKey: ByteArray) {
-        // 已经有密钥材料就不覆盖：同一请求重复到达时，保留第一次协商的结果
-        // （换了公钥就换了一把密钥，两端会对不上）。
-        if (req.peerPublicKey != null) return
-        if (peerPublicKey.size != WebDh.KEY_BYTES) return
-        // **退化公钥一律拒收**：公钥 = 1 会让共享密钥变成公开常量
-        // （详见 [WebDh.validatePublicKey]）。
-        runCatching { WebDh.validatePublicKey(peerPublicKey) }.getOrElse { return }
-        val (priv, pub) = WebDh.generateKeypair()
-        req.peerPublicKey = peerPublicKey
-        req.ephemeralPrivate = priv
-        req.ephemeralPublic = pub
-        req.sharedSecret = WebDh.sharedSecret(priv, peerPublicKey)
-    }
-
-    /**
      * 批准 —— **由用户在手机上点「允许」后调用**。
      *
-     * @param secret 老协议（二维码带来的那个 secret）。新协议传 null ——
-     *   共享密钥在 [request] 收到公钥时就算好了。
-     * @param secret 老协议里会**重算一遍摘要**跟 [requestId] 对上：
-     *   二维码被人改过（比如把 requestId 换成另一台设备的）就会在这里被挡住。
+     * 共享密钥在 [request] 收到公钥时就已经协商好了，这里直接拿它派生。
      */
     fun approve(
         requestId: String,
-        secret: ByteArray? = null,
         passcode: String = "",
         deviceName: String = "",
     ): PairedDevice? = synchronized(lock) {
@@ -302,16 +269,12 @@ class PairingStore(
             req.state = State.EXPIRED
             return@synchronized null
         }
-        // 新协议：共享密钥已经协商好了。
-        // 老协议：secret 由二维码带来，这时才校验摘要。
-        val effective = req.sharedSecret ?: secret ?: req.legacySecret ?: return@synchronized null
-        if (req.sharedSecret == null && requestIdOf(effective) != requestId) return@synchronized null
 
         val deviceId = idGenerator()
         val now = clock()
         val device = PairedDevice(
             deviceId = deviceId,
-            keys = WebCrypto.deriveKeys(effective, passcode),
+            keys = WebCrypto.deriveKeys(req.sharedSecret, passcode),
             deviceName = deviceName.ifBlank { req.deviceName.ifBlank { "网页端" } },
             pairedAt = now,
             lastSeenAt = now,
@@ -320,6 +283,7 @@ class PairingStore(
         req.state = State.APPROVED
         req.deviceId = deviceId
         req.deviceName = device.deviceName
+        markProcessedLocked(req.requestId, State.APPROVED, now)
         device
     }
 
@@ -327,15 +291,31 @@ class PairingStore(
         val req = pending[requestId] ?: return@synchronized false
         if (req.state != State.PENDING) return@synchronized false
         req.state = State.DENIED
+        markProcessedLocked(requestId, State.DENIED, clock())
         true
+    }
+
+    /**
+     * 这条 requestId 现在是什么状态。
+     *
+     * - `null`：没见过 —— 真的是一条新申请；
+     * - [State.PENDING]：还在等用户确认；
+     * - 其它：**已经处理完了**，不能再当成新申请重新协商。
+     *
+     * 已被清出待确认表的也算（见 [processed]）——
+     * 「几分钟前刚批准过」这件事不能因为清表就忘了。
+     */
+    fun knownState(requestId: String): State? = synchronized(lock) {
+        purgeExpiredLocked()
+        pending[requestId]?.state ?: processed[requestId]?.state
     }
 
     /**
      * 查配对状态。
      *
-     * **未加密、免鉴权**，但里面**没有凭据** —— 只有状态与 deviceId。
-     * 抓到这条请求的人知道「有个设备在等」，但没有 secret，
-     * 拿不到 token、也算不出签名。
+     * **未加密、免鉴权**，但里面**没有凭据** —— 只有状态、deviceId、
+     * 手机的一次性公钥与配对码。抓到这条请求的人知道「有个设备在等」，
+     * 但没有共享密钥，拿不到密钥、也算不出签名。
      */
     fun status(requestId: String): Status = synchronized(lock) {
         purgeExpiredLocked()
@@ -345,7 +325,7 @@ class PairingStore(
             deviceId = req.deviceId,
             deviceName = req.deviceName.takeIf { it.isNotBlank() },
             publicKey = req.ephemeralPublic,
-            pairCode = req.pairCode.takeIf { req.hasKeyMaterial },
+            pairCode = req.pairCode,
         )
     }
 
@@ -437,20 +417,12 @@ class PairingStore(
 
     // ── 工具 ───────────────────────────────────────────────────
 
-    /**
-     * secret → requestId。
-     *
-     * 取摘要的**前 16 字节**（128 位）转 base64url：
-     * 足够长（猜不出来），又短到能塞进二维码与 URL。
-     */
-    fun requestIdOf(secret: ByteArray): String =
-        WebCrypto.base64Url(WebCrypto.sha256(secret).copyOfRange(0, 16))
-
     private fun purgeExpiredLocked() {
         val now = clock()
         pending.entries.removeAll { (_, req) ->
             if (req.state == State.PENDING && now > req.expiresAt) {
                 req.state = State.EXPIRED
+                markProcessedLocked(req.requestId, State.EXPIRED, now)
                 true
             } else {
                 false
@@ -460,10 +432,27 @@ class PairingStore(
         //
         // 留着没有用途，却会一直占着内存；而这些记录里还有共享密钥
         // 与一次性私钥 —— 过期之后继续留着它们没有道理。
+        // 「处理过」这件事另有账本记着（见 [processed]），不受这里清理影响。
         pending.entries.removeAll { (_, req) ->
             req.state != State.PENDING && now > req.requestedAt + CODE_TTL_MS
         }
+        pruneProcessedLocked(now)
         pruneRateHitsLocked(now)
+    }
+
+    /** 记一笔「这条 requestId 已经处理完了」。 */
+    private fun markProcessedLocked(requestId: String, state: State, at: Long) {
+        processed[requestId] = Processed(state, at)
+        // 账本也要有上界：免鉴权接口能被随便调用，账本不能无限长。
+        while (processed.size > MAX_PROCESSED_REQUESTS) {
+            val oldest = processed.entries.minByOrNull { it.value.at }?.key ?: break
+            processed.remove(oldest)
+        }
+    }
+
+    /** 丢掉保留期外的「已处理」记录。 */
+    private fun pruneProcessedLocked(now: Long) {
+        processed.entries.removeAll { (_, p) -> now > p.at + PROCESSED_TTL_MS }
     }
 
     /** 丢掉限流窗口外的记录，顺带清掉窗口内已经没有记录的来源。 */
@@ -517,5 +506,16 @@ class PairingStore(
          * 陌生设备弹出来的确认卡。
          */
         const val MAX_PENDING_REQUESTS = 8
+
+        /**
+         * 「已处理」的记录留多久。
+         *
+         * 比 [CODE_TTL_MS] 长：待确认表把条目清掉了，被重放也要认得出来。
+         * 十分钟足够覆盖「电脑还在轮询配对结果」的那段时间。
+         */
+        const val PROCESSED_TTL_MS = 10 * 60 * 1000L
+
+        /** 「已处理」账本最多留多少条。 */
+        const val MAX_PROCESSED_REQUESTS = 64
     }
 }

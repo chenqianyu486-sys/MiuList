@@ -19,8 +19,8 @@ import org.robolectric.annotation.Config
  *
  * ## 为什么它重要
  *
- * 配对要**只扫一次码**，地址就不能靠扫码搬 —— 只能靠复制粘贴。
- * 手机上那一下「复制」，复制出来的**必须正好是电脑端要的那个串**：
+ * 配对只有一条链路，地址只能靠复制粘贴搬过去。
+ * 手机上那一下「复制链接」，复制出来的**必须正好是电脑端要的那个串**：
  * `http://<ip>:<端口>/`。
  *
  * 差一个字符的后果不是「连不上」这么客气：地址归一化会把
@@ -79,7 +79,7 @@ class WebSyncCopyLinkTest {
     @Test
     fun copy_link_button_copies_the_first_address_when_there_are_several() {
         // 虚拟网卡 / VPN 会让手机吐出好几个地址。
-        // 电脑端连的是**第一个**（二维码也是用它生成的），
+        // 电脑端连的是**第一个**（复制按钮用的就是这个地址），
         // 复制别的那个，用户就会拿着一个连不上的地址去粘贴。
         dialog(running = true, addresses = listOf("192.168.1.5", "10.0.2.16"))
 

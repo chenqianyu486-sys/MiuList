@@ -76,13 +76,13 @@ class WebSyncService(
      * 正在等用户确认的配对请求。
      *
      * **用 StateFlow 而不是普通属性**：待确认的这些是在 **HTTP 处理线程**里
-     * 被塞进来的（HTTP 请求或深链到达时），而界面若只在打开弹层时读一次，
+     * 被塞进来的，而界面若只在打开弹层时读一次，
      * 用户**已经开着弹层**时就看不到「有一台设备请求连接」。
      *
      * ## 为什么是**列表**而不是单条
      *
      * 原来是单槽：后来的请求会**顶掉**先来的。
-     * 那等于给了一条现成的钓鱼路径 —— 攻击者发一条深链，
+     * 那等于给了一条现成的钓鱼路径 —— 攻击者发一条请求，
      * 你电脑上那条真的请求就被换成他的，手机上只剩一张卡，
      * 用户根本看不出换过，还以为那就是自己的电脑。
      *
@@ -95,13 +95,6 @@ class WebSyncService(
     /** 一次待批准的配对。 */
     data class PendingPairing(
         val requestId: String,
-        /**
-         * 老协议（v3）：secret 本身（base64url）。
-         *
-         * 新协议（v3.2）是 null —— 共享密钥在手机上跟电脑**各自协商**出来，
-         * 根本不需要有一份「从对面搬过来」的 secret。
-         */
-        val secretBase64: String?,
         val deviceName: String,
         /** **配对码**：两端一致的 6 位码，用户照着核对。 */
         val pairCode: String,
@@ -142,7 +135,6 @@ class WebSyncService(
                 taskRepo = container.taskRepository,
                 courseRepo = container.courseRepository,
             ),
-            qr = { text -> QrCodes.svg(text) },
             broadcaster = this,
             revisionProvider = { revision.get() },
             deviceName = { deviceName() },
@@ -159,12 +151,11 @@ class WebSyncService(
                 syncManager = container.syncManager,
                 secureStorage = container.secureAccountStorage,
             ),
-            // 有一条配对请求拿到公钥了 → 界面该弹那张确认卡了。
+            // 有一条配对请求带着公钥进来了 → 界面该弹那张确认卡了。
             onPairingReady = { req ->
                 addPending(
                     PendingPairing(
                         requestId = req.requestId,
-                        secretBase64 = null,
                         deviceName = req.deviceName.ifBlank { "网页端" },
                         pairCode = req.pairCode,
                         sourceAddress = req.sourceAddress,
@@ -248,77 +239,9 @@ class WebSyncService(
     // ── 配对 ────────────────────────────────────────────────────
 
     /**
-     * 深链或 HTTP 请求带来的配对请求。
-     *
-     * 两种形态：
-     *
-     * - **深链** `miulist://pair?v=5&k=<公钥>&r=<requestId>`
-     *   （老版是 `s=<secret>`）—— 走二维码那条路；
-     * - **HTTP 请求** `/api/pair/request` 带 `publicKey`
-     *   —— 走「只填地址」那条路。
-     *
-     * 两条路带来的是**同一件事**：电脑的 DH 公钥。公钥不是秘密，
-     * 拿到它就能各自算出同一把共享密钥（见 [WebDh]）。
-     *
-     * @param secretBase64 老协议：secret 本身。**只在这一瞬间存在于内存里。**
-     * @param publicKeyBase64 新协议：电脑的 DH 公钥（base64url）。
-     */
-    fun offerPairing(
-        requestId: String,
-        secretBase64: String? = null,
-        publicKeyBase64: String? = null,
-        deviceName: String = "网页端",
-        sourceAddress: String = "",
-    ): Boolean {
-        if (requestId.isBlank()) return false
-        val publicKey = publicKeyBase64
-            ?.takeIf { it.isNotBlank() }
-            ?.let { runCatching { WebCrypto.fromBase64Url(it) }.getOrNull() }
-            ?.takeIf { it.size == WebDh.KEY_BYTES }
-
-        // **补一条 pending。**
-        //
-        // 正常顺序是「网页端先 POST /api/pair/request → 再显示二维码 → 手机扫」，
-        // 所以这条 pending 本来就在（服务端只见过摘要）。
-        //
-        // 但深链是**另一条通道**，它可能先到；也可能网页端压根还没能联系上手机
-        // （地址没填、刚开机），却已经把二维码扫出来了。
-        // 那时若不在这里补一条，[PairingStore.approve] 会因为
-        // 「找不到这个请求」直接返回 null —— 用户点了「允许」却什么都没发生。
-        //
-        // 补上它，批准与否就只取决于**用户点了什么**，而不取决于两个通道谁先到。
-        val legacySecret = if (secretBase64 != null && publicKey == null) {
-            runCatching { WebCrypto.fromBase64Url(secretBase64) }.getOrNull()
-        } else {
-            null
-        }
-        val req = pairing.request(
-            requestId = requestId,
-            deviceName = deviceName,
-            peerPublicKey = publicKey,
-            sourceAddress = sourceAddress,
-            legacySecret = legacySecret,
-        )
-        // **没有密钥材料就还不算「可以配了」** —— 界面算不出配对码，
-        // 用户看到一张没有码的确认卡只会更困惑。
-        if (!req.hasKeyMaterial) return false
-        addPending(
-            PendingPairing(
-                requestId = requestId,
-                secretBase64 = secretBase64,
-                deviceName = deviceName,
-                pairCode = req.pairCode,
-                sourceAddress = req.sourceAddress.ifBlank { sourceAddress },
-            )
-        )
-        return true
-    }
-
-    /**
      * 把一条待确认请求并进列表。
      *
-     * 同一条只留一条 —— 后到的补上缺的字段（比如先是深链来了、
-     * 后是 HTTP 请求带着公钥来了）。
+     * 同一条只留一条 —— 重复到达的请求不重复弹卡。
      */
     private fun addPending(item: PendingPairing) {
         _pendingPairings.value = _pendingPairings.value
@@ -329,19 +252,13 @@ class WebSyncService(
     /**
      * 用户在手机上点了「允许」。
      *
-     * 批准时会用协商出来的密钥派生（**同步密码会混进去**），
+     * 批准时会用协商出来的共享密钥派生（**同步密码会混进去**），
      * 并把这台设备记下来。
      */
     fun approvePending(requestId: String): Boolean {
         val pending = _pendingPairings.value.firstOrNull { it.requestId == requestId } ?: return false
-        val secret = pending.secretBase64?.let {
-            runCatching { WebCrypto.fromBase64Url(it) }.getOrNull()
-        }
-        // 新协议：secret 传 null —— [PairingStore] 用的是它跟电脑协商出来的共享密钥。
-        // 老协议：secret 从二维码过来，摘要对不上（二维码被改过）会被挡住。
         val device = pairing.approve(
             requestId = pending.requestId,
-            secret = secret,
             passcode = container.secureAccountStorage.getSyncPasscode().orEmpty(),
             deviceName = pending.deviceName,
         )
@@ -522,7 +439,7 @@ class WebSyncService(
     /**
      * 设备密钥**加密落盘**。
      *
-     * 那三把子密钥等价于配对 secret 本身 —— 明文存进 SharedPreferences
+     * 那三把子密钥等价于配对协商出来的共享密钥本身 —— 明文存进 SharedPreferences
      * 就等于把钥匙放在桌面上。
      */
     private fun persistDevice(device: PairingStore.PairedDevice) {

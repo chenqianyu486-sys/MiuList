@@ -28,11 +28,11 @@ import org.robolectric.annotation.Config
  * 原来那张卡上写的是设备名 —— 谁都能自报成「我的电脑」，
  * 用户拿它认不出对面是谁，于是这张卡形同虚设。
  *
- * v3.2 改成：卡上最上面是**服务端观察到的来源地址**，
+ * 现在卡上最上面是**服务端观察到的来源地址**，
  * 设备名降级成「只能当参考」的副信息。
  *
  * 还有一条：**后来的请求不能顶掉先来的**。
- * 单槽的时候，攻击者发一条深链就能把你电脑上那条真的确认卡换掉，
+ * 单槽的时候，攻击者发一条请求就能把你电脑上那条真的确认卡换掉，
  * 手机上只剩一张卡，用户根本看不出换过。
  *
  * ## 为什么用 `useUnmergedTree = true`
@@ -59,7 +59,6 @@ class WebSyncPendingPairingsTest {
         sourceAddress: String = "192.168.1.5:51234",
     ) = WebSyncService.PendingPairing(
         requestId = requestId,
-        secretBase64 = null,
         deviceName = deviceName,
         pairCode = pairCode,
         sourceAddress = sourceAddress,
@@ -113,12 +112,12 @@ class WebSyncPendingPairingsTest {
     }
 
     @Test
-    fun `来源未知时要给出警告 - 扫码深链那条路拿不到地址`() {
+    fun `来源地址为空时给出保守提示`() {
         dialog(listOf(pending("req-a", sourceAddress = "")))
 
         composeTestRule.onNodeWithTag("web_sync_source", useUnmergedTree = true)
-            .assertTextEquals("来源未知")
-        composeTestRule.onNodeWithText("没有来源地址", substring = true, useUnmergedTree = true)
+            .assertTextEquals("未知地址")
+        composeTestRule.onNodeWithText("如果不是你发起的，请拒绝。", substring = true, useUnmergedTree = true)
             .assertExists()
     }
 

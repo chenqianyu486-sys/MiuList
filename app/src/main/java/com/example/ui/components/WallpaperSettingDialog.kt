@@ -227,11 +227,16 @@ fun WallpaperSettingDialog(
                                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
-                                Text(
-                                    text = if (currentConfig.type == WallpaperType.CUSTOM) "已应用自定义壁纸" else "支持任意图片，自动优化存储",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = TextSecondary
-                                )
+                                // 未选自定义壁纸时这一行不显示：
+                                // 原来那句「支持任意图片，自动优化存储」是解释实现的话，
+                                // 不是用户要做的事，删掉后卡片只剩标题。
+                                if (currentConfig.type == WallpaperType.CUSTOM) {
+                                    Text(
+                                        text = "已应用自定义壁纸",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TextSecondary
+                                    )
+                                }
                             }
                         }
 
@@ -322,7 +327,7 @@ fun WallpaperSettingDialog(
                 if (currentConfig.type == WallpaperType.CUSTOM) {
                     TierSection(
                         title = "背景柔焦",
-                        subtitle = "把照片细节柔化；清晰档保留原图，柔和 / 很柔是两档预设",
+                        subtitle = "清晰档保留原图，柔和 / 很柔是两档预设",
                         tiers = SoftFocusTiers,
                         selectedValue = currentConfig.softFocus,
                         onSelect = onUpdateSoftFocus,

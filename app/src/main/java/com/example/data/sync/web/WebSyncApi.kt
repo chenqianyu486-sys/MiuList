@@ -12,11 +12,6 @@ fun interface WebAssetProvider {
     fun read(path: String): ByteArray?
 }
 
-/** 二维码渲染器。返回 SVG 字节；渲染失败返回 null。 */
-fun interface QrRenderer {
-    fun svg(text: String): ByteArray?
-}
-
 /**
  * 变更广播。快照有变化时把新的 revision 推给所有 SSE 客户端。
  *
@@ -66,7 +61,6 @@ class WebSyncApi(
     private val assets: WebAssetProvider,
     private val snapshotProvider: suspend (Long) -> WebSnapshotDto,
     private val tasks: TaskWriter,
-    private val qr: QrRenderer,
     private val broadcaster: SyncEventBroadcaster,
     private val revisionProvider: () -> Long,
     private val deviceName: () -> String,
@@ -74,12 +68,11 @@ class WebSyncApi(
     private val snapshotApplier: suspend (WebSnapshotDto, SyncMode) -> SnapshotApplier.Report,
     private val zjuProxy: ZjuProxy,
     /**
-     * 有一条配对请求**拿到密钥材料**了 —— 界面该弹确认卡了。
+     * 有一条配对请求进来了 —— 界面该弹确认卡了。
      *
      * 为什么要有这个回调：`/api/pair/request` 是在 HTTP 处理线程里被处理的，
-     * 而界面要弹的是那张「有一台设备请求连接」的卡。这条请求什么时候
-     * 才算「能配了」，由 [PairingStore] 说了算（老协议要等 secret，
-     * 新协议要等公钥），接口层只负责把这件事告诉界面。
+     * 而界面要弹的是那张「有一台设备请求连接」的卡。手机收到公钥的同一刻
+     * 就完成了协商、算出了配对码，接口层负责把这件事告诉界面。
      */
     private val onPairingReady: (PairingStore.PendingRequest) -> Unit = {},
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO),
@@ -122,7 +115,6 @@ class WebSyncApi(
             path == "/api/health" -> health()
             path == "/api/pair/request" && request.method == "POST" -> requestPairing(request)
             path == "/api/pair/status" -> pairStatus(request)
-            path == "/api/pair/qr.svg" -> pairQr(request)
             path == "/api/snapshot" -> snapshot(request)
             path == "/api/snapshot/apply" && request.method == "POST" -> applySnapshot(request)
             path == "/api/zju/terms" -> zjuTerms(request)
@@ -137,34 +129,50 @@ class WebSyncApi(
 
     private fun health(): HttpReply = json(
         200,
-        """{"ok":true,"app":"MiuList","protocol":3,"pairing":5,"appVersion":"${esc(appVersion())}","deviceName":"${esc(deviceName())}","serverTime":${System.currentTimeMillis()}}""",
+        """{"ok":true,"app":"MiuList","protocol":3,"pairing":6,"appVersion":"${esc(appVersion())}","deviceName":"${esc(deviceName())}","serverTime":${System.currentTimeMillis()}}""",
     )
 
     /**
      * 申请配对。
      *
-     * 请求体里只有 `requestId`（secret 的摘要）—— **secret 本身不上网络**。
-     */
-    /**
-     * 申请配对。
+     * 请求体里必须带电脑的 DH **公钥**（`requestId` + `deviceName` + `publicKey`）——
+     * **公钥不是秘密**，但它让手机当场就能算出共享密钥、立刻显示配对码。
      *
-     * 请求体有两种形态：
-     *
-     * - **老协议（v3）**：只有 `requestId`（secret 的摘要）——
-     *   secret 本身从二维码过来，不上网络。
-     * - **新协议（v3.1）**：多带一个 `publicKey` —— 电脑的 DH 公钥。
-     *   **公钥不是秘密**（过网也泄不了密），但有了它手机就能自己
-     *   协商出共享密钥 —— 「只填地址」那条路就是这样走通的。
+     * 不带公钥的一律拒收：配对只有「复制链接 + 手机确认」这一条链路，
+     * 旧版网页端会在这里看到明确的错误，而不是悄悄配上一个半成品。
      */
     private fun requestPairing(request: HttpRequest): HttpReply {
         val body = parseJson(request) ?: return json(400, """{"error":"请求体不合法"}""")
         val requestId = body.optString("requestId").orEmpty()
         if (requestId.length < 8) return json(400, """{"error":"缺少 requestId"}""")
         val deviceName = body.optString("deviceName").orEmpty()
-        val publicKey = body.optString("publicKey")
-            ?.takeIf { it.isNotBlank() }
-            ?.let { runCatching { WebCrypto.fromBase64Url(it) }.getOrNull() }
-            ?.takeIf { it.size == WebDh.KEY_BYTES }
+        val publicKeyText = body.optString("publicKey").orEmpty()
+        if (publicKeyText.isBlank()) {
+            return json(400, """{"error":"网页端版本太旧：配对请求必须带公钥，请重新下载网页端"}""")
+        }
+        val publicKey = runCatching { WebCrypto.fromBase64Url(publicKeyText) }.getOrNull()
+            ?: return json(400, """{"error":"publicKey 不是合法的 base64url"}""")
+        if (publicKey.size != WebDh.KEY_BYTES) {
+            return json(400, """{"error":"publicKey 长度不对"}""")
+        }
+        // 退化公钥（0 / 1 / p-1）会让共享密钥变成公开常量，必须在入口挡掉。
+        if (runCatching { WebDh.validatePublicKey(publicKey) }.isFailure) {
+            return json(400, """{"error":"publicKey 不合法"}""")
+        }
+
+        // ── 这个 requestId 是不是已经协商过了 ──────────────────
+        //
+        // **不能重新协商**：重新协商 = 换一把密钥 = 手机再弹一张确认卡，
+        // 而卡上的配对码是那把**新密钥**算出来的，电脑手里那把对不上。
+        // 这个接口是免鉴权的，第三方脚本重放一次就能踩到，
+        // 所以这里老实回一句「已经处理过了」，让对方重新发起。
+        val known = pairing.knownState(requestId)
+        if (known != null && known != PairingStore.State.PENDING) {
+            return json(
+                409,
+                """{"error":"这条配对请求已经处理过了，请在电脑上重新发起配对","state":"${known.name.lowercase()}"}""",
+            )
+        }
 
         // ── 限流与容量 ──────────────────────────────────────────
         //
@@ -177,7 +185,7 @@ class WebSyncApi(
         // 拿 `ip:port` 当键等于每次请求都换一份配额。
         val sourceHost = request.remoteHost.ifBlank { request.remoteAddress }
         // 容量上限只针对**新请求** —— 同一条 requestId 重复到达
-        // （比如网页端重发、或者深链那条路又补了一次）不该被误伤。
+        // （比如网页端重发）不该被误伤。
         if (!pairing.hasPending(requestId) && !pairing.canAcceptMore()) {
             return json(503, """{"error":"待确认的配对请求太多了，先处理掉已有的再试"}""")
         }
@@ -186,27 +194,26 @@ class WebSyncApi(
             return json(429, """{"error":"申请太频繁了，稍后再试"}""")
         }
 
-        val req = pairing.request(
-            requestId = requestId,
-            deviceName = deviceName,
-            peerPublicKey = publicKey,
-            sourceAddress = request.remoteAddress,
-        )
-        // 拿到密钥材料了才弹确认卡 —— 否则用户看到的是一张「有个请求」，
-        // 却连配对码都算不出来（公钥还没到）。
-        if (req.hasKeyMaterial) onPairingReady(req)
-        return json(
-            200,
-            """{"state":"${req.state.name.lowercase()}","expiresAt":${req.expiresAt}}""",
-        )
+        val req = pairing.request(requestId, deviceName, publicKey, request.remoteAddress)
+        if (req.state != PairingStore.State.PENDING) {
+            // 走到这儿说明这条 requestId 在上面那次检查之后被处理掉了
+            // （用户正好在这时点了允许）。同样不能弹卡，也不能回 pending ——
+            // 对一条已批准的请求说「还在等你确认」是假话。
+            return json(
+                409,
+                """{"error":"这条配对请求已经处理过了，请在电脑上重新发起配对","state":"${req.state.name.lowercase()}"}""",
+            )
+        }
+        onPairingReady(req)
+        return json(200, """{"state":"pending","expiresAt":${req.expiresAt}}""")
     }
 
     /**
      * 查配对状态。
      *
-     * **免鉴权、不加密**，但里面**没有任何凭据** —— 只有状态与 deviceId。
-     * 抓到这条请求的人知道「有个设备在等」，但没有 secret，
-     * 拿不到密钥、也算不出签名。
+     * **免鉴权、不加密**，但里面**没有任何凭据** —— 只有状态、deviceId、
+     * 手机的一次性公钥与配对码。抓到这条请求的人知道「有个设备在等」，
+     * 但没有共享密钥，拿不到密钥、也算不出签名。
      */
     private fun pairStatus(request: HttpRequest): HttpReply {
         val requestId = request.query["requestId"].orEmpty()
@@ -222,19 +229,6 @@ class WebSyncApi(
             append("}")
         }
         return json(200, body)
-    }
-
-    private fun pairQr(request: HttpRequest): HttpReply {
-        val code = request.query["code"].orEmpty()
-        if (code.isBlank()) return json(400, """{"error":"缺少配对码"}""")
-        val svg = qr.svg(deepLinkFor(code))
-            ?: return json(500, """{"error":"二维码生成失败"}""")
-        return HttpReply.Full(
-            status = 200,
-            contentType = "image/svg+xml; charset=utf-8",
-            body = svg,
-            headers = mapOf("Cache-Control" to "no-store"),
-        )
     }
 
     // ── 要签名 ──────────────────────────────────────────────────
@@ -468,11 +462,7 @@ class WebSyncApi(
     private fun jsonStringArray(values: List<String>): String =
         values.joinToString(prefix = "[", postfix = "]") { "\"${esc(it)}\"" }
 
-    private fun deepLinkFor(code: String): String = "$DEEP_LINK_SCHEME://pair?code=$code"
-
     companion object {
-        const val DEEP_LINK_SCHEME = "miulist"
-
         const val HEADER_DEVICE = "X-ML-Device"
         const val HEADER_TS = "X-ML-Ts"
         const val HEADER_NONCE = "X-ML-Nonce"

@@ -47,7 +47,7 @@ import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.QrCode2
+import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.Rule
 import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Tune
@@ -401,7 +401,7 @@ fun MoreDrawer(
                     // 网页端。**放在设置之前**：它是一个「别的设备要用 MiuList」的入口，
                     // 与课表、分类、规则这些「我自己的数据怎么组织」不是一类事。
                     DrawerRow(
-                        icon = Icons.Outlined.QrCode2,
+                        icon = Icons.Outlined.Computer,
                         title = "网页同步",
                         testTag = "drawer_web_sync_row",
                         onClick = onOpenWebSync

@@ -1,6 +1,5 @@
 package com.example
 
-import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -134,7 +133,6 @@ import com.example.ui.viewmodel.NavigationTab
 import com.example.ui.viewmodel.WebSyncUiState
 import com.example.ui.viewmodel.WebSyncViewModel
 import com.example.ui.viewmodel.WebSyncViewModelFactory
-import com.example.data.sync.web.WebSyncApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
@@ -160,48 +158,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handlePairingIntent(intent)
         setContent {
             MyApplicationTheme {
                 MainApp(viewModel = viewModel, webSyncViewModel = webSyncViewModel)
             }
         }
-    }
-
-    /**
-     * 局域网配对的深链：
-     *
-     * - `miulist://pair?v=5&k=<公钥>&r=<requestId>` —— 协议 v3.2（DH 协商）；
-     * - `miulist://pair?v=3&s=<secret>&r=<requestId>` —— 老协议，仍然认。
-     *
-     * 走深链而不是让网页端直接调接口，是因为**授权必须发生在手机上**：
-     * 局域网里任何设备都能访问这个服务，光有配对码不构成授权。
-     *
-     * `s` 是网页端本地生成的 32 字节 secret —— 它**从来没有经过网络**，
-     * 只走「二维码 → 手机相机」这条视觉通道（见 `PairingStore` 的说明）。
-     *
-     * 这里**只把码记下来**，批准与否由用户在界面上点 ——
-     * 收到深链就自动批准，等于把门开着。
-     */
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        handlePairingIntent(intent)
-    }
-
-    private fun handlePairingIntent(intent: Intent?) {
-        val data = intent?.data ?: return
-        if (data.scheme != WebSyncApi.DEEP_LINK_SCHEME) return
-        if (data.host != "pair") return
-        val requestId = data.getQueryParameter("r")?.trim().orEmpty()
-        if (requestId.isEmpty()) return
-        // 新协议（v3.1）：`k` 是电脑的 **DH 公钥**（公钥不是秘密，过网也泄不了密）。
-        // 老协议（v3）：`s` 是 secret 本身 —— 留着是为了还能跟旧版网页端配上。
-        val publicKey = data.getQueryParameter("k")?.trim().orEmpty()
-        val secret = data.getQueryParameter("s")?.trim().orEmpty()
-        if (publicKey.isEmpty() && secret.isEmpty()) return
-        // 扫码深链这条路拿不到来源地址（服务端根本没见到这条 TCP 连接），
-        // 所以 sourceAddress 留空 —— 界面上会显示「来源未知」并加警告。
-        webSyncViewModel.offerPairing(requestId, secret, publicKey)
     }
 }
 
@@ -594,8 +555,8 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
     // 顶栏抽屉的开关。和搜索态一样是纯界面开关，不进 ViewModel。
     var moreDrawerVisible by remember { mutableStateOf(false) }
 
-    // 「网页同步」弹层的开关。深链带回来一个配对码时也要把它顶开 ——
-    // 用户扫完码回到 App，必须**立刻看到**「允许这台设备连接吗」。
+    // 「网页同步」弹层的开关。配对请求从 HTTP 进来、进入待确认列表时也要把它顶开 ——
+    // 用户可能正在别的页面，必须**立刻看到**「有一台设备请求连接」。
     var webSyncVisible by remember { mutableStateOf(false) }
     val webSyncState by (webSyncViewModel?.uiState
         ?: remember { MutableStateFlow(WebSyncUiState()) }
