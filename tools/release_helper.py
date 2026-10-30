@@ -19,10 +19,38 @@ import json
 import sys
 from pathlib import Path
 
-HEADER = """## MiuList {version}（测试版）
+HEADER_TESTING = """## MiuList {version}（测试版）
 
 > ⚠️ **这是测试版，不是正式发布版。** 功能尚未经过充分验证，可能存在 bug 或数据问题，
 > 请先在测试机上安装，重要数据请自行备份。正式版会在测试反馈收敛后另行发布。
+
+{summary}
+
+### 🎨 这一版改了什么
+
+{changes}
+
+### 📦 安装
+
+- 下载 `{apk_name}` 直接安装，无需 Google Play。
+- 最低系统要求：Android 7.0（API 24）；targetSdk 36。
+- 覆盖安装：本版本与上一版使用**同一把上传密钥**（证书 SHA-256 一致），
+  可直接覆盖升级，不会丢数据。
+
+### ⚠️ 说明
+
+- 自签名发布，签名密钥不在仓库中，请自行妥善保管。
+- 项目基于 GPL-3.0 开源，欢迎提 issue 与 PR。
+"""
+
+# 正式版说明：结构与测试版一致，只把「这是测试版」那一段警告换成一句确认。
+#
+# 为什么单独一份模板而不是给测试版模板加个开关：两者的**开头语气**完全不同 ——
+# 测试版要劝人别当正式版用，正式版要说清「可以升级了，但先备份」。
+# 用一个模板加条件拼字符串，最后一定会漏掉某一处的措辞。
+HEADER_STABLE = """## MiuList {version}（正式版）
+
+> ✅ 这是正式版。升级前建议先备份数据。
 
 {summary}
 
@@ -66,7 +94,10 @@ def cmd_notes(args: argparse.Namespace) -> int:
     else:
         summary = f"v{args.prev_tag.lstrip('v')} 之后的版本。"
 
-    text = HEADER.format(
+    # 正式版用正式版模板：说明里留着「这是测试版」的警告，
+    # 会让用户以为拿到的不是能长期用的版本。
+    template = HEADER_STABLE if args.stable else HEADER_TESTING
+    text = template.format(
         version=args.version,
         summary=summary,
         changes=changes,
@@ -110,6 +141,7 @@ def main(argv: list[str]) -> int:
     n.add_argument("--apk-name", default="")
     n.add_argument("--commits-file", default="")
     n.add_argument("--out", default="")
+    n.add_argument("--stable", action="store_true", help="生成正式版说明（不写测试版警告）")
     n.set_defaults(func=cmd_notes)
 
     p = sub.add_parser("payload", help="拼 GitHub API 的 JSON 载荷")

@@ -1,0 +1,138 @@
+name: Android CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# 这个流水线只读仓库：不写回、不发版、不需要任何 secret。
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Android · assemble + 单测 + lint
+    runs-on: ubuntu-latest
+    # Robolectric 在测试运行时会下载 100MB+ 的 android-all-instrumented，
+    # 加上首次拉 AGP / Kotlin / 依赖，冷启动常常要十分钟以上，超时给足。
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # git index 里 gradlew 是 100644（没有可执行位），clone 下来直接 ./gradlew
+      # 会 Permission denied，所以显式补一个执行位。
+      # gradlew 的 blob 是 LF 行尾、shebang 是 #!/bin/sh，Linux 上 chmod 之后可直接跑。
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # AGP 找 SDK 的顺序是：local.properties 的 sdk.dir → ANDROID_HOME → ANDROID_SDK_ROOT。
+      # 仓库里的 local.properties 被 gitignore（clone 下来没有），而 ubuntu-latest
+      # 镜像自带 SDK 且已导出 ANDROID_HOME —— 这里两个都做：写一份 local.properties
+      # （用解析出来的实际路径），并把 ANDROID_HOME 重新导出给后续步骤。
+      - name: Point Gradle at the Android SDK
+        run: |
+          set -eu
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK_DIR" ]; then
+            echo "::error::Android SDK not found: $SDK_DIR"
+            exit 1
+          fi
+          echo "Using Android SDK: $SDK_DIR"
+          printf 'sdk.dir=%s\n' "$SDK_DIR" > local.properties
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
+
+      # compileSdk 是 36 且带 minor API level 1，镜像里不一定有这一版平台，
+      # AGP 需要现场下载 —— 下载前必须先有许可，否则会报 "licences have not been accepted"。
+      - name: Accept Android SDK licenses
+        run: |
+          set -eu
+          SDKMANAGER=""
+          for candidate in \
+            "${ANDROID_HOME:-}/cmdline-tools/latest/bin/sdkmanager" \
+            "${ANDROID_SDK_ROOT:-}/cmdline-tools/latest/bin/sdkmanager"; do
+            if [ -x "$candidate" ]; then
+              SDKMANAGER="$candidate"
+              break
+            fi
+          done
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager 不可用，跳过许可确认。"
+            exit 0
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null
+
+      # 干净 clone 里没有 debug.keystore（被 gitignore），而 debug buildType 用的是
+      # debugConfig，AGP 的 validateSigningDebug 会直接失败：
+      #   Keystore file '.../debug.keystore' not found for signing config 'debugConfig'
+      # 所以用 JDK 自带的 keytool 现生成一把**只用于 CI 的临时调试密钥**，
+      # 不涉及任何真实密钥、secret 或上传密钥。
+      - name: Generate a CI-only debug keystore
+        run: |
+          set -eu
+          keytool -genkeypair -v \
+            -keystore debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+          keytool -list -keystore debug.keystore -storepass android
+
+      - name: Assemble debug APK and run unit tests
+        run: ./gradlew :app:assembleDebug :app:testDebugUnitTest --console=plain
+
+      - name: Run lint
+        run: ./gradlew :app:lintDebug --console=plain
+
+      # lint 红了要能拿到报告：失败时把报告当产物传上去。
+      - name: Upload lint report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-results-debug
+          path: app/build/reports/lint-results-debug.*
+          if-no-files-found: ignore
+
+  desktop:
+    name: Desktop · typecheck + 单测
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node 22：测试脚本里的带引号 glob（node --test "test/*.test.mjs"）需要 Node 21+，
+      # 而且测试直接 import ../src/core/*.ts，依赖 22.18 起默认开启的类型擦除。
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: desktop
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: desktop
+        run: npm test

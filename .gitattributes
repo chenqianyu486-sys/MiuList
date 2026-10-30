@@ -8,3 +8,9 @@
 # 预览启动器的 .ps1 只在 Windows PowerShell 上跑，一并钉成 CRLF，
 # 免得在 Linux 上 clone 之后拿到的脚本行尾不对。
 *.ps1 text eol=crlf
+
+# shell 脚本与 Python 工具只在 Git Bash / CI 里跑，必须是 LF：
+# CRLF 会让 bash 把每行的 \r 当成命令的一部分（报 $'\r': command not found），
+# Python 里也会莫名其妙多出一个 \r。
+*.sh text eol=lf
+*.py text eol=lf
