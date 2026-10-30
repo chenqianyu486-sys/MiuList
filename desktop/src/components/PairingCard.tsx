@@ -1,11 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, QrCode, RefreshCw, ScanLine, Smartphone } from 'lucide-react';
-import { QRCodeSVG } from 'qrcode.react';
+import { Check, Copy, RefreshCw, Smartphone } from 'lucide-react';
 import { useAppStore } from '../core/store';
 import { persistPasscode } from '../core/storage';
 import { requestPairCode } from '../core/sync';
 import { Button, Spinner, cx } from './ui';
 
+/**
+ * 配对卡：**电脑发起、手机确认**。
+ *
+ * 地址已知时挂载即发一条带 DH 公钥的配对请求，手机那边会弹出确认卡。
+ * 电脑这边把「自己算出来的」6 位配对码显示出来，用户拿它跟手机屏幕核对 ——
+ * 一致才点「允许」。
+ *
+ * 6 位码不画成图片：它必须**两端各自算出、由人当场核对** ——
+ * 画成可被机器读取的图形，等于让「对面报上来的值」冒充校验。
+ */
 export function PairingCard({
   compact = false,
   onChangeAddress,
@@ -19,14 +28,13 @@ export function PairingCard({
   const [passcode, setPasscode] = useState(state.passcode || '');
   const autoRequested = useRef(false);
   const request = requestPairCode;
-  const openScanner = state.openScanner;
   const pushToast = state.pushToast;
 
   /**
    * 配对码应由这台电脑主动生成：手机只负责确认。
    *
    * 地址已经记住时（刷新、回到这一页、从同步面板打开），不用再让用户点一次
-   * 「生成配对码」；进页面就把码画出来。请求失败会落到 error 状态，
+   * 「开始配对」；进页面就把请求发出去。请求失败会落到 error 状态，
    * 不会在这里循环重试。
    */
   useEffect(() => {
@@ -34,8 +42,8 @@ export function PairingCard({
     if (!state.base || state.secret) return;
     if (pair.status !== 'idle') return;
     autoRequested.current = true;
-    void request(false, pair.mode ?? 'scan');
-  }, [state.base, state.secret, pair.status, pair.mode, request]);
+    void request(false);
+  }, [state.base, state.secret, pair.status, request]);
 
   if (pair.status === 'approved') {
     return (
@@ -52,18 +60,6 @@ export function PairingCard({
   }
 
   const waiting = pair.status === 'waiting' && !!pair.requestId;
-  const mode = pair.mode ?? 'scan';
-  /**
-   * 二维码里带的是**公钥**，不是密钥。
-   *
-   * 密钥是两端各自算出来的（DH 协商），从不过网；公钥本来就是公开的东西，
-   * 摆在屏幕上给人扫不泄密。手机上扫到之后会算出同一把密钥。
-   */
-  const payload = !waiting
-    ? ''
-    : `miulist://pair?v=5&k=${encodeURIComponent(pair.publicKey ?? '')}&r=${encodeURIComponent(
-        pair.requestId!,
-      )}`;
   /**
    * 配对码（协议 v3.2：双方公钥的转录哈希）。
    *
@@ -86,52 +82,28 @@ export function PairingCard({
 
   return (
     <div className={cx('pair-card', compact && 'is-compact')}>
-      <div className="pair-intro">
-        <span className="pair-step">02</span>
-        <div>
-          <h3>{mode === 'scan' ? '用手机扫这张配对码' : '让手机确认一下就能连上'}</h3>
-          <p>
-            {mode === 'scan' ? (
-              <>
-                手机扫码后，在 MiuList 里点「允许」即可。之后待办会自动同步。
-              </>
-            ) : (
-              <>
-                手机上会弹出<strong>一张确认卡</strong>，点「允许」即可。之后待办会自动同步。
-              </>
-            )}
-          </p>
-        </div>
-      </div>
-
       {waiting ? (
         <>
-          {mode === 'scan' ? (
-            <div className="pair-qr">
-              <QRCodeSVG
-                value={payload}
-                size={compact ? 184 : 220}
-                marginSize={2}
-                level="M"
-                bgColor="#FFFFFF"
-                fgColor="#1E2320"
-                title="MiuList 配对二维码"
-              />
+          <div className="pair-intro">
+            <span className="pair-step">02</span>
+            <div>
+              <h3>在手机上点「允许」</h3>
+              <p>
+                打开手机上的 MiuList → 更多 → 网页同步，核对下面的配对码后点「允许」。
+              </p>
             </div>
-          ) : (
-            <div className="pair-waiting">
-              <Spinner size={22} />
-              <p>等手机上点「允许」…</p>
-              <p className="pair-sub">手机上会弹出一张确认卡，上面有同一个配对码。</p>
-            </div>
-          )}
+          </div>
+
+          <div className="pair-waiting">
+            <Spinner size={22} />
+            <p>等手机上点「允许」…</p>
+            <p className="pair-sub">手机上没有确认卡？确认手机上的「网页同步」已经打开。</p>
+          </div>
           {code ? (
             <div className="pair-code-row">
               <span>配对码</span>
               <strong>{code}</strong>
-              <span className="pair-code-hint">
-                {mode === 'scan' ? '手机与电脑在同一 Wi-Fi' : '和手机上显示的一致即可'}
-              </span>
+              <span className="pair-code-hint">和手机上显示的一致即可</span>
             </div>
           ) : (
             // **码还没算出来**：协议 v3.2 的码是「双方公钥」的哈希，
@@ -163,15 +135,8 @@ export function PairingCard({
             </label>
           ) : null}
           <div className="pair-actions">
-            <Button variant="ghost" icon={RefreshCw} onClick={() => void request(true, mode)}>
+            <Button variant="ghost" icon={RefreshCw} onClick={() => void request(true)}>
               换一个配对码
-            </Button>
-            <Button
-              variant="ghost"
-              icon={mode === 'scan' ? Smartphone : ScanLine}
-              onClick={() => void request(true, mode === 'scan' ? 'link' : 'scan')}
-            >
-              {mode === 'scan' ? '改用手机确认' : '改用扫码连接'}
             </Button>
             {onChangeAddress ? (
               <Button variant="ghost" onClick={onChangeAddress}>
@@ -197,10 +162,10 @@ export function PairingCard({
         </div>
       ) : (
         <div className="pair-message">
-          <QrCode size={20} />
+          <Smartphone size={20} />
           <div>
-            <p>填好地址后，电脑会生成配对码。</p>
-            <p className="pair-sub">在手机上确认即可。</p>
+            <p>还没开始配对</p>
+            <p className="pair-sub">点下面的按钮，电脑会发一个配对请求到手机。</p>
           </div>
         </div>
       )}
@@ -216,14 +181,10 @@ export function PairingCard({
       {!waiting && pair.status !== 'requesting' ? (
         <div className="pair-actions">
           {state.base ? (
-            <Button variant="primary" icon={RefreshCw} onClick={() => void request(true, mode)}>
-              生成配对码
+            <Button variant="primary" icon={RefreshCw} onClick={() => void request(true)}>
+              {pair.status === 'idle' ? '开始配对' : '再试一次'}
             </Button>
-          ) : (
-            <Button variant="primary" icon={ScanLine} onClick={openScanner}>
-              扫描手机地址
-            </Button>
-          )}
+          ) : null}
           {onChangeAddress ? (
             <Button variant="ghost" onClick={onChangeAddress}>
               换手机地址

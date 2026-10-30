@@ -56,7 +56,6 @@ export type AppStore = {
   wallpaper: WallpaperId;
   syncOpen: boolean;
   syncTab: SyncTab;
-  scannerOpen: boolean;
   editorOpen: boolean;
   editingTask: Task | null;
   detail: DetailState | null;
@@ -71,8 +70,6 @@ export type AppStore = {
   openSync: (tab?: SyncTab) => void;
   closeSync: () => void;
   setSyncTab: (tab: SyncTab) => void;
-  openScanner: () => void;
-  closeScanner: () => void;
   openTaskEditor: (task?: Task | null) => void;
   closeTaskEditor: () => void;
   openDetail: (detail: DetailState) => void;
@@ -112,7 +109,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
   wallpaper: initial.wallpaper,
   syncOpen: false,
   syncTab: 'connection',
-  scannerOpen: false,
   editorOpen: false,
   editingTask: null,
   detail: null,
@@ -140,8 +136,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
   openSync: (tab = 'connection') => set({ syncOpen: true, syncTab: tab }),
   closeSync: () => set({ syncOpen: false }),
   setSyncTab: (syncTab) => set({ syncTab }),
-  openScanner: () => set({ scannerOpen: true }),
-  closeScanner: () => set({ scannerOpen: false }),
   openTaskEditor: (task = null) => set({ editorOpen: true, editingTask: task ?? null }),
   closeTaskEditor: () => set({ editorOpen: false, editingTask: null }),
   openDetail: (detail) => set({ detail }),

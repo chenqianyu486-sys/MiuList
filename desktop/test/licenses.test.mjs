@@ -46,18 +46,14 @@ const desktopRoot = fileURLToPath(new URL('../', import.meta.url));
 const nodeModulesDir = path.join(desktopRoot, 'node_modules');
 const artifactPath = path.join(desktopRoot, 'dist', 'MiuList-Web.html');
 
-const EMBEDDED_NAME = 'QR Code Generator (embedded in qrcode.react)';
 const EXPECTED_COMPONENTS = [
   'idb-keyval',
-  'jsqr',
   'lucide-react',
-  'qrcode.react',
   'react',
   'react-dom',
   'scheduler',
   'use-sync-external-store',
   'zustand',
-  EMBEDDED_NAME,
 ];
 
 const payload = buildLicensePayload();
@@ -90,9 +86,7 @@ test('每个组件都带名称、许可标识和可解析的正文', () => {
     assert.ok(item.textId, `${item.name} 缺正文索引`);
     assert.ok(payload.texts[item.textId], `${item.name} 的许可正文取不到`);
     assert.ok(payload.texts[item.textId].length > 100, `${item.name} 的许可正文太短`);
-    if (item.name !== EMBEDDED_NAME) {
-      assert.ok(item.version, `${item.name} 缺版本号`);
-    }
+    assert.ok(item.version, `${item.name} 缺版本号`);
   }
 });
 
@@ -107,27 +101,9 @@ test('传递依赖 scheduler 与 use-sync-external-store 都在清单里', () =>
   }
 });
 
-test('qrcode.react 内嵌的 Nayuki QR Code Generator 有正文，且不编造版本', () => {
-  const item = packageByName(EMBEDDED_NAME);
-  assert.ok(item, '内嵌组件没有被采集');
-  assert.equal(item.version, '', '内嵌组件没有独立版本号，不能虚构');
-  assert.equal(item.license, 'MIT');
-  assert.match(item.copyright, /Copyright \(c\) Project Nayuki/);
-
-  const text = payload.texts[item.textId];
-  assert.match(text, /QR Code generator library \(TypeScript\)/);
-  assert.match(text, /https:\/\/www\.nayuki\.io\/page\/qr-code-generator-library/);
-  assert.match(text, /Permission is hereby granted/);
-  assert.match(text, /THE SOFTWARE IS PROVIDED "AS IS"/);
-
-  const parent = packageByName('qrcode.react');
-  assert.equal(parent.license, 'ISC');
-  assert.match(payload.texts[parent.textId], /This product bundles QR Code Generator/);
-});
-
 test('许可证标识与实际许可文本对得上（Apache 的必须含 Apache 字样）', () => {
   const apache = payload.packages.filter((item) => item.license === 'Apache-2.0');
-  assert.ok(apache.length >= 2, 'Apache-2.0 的依赖应该不止一个');
+  assert.ok(apache.length >= 1, 'Apache-2.0 的依赖应该还在清单里');
   for (const item of apache) {
     assert.match(payload.texts[item.textId], /Apache License/i);
   }
@@ -229,8 +205,6 @@ test(
       );
     }
 
-    const nayuki = artifact.packages.find((item) => item.name === EMBEDDED_NAME);
-    assert.match(artifact.texts[nayuki.textId], /Project Nayuki/);
     assert.match(artifact.gplText, /GNU GENERAL PUBLIC LICENSE/);
     assert.ok(artifact.gplText.length > 10000);
   }

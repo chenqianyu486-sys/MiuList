@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { Background } from './components/Background';
 import { DetailSheet } from './components/DetailSheet';
-import { QrScanner } from './components/QrScanner';
 import { Shell } from './components/Shell';
 import { Splash } from './components/Splash';
 import { SyncSheet } from './components/SyncSheet';
@@ -28,7 +27,6 @@ export default function App() {
       <SyncSheet />
       <TaskEditor />
       <DetailSheet />
-      <QrScanner />
       <Toast />
     </div>
   );

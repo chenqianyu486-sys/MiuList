@@ -249,9 +249,9 @@ export function chacha20(key, nonce, counter, data) {
  *
  * 标签（label）分开是为了让同一把 secret 在不同用途上不产生相同的子密钥。
  *
- * @param {Uint8Array} secret 配对 secret（32 字节）
- * @param {string} passcode 同步密码（可空）。**它会先混进 secret** ——
- *   于是「二维码被别人拍到了」不足以解密，还得知道这个密码。
+ * @param {Uint8Array} secret 配对协商出的共享密钥（32 字节）
+ * @param {string} passcode 同步密码（可空）。**它会先混进共享密钥** ——
+ *   于是只拿到公钥或抓到密文都不足以解密，还得知道这个密码。
  */
 export function deriveKeys(secret, passcode = '') {
   const effective = passcode
@@ -295,16 +295,10 @@ export function open(keys, sealed) {
 
 /* ── DH 密钥协商（RFC 3526 group 14） ────────────────────────────
  *
- * ## 为什么要有它
+ * ## 配对怎么用上它
  *
- * v3 的配对 secret 是**电脑生成、手机从二维码里拿到**的 ——
- * secret 只走「二维码 → 手机相机」这条视觉通道，从不经过网络。
- * 这条性质很好，但它让「手动填地址」这条路走不通：
- * 光有地址，电脑拿不到 secret，配对就停在半路。
- *
- * ## 换成 DH 之后
- *
- * 两端各自生成一对临时密钥，交换**公钥**，各自算出**同一把共享密钥**：
+ * 电脑生成一对临时密钥，`POST /api/pair/request` 把公钥带过来；
+ * 手机当场生成自己的一对，各自算出**同一把共享密钥**：
  *
  * ```
  * 电脑                              手机
@@ -312,14 +306,11 @@ export function open(keys, sealed) {
  *  │  A = g^a mod p                 │  B = g^b mod p
  *  │  ──────── A ─────────────────► │  S = A^b mod p
  *  │  ◄─────── B ────────────────── │  S = B^a mod p
- *  │  secret = sha256(S)            │  secret = sha256(S)
+ *  │  shared = sha256(S)            │  shared = sha256(S)
  * ```
  *
  * **过网的只有公钥** —— 公钥本来就是公开的东西，抓包的人看到它也
- * 算不出共享密钥（DH 的单向性）。于是两条路都成立：
- *
- * - 「手机扫电脑的码」：A 走二维码（视觉通道）；
- * - 「只填地址」：A 走 HTTP（公钥过网不泄密）。
+ * 算不出共享密钥（DH 的单向性）。密钥只在两端各自的内存里。
  *
  * ## 为什么用 MODP 群而不是 ECDH
  *

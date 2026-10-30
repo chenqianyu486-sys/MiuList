@@ -249,37 +249,19 @@ export type PairStatus =
   | 'error';
 
 /**
- * 配对走哪条路。
+ * 配对只有一条链路：电脑发起、手机确认。
  *
- * - `scan` —— **手机扫电脑的码**。公钥走二维码（视觉通道）。
- * - `link` —— **只填地址**。公钥跟着 HTTP 请求走（公钥不是秘密，
- *   过网也泄不了密），手机弹一次确认点「允许」就好，全程不用摄像头。
+ * 配对码是**双方公钥**的哈希 `H(A‖B)`；电脑发出请求那一刻还不知道
+ * 手机的公钥，所以 [code] 先是 null，等 `/api/pair/status` 回包里
+ * 有了手机的公钥才补上。
  */
-export type PairMode = 'scan' | 'link';
-
 export type PairState = {
   status: PairStatus;
   requestId?: string;
   secret?: string;
   message?: string;
-  /**
-   * **配对码**：手机上显示的那 6 位码。
-   *
-   * 用户点「允许」之前拿它核对 —— 一致才说明对面是眼前这台电脑。
-   *
-   * **可以是 null**：协议 v3.2 的配对码是「**双方**公钥」的哈希，
-   * 电脑发出请求那一刻还不知道手机的公钥，所以算不出来；
-   * 等 `/api/pair/status` 回包里有了手机的公钥，这个字段才有值。
-   */
+  /** **配对码**：用户点「允许」前拿它跟手机屏幕核对。 */
   code?: string | null;
-  /** 这次配对走哪条路。 */
-  mode?: PairMode;
-  /**
-   * 电脑的 DH 公钥（base64url）。
-   *
-   * **公钥不是秘密** —— 它就是要摆给手机看的（二维码里带的就是它）。
-   */
-  publicKey?: string;
 };
 
 export type SnapshotFileState = {

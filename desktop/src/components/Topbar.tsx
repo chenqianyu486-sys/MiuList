@@ -1,4 +1,4 @@
-import { FileJson2, Palette, ScanLine } from 'lucide-react';
+import { FileJson2, Palette } from 'lucide-react';
 import { formatMonthDay, localToday, weekdayLabel } from '../core/format';
 import { useAppStore } from '../core/store';
 import { SyncPill } from './SyncPill';
@@ -14,7 +14,6 @@ export function Topbar() {
   const view = useAppStore((s) => s.view);
   const today = useAppStore((s) => s.snapshot.today || localToday());
   const weekday = useAppStore((s) => s.snapshot.weekday || 0);
-  const openScanner = useAppStore((s) => s.openScanner);
   const openSync = useAppStore((s) => s.openSync);
   const snapshotActive = useAppStore((s) => s.snapshotFile.active);
   const meta = PAGE_META[view];
@@ -33,7 +32,6 @@ export function Topbar() {
       </div>
       <div className="top-actions">
         <SyncPill />
-        <IconButton icon={ScanLine} label="扫描手机二维码" onClick={openScanner} />
         {snapshotActive ? (
           <IconButton
             icon={FileJson2}

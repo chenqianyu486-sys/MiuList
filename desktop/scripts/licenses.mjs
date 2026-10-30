@@ -36,9 +36,7 @@ const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
  */
 export const RUNTIME_DEPS = [
   'idb-keyval',
-  'jsqr',
   'lucide-react',
-  'qrcode.react',
   'react',
   'react-dom',
   'scheduler',
@@ -46,27 +44,8 @@ export const RUNTIME_DEPS = [
   'zustand',
 ];
 
-/**
- * 随包内嵌、但在 node_modules 里没有自己那一份许可文件的组件。
- *
- * qrcode.react 的 LICENSE 明确写着内嵌的 QR Code Generator 另采用 MIT；
- * 这份正文取自 qrcode.react v4.2.0 的 `src/third-party/qrcodegen/LICENSE`
- * （`node_modules/qrcode.react` 不发布 src，所以原始正文只能随采集器自带）。
- * 它没有独立版本号，面板上就不写版本。
- */
-const EMBEDDED_COMPONENTS = [
-  {
-    name: 'QR Code Generator (embedded in qrcode.react)',
-    license: 'MIT',
-    licensePath: path.join(desktopRoot, 'scripts', 'third-party', 'qrcodegen-LICENSE.txt'),
-  },
-];
-
 /** 产物里必须齐全的组件名。 */
-const REQUIRED_COMPONENT_NAMES = [
-  ...RUNTIME_DEPS,
-  ...EMBEDDED_COMPONENTS.map((item) => item.name),
-];
+const REQUIRED_COMPONENT_NAMES = [...RUNTIME_DEPS];
 
 /** 本项目自身的许可信息。 */
 export const PROJECT = {
@@ -152,34 +131,6 @@ export function buildLicensePayload(options = {}) {
       version,
       license: licenseId,
       copyright: extractCopyright(license.text),
-      textId,
-      missing: false,
-    });
-  }
-
-  for (const component of EMBEDDED_COMPONENTS) {
-    const text = existsSync(component.licensePath)
-      ? readFileSync(component.licensePath, 'utf8')
-      : '';
-    if (!text.trim()) {
-      packages.push({
-        name: component.name,
-        version: '',
-        license: component.license,
-        copyright: '',
-        textId: '',
-        missing: true,
-      });
-      continue;
-    }
-
-    const textId = createHash('sha256').update(text).digest('hex').slice(0, 12);
-    texts[textId] = text;
-    packages.push({
-      name: component.name,
-      version: '',
-      license: component.license,
-      copyright: extractCopyright(text),
       textId,
       missing: false,
     });

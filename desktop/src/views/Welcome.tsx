@@ -7,7 +7,6 @@ import {
   LayoutGrid,
   ListChecks,
   RefreshCw,
-  ScanLine,
   ShieldCheck,
   Smartphone,
   Sparkles,
@@ -20,7 +19,6 @@ import { useAppStore } from '../core/store';
 import {
   afterImport,
   connectBase,
-  normalizeBase,
   pasteAddress,
 } from '../core/sync';
 import { importSnapshotJsonFile } from '../core/snapshotFile';
@@ -32,34 +30,23 @@ export function Welcome() {
   const [changing, setChanging] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const addressRef = useRef<HTMLInputElement | null>(null);
-  const openScanner = state.openScanner;
-
-  const connect = async (event?: FormEvent) => {
-    event?.preventDefault();
-    await connectWith('scan');
-  };
 
   /**
-   * 连上手机，并**选定走哪条配对路**。
+   * 连上手机。
    *
-   * ## 为什么给两个按钮，而不是一个「继续」
+   * 地址为空或格式不对时由 [connectBase] 给出错误提示 ——
+   * 这里不再预先判断一次，免得两处判断的文案各说各的。
    *
-   * 配对这一步，用户只该做**一件事**：
-   *
-   * - `scan` —— 手机扫电脑的码。地址之前已经知道了（复制过来的 / 上次记住的）。
-   * - `link` —— 只填地址，手机上点一下「允许」就好，**不用摄像头**。
-   *
-   * 两条路都是「一次动作 + 一次确认」，不互相掺和。
+   * **连不上时不收起表单**：地址填错的话用户要就地改，
+   * 收起就等于把刚输的地址藏起来，还得再点一次「换地址」。
+   * （与同步面板里的连接表单同一套写法。）
    */
-  const connectWith = async (mode: 'scan' | 'link') => {
-    if (!normalizeBase(address)) {
-      state.pushToast('地址格式不对，请检查后重试。', 'error');
-      return;
-    }
+  const connect = async (event?: FormEvent) => {
+    event?.preventDefault();
     setBusy(true);
-    await connectBase(address, { pairMode: mode });
+    const ok = await connectBase(address);
     setBusy(false);
-    setChanging(false);
+    if (ok) setChanging(false);
   };
 
   /**
@@ -92,14 +79,6 @@ export function Welcome() {
   };
 
   if (state.base && !state.secret) {
-    /**
-     * 左边这段话得**跟着右边那张卡走**。
-     *
-     * 用户可以在配对卡上随时切路（「不扫码，直接让手机确认」）。
-     * 如果左边还写着「用手机扫这张码」，右边却已经在等手机上点「允许」——
-     * 两边说的不是一回事，用户会以为自己点错了。
-     */
-    const scanMode = (state.pair.mode ?? 'scan') === 'scan';
     return (
       <div className="welcome welcome--pairing">
         <div className="welcome-orb welcome-orb--a" aria-hidden="true" />
@@ -107,24 +86,15 @@ export function Welcome() {
         <div className="welcome-card glass">
           <section className="welcome-pair-copy">
             <Brand />
-            <div className="welcome-step">02 / {scanMode ? '手机扫电脑' : '手机点允许'}</div>
+            <div className="welcome-step">02 / 等手机确认</div>
             <h1>
               最后一步，
               <br />
-              {scanMode ? '用手机扫这张码。' : '在手机上点一下允许。'}
+              在手机上点一下「允许」。
             </h1>
             <p className="welcome-lead">
-              {scanMode ? (
-                <>
-                  用手机相机扫页面上的二维码，在 MiuList 里点「允许」。
-                  之后待办会自动同步；课表需要手动搬一次。手机不在时，这一端也能看、能改。
-                </>
-              ) : (
-                <>
-                  手机上会弹出<strong>一张确认卡</strong>，核对配对码后点「允许」。
-                  之后待办会自动同步；课表需要手动搬一次。手机不在时，这一端也能看、能改。
-                </>
-              )}
+              电脑已经把配对请求发到手机。打开手机上的 MiuList → 更多 → 网页同步，
+              核对 6 位配对码后点「允许」。之后待办会自动同步；课表需要手动搬一次。
             </p>
             <ol className="welcome-steps">
               <li>
@@ -133,11 +103,11 @@ export function Welcome() {
               </li>
               <li>
                 <span>2</span>
-                {scanMode ? '用手机扫描电脑上的二维码' : '在手机上核对 6 位配对码'}
+                打开手机上的「网页同步」
               </li>
               <li>
                 <span>3</span>
-                在 MiuList 里点「允许」
+                核对配对码并点「允许」
               </li>
             </ol>
 
@@ -165,9 +135,6 @@ export function Welcome() {
               </form>
             ) : (
               <div className="welcome-actions-row">
-                <Button variant="soft" icon={ScanLine} onClick={openScanner}>
-                  扫手机地址码
-                </Button>
                 <Button
                   variant="ghost"
                   onClick={() => {
@@ -243,20 +210,9 @@ export function Welcome() {
             连上手机后，待办会自动同步。
           </p>
 
-          <button type="button" className="scan-tile welcome-scan" onClick={openScanner}>
-            <span className="scan-tile-icon">
-              <ScanLine size={24} />
-            </span>
-            <span>
-              <strong>让电脑扫手机上的地址码</strong>
-              <em>自动填入手机地址</em>
-            </span>
-            <span className="scan-tile-arrow">→</span>
-          </button>
-
           <form className="welcome-manual" onSubmit={connect}>
             <label className="field grow">
-              <span>手机地址（在手机「网页同步」里复制）</span>
+              <span>手机地址（在手机「更多 → 网页同步」里点「复制连接链接」）</span>
               <input
                 ref={addressRef}
                 value={address}
@@ -271,22 +227,13 @@ export function Welcome() {
             <Button variant="ghost" icon={ClipboardPaste} onClick={() => void paste()}>
               粘贴
             </Button>
+            <Button variant="primary" type="submit" loading={busy}>
+              连接
+            </Button>
           </form>
-
-          <div className="welcome-pair-choices">
-            <button type="button" className="welcome-choice" onClick={() => void connectWith('scan')}>
-              <span className="welcome-choice-title">
-                <ScanLine size={16} aria-hidden="true" /> 手机扫码连接
-              </span>
-              <em>电脑显示二维码，手机扫一下并点「允许」</em>
-            </button>
-            <button type="button" className="welcome-choice" onClick={() => void connectWith('link')}>
-              <span className="welcome-choice-title">
-                <Smartphone size={16} aria-hidden="true" /> 手机确认连接
-              </span>
-              <em>手机弹出确认卡，点「允许」即可</em>
-            </button>
-          </div>
+          <p className="welcome-hint">
+            手机和电脑要在同一个 Wi-Fi。点「连接」后，手机上会弹出确认卡。
+          </p>
 
           <button
             type="button"

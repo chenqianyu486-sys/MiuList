@@ -1,21 +1,20 @@
 {
   "name": "miulist-desktop",
   "private": true,
-  "version": "1.0.11",
+  "version": "1.1.0",
   "type": "module",
   "description": "MiuList 桌面网页端：单文件静态前端 + 本机 JSON 快照",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
-    "test": "node --test \"test/*.test.mjs\"",
+    "test": "node --test \"test/*.test.mjs\" && node --test \"../web/*.test.mjs\"",
+    "test:web": "node --test \"../web/*.test.mjs\"",
     "build": "tsc --noEmit && vite build && node scripts/finish-build.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
     "idb-keyval": "^6.2.1",
-    "jsqr": "^1.4.0",
     "lucide-react": "^0.468.0",
-    "qrcode.react": "^4.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^4.5.5"

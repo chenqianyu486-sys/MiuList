@@ -12,7 +12,6 @@ import {
   Link2,
   Palette,
   RefreshCw,
-  ScanLine,
   ShieldCheck,
   Smartphone,
   Unplug,
@@ -30,7 +29,6 @@ import {
   connectBase,
   disconnectPair,
   manualSync,
-  normalizeBase,
   pasteAddress,
   pullConfigAfterZju,
   requestPairCode,
@@ -115,26 +113,13 @@ function ConnectForm({
 }) {
   const [address, setAddress] = useState(initial);
   const [busy, setBusy] = useState(false);
-  const openScanner = useAppStore((s) => s.openScanner);
   const pushToast = useAppStore((s) => s.pushToast);
   const addressRef = useRef<HTMLInputElement | null>(null);
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
-    await connectWith('scan');
-  };
-
-  /**
-   * 连上手机，并**选定走哪条配对路**。
-   *
-   * 两条路各只做一个动作：扫码，或者只填地址。
-   */
-  const connectWith = async (mode: 'scan' | 'link') => {
-    if (!normalizeBase(address)) {
-      return;
-    }
     setBusy(true);
-    const ok = await connectBase(address, { pairMode: mode });
+    const ok = await connectBase(address);
     setBusy(false);
     if (ok) onDone?.();
   };
@@ -174,23 +159,13 @@ function ConnectForm({
           粘贴
         </Button>
         <Button variant="primary" type="submit" loading={busy}>
-          继续
+          连接
         </Button>
       </div>
       <p className="field-hint">
-        在手机「更多 → 网页同步」里复制连接链接，粘贴到这里。
-        之后可以扫码配对，或让手机点一下「允许」。手机和电脑要在同一个 Wi-Fi。
+        在手机「更多 → 网页同步」里点「复制连接链接」，粘贴到这里。点「连接」后，
+        手机上的「网页同步」会弹出确认卡，核对配对码并点「允许」。
       </p>
-      <button type="button" className="scan-tile" onClick={openScanner}>
-        <span className="scan-tile-icon">
-          <ScanLine size={24} />
-        </span>
-        <span>
-          <strong>让电脑扫手机地址码</strong>
-          <em>自动填入手机地址，再按提示配对</em>
-        </span>
-        <span className="scan-tile-arrow">→</span>
-      </button>
       {onCancel ? (
         <Button variant="ghost" onClick={onCancel}>
           取消
@@ -205,7 +180,6 @@ function ConnectionPanel() {
   const [editing, setEditing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [disconnectArmed, setDisconnectArmed] = useState(false);
-  const openScanner = state.openScanner;
   const conflict = state.conflict;
 
   const copy = async () => {
@@ -257,8 +231,8 @@ function ConnectionPanel() {
               <Smartphone size={18} />
             </span>
             <div>
-              <h3>扫码配对</h3>
-              <p>用手机扫下面的码，在手机上点「允许」。</p>
+              <h3>在手机上确认</h3>
+              <p>请求已发到手机。核对配对码后点「允许」。</p>
             </div>
             <span className={cx('connection-chip', state.phoneReachable && 'is-online')}>
               {state.phoneReachable ? '手机在线' : '手机离线'}
@@ -313,9 +287,6 @@ function ConnectionPanel() {
               onClick={() => void manualSync()}
             >
               立即同步
-            </Button>
-            <Button variant="soft" icon={ScanLine} onClick={openScanner}>
-              扫描地址
             </Button>
             <Button variant="ghost" onClick={() => setEditing(true)}>
               换地址
@@ -891,7 +862,7 @@ function AboutPanel() {
           <h3>MiuList · 电脑网页端</h3>
           <p>打开网页就能用 · 数据存在本机 · 与手机同步</p>
         </div>
-        <span className="about-version">1.0.11</span>
+        <span className="about-version">{__APP_VERSION__}</span>
       </div>
       <div className="panel-card glass-soft">
         <h3 className="about-heading">这是什么</h3>

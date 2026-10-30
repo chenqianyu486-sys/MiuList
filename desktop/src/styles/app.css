@@ -1658,77 +1658,6 @@
   margin-top: 14px;
 }
 
-.scan-tile {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border: 0;
-  border-radius: var(--r-lg);
-  /* 扫码入口：玻璃面 + 一层极淡的主题绿，和主题色一起走。 */
-  background-color: var(--glass-coat);
-  background-image:
-    var(--grain),
-    linear-gradient(rgba(188, 228, 114, 0.16), rgba(188, 228, 114, 0.16)),
-    linear-gradient(var(--glass-tint), var(--glass-tint));
-  background-size: var(--grain-size), auto, auto;
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
-  box-shadow: var(--shadow-sm);
-  text-align: left;
-  transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease);
-}
-
-.scan-tile:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
-}
-
-.scan-tile-icon {
-  width: 42px;
-  height: 42px;
-  flex: none;
-  border-radius: 14px;
-  background: var(--lime);
-  color: var(--lime-ink);
-  display: grid;
-  place-items: center;
-}
-
-.scan-tile > span:nth-child(2) {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.scan-tile strong {
-  font-size: 13.5px;
-  font-weight: 750;
-}
-
-.scan-tile em {
-  font-style: normal;
-  font-size: 10.5px;
-  color: var(--muted);
-}
-
-.scan-tile-arrow {
-  margin-left: auto;
-  color: var(--ink-2);
-  font-size: 17px;
-  transition: transform 0.16s ease;
-}
-
-.scan-tile:hover .scan-tile-arrow {
-  transform: translateX(3px);
-}
-
-.welcome-scan {
-  margin-top: 26px;
-}
-
 .welcome-manual {
   display: flex;
   align-items: flex-end;
@@ -1736,61 +1665,12 @@
   margin-top: 12px;
 }
 
-/* 两条配对路：各做一个动作，不掺和。 */
-.welcome-pair-choices {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.welcome-choice {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
-  border: 0;
-  border-radius: var(--r-lg);
-  background-color: var(--glass-coat);
-  background-image:
-    var(--grain),
-    linear-gradient(var(--glass-tint), var(--glass-tint));
-  background-size: var(--grain-size), auto, auto;
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.15);
-  box-shadow: var(--shadow-sm);
-  text-align: left;
-  cursor: pointer;
-  transition:
-    transform 0.18s var(--ease),
-    box-shadow 0.18s var(--ease),
-    background-color 0.18s var(--ease);
-}
-
-.welcome-choice:hover {
-  transform: translateY(-1px);
-  background-color: rgba(255, 255, 255, 0.76);
-  box-shadow: var(--shadow-md);
-}
-
-.welcome-choice:active {
-  transform: translateY(0) scale(0.995);
-}
-
-.welcome-choice-title {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 13.5px;
-  font-weight: 750;
-  color: var(--ink);
-}
-
-.welcome-choice em {
-  font-style: normal;
-  font-size: 10.5px;
-  line-height: 1.55;
-  color: var(--ink-2);
+/* 「连接」按钮下面的那一行说明：一句话，不抢表单的视觉重量。 */
+.welcome-hint {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--muted);
 }
 
 /* 独立使用：网页端不依赖手机，这条要像入口，而不是脚注。 */
@@ -2246,19 +2126,6 @@
   color: var(--muted);
 }
 
-.pair-qr {
-  align-self: center;
-  padding: 12px;
-  border-radius: 18px;
-  background: #fff;
-  border: 1px solid rgba(30, 35, 32, 0.06);
-  box-shadow: 0 16px 40px -24px rgba(30, 35, 32, 0.35);
-}
-
-.pair-qr svg {
-  display: block;
-}
-
 .pair-code-row {
   display: flex;
   align-items: center;
@@ -2289,7 +2156,7 @@
   font-size: 9.5px;
 }
 
-/* 同步密码输入框：只在配对前出现，窄一点，别抢二维码的注意力。 */
+/* 同步密码输入框：只在配对前出现，窄一点，别抢配对码的注意力。 */
 .pair-passcode {
   max-width: 280px;
   margin-top: 2px;
@@ -2371,14 +2238,20 @@
   color: var(--muted);
 }
 
+/* 竖排：转圈 + 一句主提示，副提示在下面。
+ *
+ * 横排时副提示会跟主提示并排，窄屏上两行中文互相挤 —
+ * 这对「等手机点允许」这个最长停留的界面尤其糟。 */
 .pair-waiting {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 9px;
   padding: 22px;
   color: var(--muted);
   font-size: 12px;
+  text-align: center;
 }
 
 .pair-card--approved {
@@ -2566,19 +2439,6 @@
   }
 }
 
-@keyframes scan-sweep {
-  0% {
-    top: 16%;
-    opacity: 0.3;
-  }
-  35% {
-    opacity: 1;
-  }
-  100% {
-    top: 82%;
-    opacity: 0.25;
-  }
-}
 
 /* ── 同步面板 ───────────────────────────────────────────────── */
 
@@ -3213,243 +3073,6 @@
   margin-top: 4px;
 }
 
-/* ── 扫码 ───────────────────────────────────────────────────── */
-
-.scanner-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: rgba(14, 18, 16, 0.62);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  animation: fade-in 0.18s ease;
-}
-
-.scanner-panel {
-  width: min(520px, 100%);
-  padding: 20px;
-  border-radius: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(22, 27, 24, 0.94);
-  color: #f7f9f6;
-  box-shadow: 0 40px 100px -30px rgba(0, 0, 0, 0.7);
-  animation: sheet-in 0.24s var(--ease);
-}
-
-.scanner-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.scanner-head h2 {
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-}
-
-.scanner-head p {
-  margin-top: 3px;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.6);
-}
-
-.scanner-close {
-  margin-left: auto;
-  width: 32px;
-  height: 32px;
-  flex: none;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.7);
-}
-
-.scanner-stage {
-  position: relative;
-  margin-top: 14px;
-  aspect-ratio: 4 / 3;
-  border-radius: 20px;
-  overflow: hidden;
-  background: #0b0f0d;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.scanner-video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.scanner-canvas {
-  display: none;
-}
-
-.scanner-frame {
-  position: absolute;
-  inset: 13%;
-  border-radius: 18px;
-  box-shadow: 0 0 0 100vmax rgba(8, 12, 10, 0.42);
-}
-
-.corner {
-  position: absolute;
-  width: 24px;
-  height: 24px;
-  border: 2.5px solid rgba(188, 228, 114, 0.92);
-}
-
-.corner.tl {
-  top: -2px;
-  left: -2px;
-  border-right: 0;
-  border-bottom: 0;
-  border-top-left-radius: 10px;
-}
-.corner.tr {
-  top: -2px;
-  right: -2px;
-  border-left: 0;
-  border-bottom: 0;
-  border-top-right-radius: 10px;
-}
-.corner.bl {
-  bottom: -2px;
-  left: -2px;
-  border-right: 0;
-  border-top: 0;
-  border-bottom-left-radius: 10px;
-}
-.corner.br {
-  bottom: -2px;
-  right: -2px;
-  border-left: 0;
-  border-top: 0;
-  border-bottom-right-radius: 10px;
-}
-
-.scanner-line {
-  position: absolute;
-  left: 8%;
-  right: 8%;
-  top: 20%;
-  height: 2px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, transparent, var(--lime), transparent);
-  box-shadow: 0 0 18px rgba(188, 228, 114, 0.6);
-  animation: scan-sweep 2.2s ease-in-out infinite;
-}
-
-.scanner-hint-chip {
-  position: absolute;
-  left: 50%;
-  bottom: 12px;
-  transform: translateX(-50%);
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 9px;
-  border-radius: var(--r-pill);
-  background: rgba(0, 0, 0, 0.45);
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 9.5px;
-  white-space: nowrap;
-}
-
-.scanner-stage.has-error {
-  display: grid;
-  place-items: center;
-}
-
-.scanner-error {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 22px;
-  text-align: center;
-  color: rgba(255, 255, 255, 0.72);
-}
-
-.scanner-error strong {
-  font-size: 13px;
-  font-weight: 750;
-  color: #fff;
-}
-
-.scanner-error p {
-  max-width: 300px;
-  font-size: 10.5px;
-  line-height: 1.7;
-}
-
-.scanner-message {
-  margin-top: 10px;
-  padding: 9px 11px;
-  border-radius: 11px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #ffd9a6;
-  font-size: 10.5px;
-  line-height: 1.6;
-}
-
-.scanner-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 12px;
-}
-
-.scanner-upload {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 38px;
-  padding: 0 14px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: var(--r-pill);
-  background: rgba(255, 255, 255, 0.1);
-  color: #f7f9f6;
-  font-size: 11.5px;
-  font-weight: 650;
-}
-
-.scanner-upload:hover {
-  background: rgba(255, 255, 255, 0.16);
-}
-
-.scanner-cancel {
-  height: 38px;
-  padding: 0 14px;
-  border: 1px solid transparent;
-  border-radius: var(--r-pill);
-  background: transparent;
-  color: rgba(255, 255, 255, 0.66);
-  font-size: 11.5px;
-  font-weight: 650;
-}
-
-.scanner-cancel:hover {
-  color: #fff;
-}
-
-.scanner-footnote {
-  margin-top: 12px;
-  font-size: 9px;
-  line-height: 1.7;
-  color: rgba(255, 255, 255, 0.4);
-}
-
 /* ── 响应式 ─────────────────────────────────────────────────── */
 
 @media (max-width: 1180px) {
@@ -3510,11 +3133,11 @@
   /* 窄屏：**要动手的那张卡**排到最上面。
    *
    * 两栏并排时左右各看一半；一旦叠成单栏，长文案会把配对卡推到
-   * 屏幕以下 —— 而那上面是二维码和配对码，是用户**当场**要用的东西。
+   * 屏幕以下 —— 而那上面是 6 位配对码与「等手机上点允许」，是用户**当场**要用的东西。
    *
-   * 解释性文案（「最后一步，用手机扫这张码」+ 三步说明）挪到下面，
-   * 想读的人往下翻一屏就能看到；卡本身也自带一句「手机相机扫码 →
-   * 在 MiuList 里点「允许」」，不读文案也知道该做什么。
+   * 解释性文案（「最后一步」+ 三步说明）挪到下面，
+   * 想读的人往下翻一屏就能看到；卡本身也写着「等手机上点「允许」…」，
+   * 不读文案也知道该做什么。
    */
   .welcome--pairing .welcome-pair-stage {
     order: -1;
@@ -3619,9 +3242,6 @@
   }
   .welcome-manual .btn {
     width: 100%;
-  }
-  .welcome-pair-choices {
-    grid-template-columns: 1fr;
   }
   .welcome-pair-copy h1 br {
     display: none;
@@ -3752,13 +3372,6 @@
     max-height: 94vh;
     border-bottom-left-radius: 20px;
     border-bottom-right-radius: 20px;
-  }
-  .scanner-panel {
-    padding: 16px;
-    border-radius: 24px;
-  }
-  .scanner-stage {
-    aspect-ratio: 1 / 1;
   }
 }
 
