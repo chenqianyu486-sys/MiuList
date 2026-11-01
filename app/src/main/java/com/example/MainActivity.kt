@@ -72,6 +72,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -90,6 +91,7 @@ import com.example.ui.theme.rememberContentMaxWidth
 import com.example.ui.theme.LocalCardRevealProgress
 import com.example.ui.theme.LocalWallpaperIsCustom
 import com.example.ui.components.AcademicCalendarDialog
+import com.example.ui.components.AppUpdateDialog
 import com.example.ui.components.CategoryRulesDialog
 import com.example.ui.components.CloudAccountDialog
 import com.example.ui.components.CourseCategoryDialog
@@ -523,6 +525,9 @@ private fun TopBarAction(
 fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    // 打开外部链接用（去发布页下新版）。App 本身不装自己，
+    // APK 的覆盖安装必须走系统安装器。
+    val uriHandler = LocalUriHandler.current
 
     LaunchedEffect(state.userMessage) {
         state.userMessage?.let { msg ->
@@ -763,7 +768,11 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                                     // 「完成待办前要不要确认」：改完立刻生效，
                                     // 不用重启也不用等下一次进设置页。
                                     taskCompleteConfirmEnabled = state.isTaskCompleteConfirmEnabled,
-                                    onTaskCompleteConfirmChange = { viewModel.setTaskCompleteConfirmEnabled(it) }
+                                    onTaskCompleteConfirmChange = { viewModel.setTaskCompleteConfirmEnabled(it) },
+                                    // 「检查更新」：只有手动点才会联网。
+                                    appVersion = BuildConfig.VERSION_NAME,
+                                    isCheckingAppUpdate = state.isCheckingAppUpdate,
+                                    onCheckAppUpdate = { viewModel.checkAppUpdate() }
                                 )
                             }
                         }
@@ -1230,6 +1239,25 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                 task = task,
                 onDismiss = { viewModel.cancelTaskCompleteConfirm() },
                 onConfirm = { viewModel.confirmTaskComplete() }
+            )
+        }
+
+        // 「发现新版本」弹层。
+        //
+        // 位置在**其他弹层之后**：检查是在设置页点的，但用户可能已经翻到别的页面，
+        // 提示必须压在那上面 —— 否则会被课程详情这类面板的遮罩盖住，
+        // 看着像「点了没反应」。
+        state.appUpdateAvailable?.let { update ->
+            AppUpdateDialog(
+                latestVersion = update.latestVersion,
+                currentVersion = BuildConfig.VERSION_NAME,
+                onOpenReleasePage = {
+                    viewModel.dismissAppUpdate()
+                    try {
+                        uriHandler.openUri(update.releasePageUrl)
+                    } catch (_: Exception) {}
+                },
+                onDismiss = { viewModel.dismissAppUpdate() }
             )
         }
 

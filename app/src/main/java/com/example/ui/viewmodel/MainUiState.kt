@@ -23,6 +23,7 @@ import com.example.data.timetable.PeriodTable
 import com.example.data.transfer.ImportPreview
 import com.example.data.transfer.ImportReport
 import com.example.data.transfer.ImportStrategy
+import com.example.data.update.AppUpdateAvailable
 import com.example.data.validate.ImportIssue
 
 // 底部浮岛只有三个入口，标签一律两字：含义交给图标，文案不再抢位置。
@@ -334,6 +335,23 @@ data class MainUiState(
      * （总览 / 清单 / 课程详情弹层），各记各的就会出现「总览问一句、清单不问」。
      */
     val confirmingTaskComplete: TaskEntity? = null,
+
+    /**
+     * 正在检查 App 有没有新版本。
+     *
+     * **只在用户点了「检查更新」之后才为 true**：检查是手动动作，
+     * 不是打开 App 就自动跑的事。
+     */
+    val isCheckingAppUpdate: Boolean = false,
+
+    /**
+     * 发现了新版本，等用户决定要不要去看发布页。null = 没发现。
+     *
+     * 放在 state 里：这个提示可能出现在任何一页上（检查是在设置页点的，
+     * 但用户可能已经翻到别处），让每个界面各记一个局部 flag 就会漏。
+     */
+    val appUpdateAvailable: AppUpdateAvailable? = null,
+
     /**
      * 引导被送去某个功能了，正在等那个功能做完。
      *

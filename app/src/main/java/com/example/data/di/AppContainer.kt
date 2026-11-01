@@ -30,6 +30,7 @@ import com.example.data.sync.ScheduleSyncManager
 import com.example.data.sync.web.WebSyncService
 import com.example.data.transfer.ScheduleExportService
 import com.example.data.transfer.ScheduleImportService
+import com.example.data.update.AppUpdateChecker
 import com.example.data.validate.ScheduleBundleValidator
 import com.example.data.validate.SnapshotValidator
 import java.io.File
@@ -129,6 +130,17 @@ class AppContainer(context: Context) {
     }
 
     val codec: ScheduleCodec by lazy { JsonScheduleCodec() }
+
+    /**
+     * 检查 App 有没有新版本。
+     *
+     * **手动触发**：只有用户在设置页点了「检查更新」才会联网。
+     * 开机自动查等于每次启动都欠一次网络请求，而多数时候什么也不会发生。
+     */
+    val appUpdateChecker: AppUpdateChecker by lazy {
+        AppUpdateChecker()
+    }
+
 
     val validator: ScheduleBundleValidator by lazy { ScheduleBundleValidator() }
 

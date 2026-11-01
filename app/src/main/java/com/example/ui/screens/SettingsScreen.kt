@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.ImportExport
+import androidx.compose.material.icons.outlined.SystemUpdateAlt
 import androidx.compose.material.icons.outlined.Wallpaper
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -61,7 +62,7 @@ import com.example.ui.theme.glassSurface
 /**
  * 设置页。
  *
- * **五件事：待办完成确认、课表导入/导出、待办分类管理、自定义壁纸、使用引导。**
+ * **六件事：待办完成确认、检查更新、课表导入/导出、待办分类管理、自定义壁纸、使用引导。**
  *
  * 原来这里是六个入口（账号同步 / 课程联动规则 / 待办生成规则 / 导入导出 /
  * 本学期校历 / 课程管理列表），其中**五个都已经搬到顶栏展开的「更多」页**：
@@ -94,6 +95,12 @@ fun SettingsScreen(
     /** 「完成待办前要不要先确认」。关掉之后点圆圈不再弹确认框。 */
     taskCompleteConfirmEnabled: Boolean = true,
     onTaskCompleteConfirmChange: (Boolean) -> Unit = {},
+    /** 当前版本号，显示在「关于」那一行。 */
+    appVersion: String = "",
+    /** 正在检查更新（按钮显示「检查中…」并禁用）。 */
+    isCheckingAppUpdate: Boolean = false,
+    /** 手动检查有没有新版本。 */
+    onCheckAppUpdate: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
@@ -163,6 +170,23 @@ fun SettingsScreen(
         }
 
         item {
+            // 「检查更新」排在引导之后、关于之前：
+            // 它是**偶尔才动一次**的动作，而「关于」那一块写着版本与许可，
+            // 两件事说的是同一片地方，放在一起好找。
+            //
+            // **只有手动**：App 不会自己去问有没有新版 —— 每次启动都欠一次网络请求，
+            // 而多数时候什么也不会发生。用户想知道的候点一下就好。
+            SettingsActionCard(
+                icon = Icons.Outlined.SystemUpdateAlt,
+                title = "检查更新",
+                actionLabel = if (isCheckingAppUpdate) "检查中…" else "检查",
+                actionTestTag = "open_check_update_button",
+                actionEnabled = !isCheckingAppUpdate,
+                onAction = onCheckAppUpdate
+            )
+        }
+
+        item {
             val uriHandler = LocalUriHandler.current
             val clipboardManager = LocalClipboardManager.current
             val context = LocalContext.current
@@ -199,7 +223,9 @@ fun SettingsScreen(
                             )
                         }
                         Text(
-                            text = "GPL-3.0",
+                            // 版本与许可放在一起：这两样都是「关于这个 App」的信息，
+                            // 用户报问题时也会照着它说版本号。
+                            text = if (appVersion.isBlank()) "GPL-3.0" else "v$appVersion · GPL-3.0",
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -459,6 +485,11 @@ private fun SettingsActionCard(
     title: String,
     actionLabel: String,
     actionTestTag: String,
+    /**
+     * 按钮可不可点。禁用时**整张卡也不可点** —— 否则用户按标题照样触发了动作，
+     * 而按钮看上去是灰的，两边对不上。
+     */
+    actionEnabled: Boolean = true,
     onAction: () -> Unit
 ) {
     Card(
@@ -468,7 +499,7 @@ private fun SettingsActionCard(
         // 整张卡可点，落点和右边那个按钮一致，不存在两个不同的行为
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onAction)
+            .clickable(enabled = actionEnabled, onClick = onAction)
     ) {
         Row(
             modifier = Modifier
@@ -510,6 +541,7 @@ private fun SettingsActionCard(
 
             Button(
                 onClick = onAction,
+                enabled = actionEnabled,
                 shape = RoundedCornerShape(10.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                 modifier = Modifier.testTag(actionTestTag)

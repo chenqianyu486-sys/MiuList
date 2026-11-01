@@ -38,6 +38,8 @@ import com.example.data.transfer.CourseCategoryConflictException
 import com.example.data.transfer.ImportReport
 import com.example.data.transfer.ImportStrategy
 import com.example.data.transfer.PreviewResult
+import com.example.data.update.AppUpdateAvailable
+import com.example.data.update.AppUpdateChecker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -70,6 +72,7 @@ class MainViewModel(
     private val onboardingRepo = container.onboardingRepository
     private val quickGeneratePref = container.quickGeneratePreference
     private val taskCompleteConfirmPref = container.taskCompleteConfirmPreference
+    private val appUpdateChecker = container.appUpdateChecker
     private val zjuCoursesClient = container.zjuCoursesClient
     private val coursesTodoCache = container.coursesTodoCache
 
@@ -1703,6 +1706,54 @@ private val ruleFlow = combine(
         taskCompleteConfirmPref.isEnabled = enabled
         _uiState.update { it.copy(isTaskCompleteConfirmEnabled = enabled) }
     }
+
+    /**
+     * 手动检查 App 有没有新版本。
+     *
+     * **只在用户点「检查更新」时才联网**：开机自动查等于每次启动都欠一次网络请求，
+     * 而多数时候什么也不会发生 —— 用户要的是「我想知道的时候能问一句」。
+     *
+     * 结果有三种，**不能混**：
+     *
+     * - 已是最新 → 一句提示。
+     * - 有新版 → 弹窗，把用户送到发布页（那里有下载地址）。
+     * - 没查成 → 明确说失败。**绝不说成「已是最新」** ——
+     *   网络受限时那正是最需要说实话的时候。
+     */
+    fun checkAppUpdate() = viewModelScope.launch {
+        // 连点两下「检查」时，后一次直接忽略：两次请求的结果可能先后到达，
+        // 而先到的那个未必是新的那个。
+        if (_uiState.value.isCheckingAppUpdate) return@launch
+
+        _uiState.update { it.copy(isCheckingAppUpdate = true) }
+        val result = runCatching { appUpdateChecker.check() }
+            .getOrElse { AppUpdateChecker.Result.Failed(it.message ?: "检查失败") }
+
+        _uiState.update {
+            when (result) {
+                is AppUpdateChecker.Result.UpToDate -> it.copy(
+                    isCheckingAppUpdate = false,
+                    userMessage = "已是最新版本 v${result.latestVersion}"
+                )
+                is AppUpdateChecker.Result.UpdateAvailable -> it.copy(
+                    isCheckingAppUpdate = false,
+                    appUpdateAvailable = AppUpdateAvailable(result.latestVersion)
+                )
+                is AppUpdateChecker.Result.Failed -> it.copy(
+                    isCheckingAppUpdate = false,
+                    userMessage = "检查更新失败：${result.reason}"
+                )
+            }
+        }
+    }
+
+    /**
+     * 关掉「发现新版本」弹层。
+     *
+     * 用户点「稍后」时调用 —— **不当作「以后别提醒」**：他没说不提醒，
+     * 只是这一次不想被打断。
+     */
+    fun dismissAppUpdate() = _uiState.update { it.copy(appUpdateAvailable = null) }
 
     /**
      * 引导从**上次停住的那一步**接着看，停在哪一步。
