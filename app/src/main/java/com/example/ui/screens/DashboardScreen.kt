@@ -580,9 +580,9 @@ fun DashboardScreen(
 
     // 总览那一串待办：未完成的，**标星的在前**（见 [dashboardPendingTodos]）。
     //
-    // 这一层排序是决定性的 —— 下面只显示前 [DASHBOARD_TODO_LIMIT] 条，
-    // 截止时间靠后的待办按「截止排」根本挤不进这个窗口，哪怕用户给它标了星。
-    // 所以标星必须参与这里的排序，否则「标星」在总览里等于没用。
+    // 整串都摆出来，由页面自己滚：以前这里只显示前 5 条，
+    // 第 6 条之后的待办在总览里**永远够不着**（想看它们得去清单页），
+    // 而组头写的却是「待办清单 · N」——写的条数与摆出来的条数对不上。
     val pendingTasks = remember(state.tasks) {
         dashboardPendingTodos(state.tasks)
     }
@@ -1435,8 +1435,9 @@ fun DashboardScreen(
                 }
             }
         } else {
+            // 全部未完成的待办都摆出来，页面自己滚。
             itemsIndexed(
-                pendingTasks.take(DASHBOARD_TODO_LIMIT),
+                pendingTasks,
                 key = { _, task -> "task_${task.id}" }
             ) { taskIndex, task ->
                 TaskItemCard(
