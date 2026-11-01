@@ -12,6 +12,9 @@
 - 🧪 当前为**正式版**，功能仍在持续打磨，遇到问题请提到 [Issues](https://github.com/chenqianyu486-sys/MiuList/issues)
 - 🪞 国内网络不稳时可走 [Gitee 镜像](https://gitee.com/zjuchenqianyu/MiuList)
 
+<img width="2743" height="1490" alt="image" src="https://github.com/user-attachments/assets/d0e0ec4a-18cf-43fe-bef7-0019cbfc5e28" />
+发布页：<a href="https://miulist-1yor6f7gw00.qoder.zone">MiuList · 让待办更简单</a>
+
 ## ✨ 功能特色
 
 清新，美观，易用。
