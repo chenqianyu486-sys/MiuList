@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -60,6 +61,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import com.example.ui.theme.cardRevealAt
+import com.example.ui.theme.rememberScrollRevealEnabled
+import com.example.ui.theme.scrollRevealAt
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
@@ -701,6 +704,10 @@ fun DashboardScreen(
 
     val cardRevealProgress = LocalCardRevealProgress.current
 
+    // 滚动浮现（淡入 + 轻微放大）要读列表的滚动位置，所以得有 listState。
+    val listState = rememberLazyListState()
+    val scrollRevealEnabled = rememberScrollRevealEnabled(listState)
+
     // 入场序号是**整页**一条，从上往下数：学期卡 → 今日课程 → 待办。
     // 每段的起点由前面段落的条数推出来，而不是三个各从 0 开始——各从 0 开始的话
     // 「今日没课」的空态卡和学期卡同时亮，五张待办卡又和学期卡同时亮，整页就变成
@@ -710,6 +717,7 @@ fun DashboardScreen(
     val taskOrderBase = courseOrderBase + todayItems.size
 
     LazyColumn(
+        state = listState,
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = PageHInset),
@@ -1146,10 +1154,16 @@ fun DashboardScreen(
         }
 
         // Section: Today's Classes & Linked Tasks
-        item {
+        item(key = "dashboard_header_courses") {
             DashboardSectionHeader(
                 title = coursesHeader,
-                titleSize = 18.sp
+                titleSize = 18.sp,
+                // 组头跟组内的卡片一起浮现
+                modifier = Modifier.scrollRevealAt(
+                    listState,
+                    "dashboard_header_courses",
+                    scrollRevealEnabled
+                )
             )
         }
 
@@ -1209,6 +1223,8 @@ fun DashboardScreen(
                         val onClick = { onEditExam(dayItem.entry) }
                         val reveal = Modifier
                             .cardRevealAt(cardRevealProgress, courseOrderBase + itemIndex)
+                            // 从下方滚进来时淡入 + 轻微放大（微微「浮出」）
+                            .scrollRevealAt(listState, dayItem.lazyKey(0), scrollRevealEnabled)
                             .clickable { onClick() }
                         // 考试抢到「下一件事」时用加高卡 —— 与课程那张同一套骨架，
                         // 只是换掉「下一节 / 开课 / 下课」这些**属于课**的词。
@@ -1267,6 +1283,7 @@ fun DashboardScreen(
                                     courseTint = if (customWallpaper) 0.28f else 0.32f,
                                     modifier = Modifier
                                         .cardRevealAt(cardRevealProgress, courseOrderBase + itemIndex)
+                                        .scrollRevealAt(listState, dayItem.lazyKey(0), scrollRevealEnabled)
                                         .clickable { onInspectCourse(cWithSlots) }
                                 )
                             } else {
@@ -1277,6 +1294,7 @@ fun DashboardScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .cardRevealAt(cardRevealProgress, courseOrderBase + itemIndex)
+                                    .scrollRevealAt(listState, dayItem.lazyKey(0), scrollRevealEnabled)
                                     .clickable { onInspectCourse(cWithSlots) }
                             ) {
                                 Row(
@@ -1394,10 +1412,16 @@ fun DashboardScreen(
 
 
         // Section: Urgent / Today's Pending Tasks
-        item {
+        item(key = "dashboard_header_tasks") {
             DashboardSectionHeader(
                 title = "待办清单 · ${pendingTasks.size}",
-                titleSize = 16.sp
+                titleSize = 16.sp,
+                // 组头跟组内的卡片一起浮现
+                modifier = Modifier.scrollRevealAt(
+                    listState,
+                    "dashboard_header_tasks",
+                    scrollRevealEnabled
+                )
             )
         }
 
@@ -1446,10 +1470,17 @@ fun DashboardScreen(
                     onToggleComplete = { onToggleTaskComplete(task) },
                     onToggleStar = { onToggleTaskStar(task) },
                     onOpenDetail = { onInspectTask(task) },
-                    modifier = Modifier.cardRevealAt(
-                        cardRevealProgress,
-                        taskOrderBase + taskIndex
-                    )
+                    modifier = Modifier
+                        .cardRevealAt(
+                            cardRevealProgress,
+                            taskOrderBase + taskIndex
+                        )
+                        // 从下方滚进来时淡入 + 轻微放大（微微「浮出」）
+                        .scrollRevealAt(
+                            listState,
+                            "task_${task.id}",
+                            scrollRevealEnabled
+                        )
                 )
             }
         }

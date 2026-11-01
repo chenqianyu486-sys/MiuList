@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -36,6 +37,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import com.example.ui.theme.cardRevealAt
+import com.example.ui.theme.rememberScrollRevealEnabled
+import com.example.ui.theme.scrollRevealAt
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -451,6 +454,10 @@ fun ChecklistScreen(
     modifier: Modifier = Modifier
 ) {
     val cardRevealProgress = LocalCardRevealProgress.current
+    // 滚动浮现要读列表的滚动位置，所以得有 listState。
+    // 「从下方滚入」的淡入 + 轻微放大见 [scrollRevealAt]。
+    val listState = rememberLazyListState()
+    val scrollRevealEnabled = rememberScrollRevealEnabled(listState)
     // Filter tasks based on search, type, and status
     val filteredTasks = remember(
         state.tasks,
@@ -657,6 +664,7 @@ fun ChecklistScreen(
             }
         } else {
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
@@ -685,10 +693,14 @@ fun ChecklistScreen(
                                     collapsedGroups + row.group.id
                                 }
                             },
-                            modifier = Modifier.animateItem(
-                                fadeInSpec = null,
-                                fadeOutSpec = null
-                            )
+                            modifier = Modifier
+                                .animateItem(
+                                    fadeInSpec = null,
+                                    fadeOutSpec = null
+                                )
+                                // 组头跟组内的卡片一起浮现：组头「啪」地出现、
+                                // 底下的卡却还在淡入，读起来是两种动画在打架。
+                                .scrollRevealAt(listState, row.key, scrollRevealEnabled)
                         )
 
                         is ChecklistRow.Item -> TaskItemCard(
@@ -703,6 +715,8 @@ fun ChecklistScreen(
                                     cardRevealProgress,
                                     revealOrderByRowKey[row.key] ?: 0
                                 )
+                                // 从下方滚进来时淡入 + 轻微放大（微微「浮出」）。
+                                .scrollRevealAt(listState, row.key, scrollRevealEnabled)
                                 // 卡片与页面左边距对齐，不再比组头缩进
                                 .padding(start = GROUP_CONTENT_INSET)
                         )
