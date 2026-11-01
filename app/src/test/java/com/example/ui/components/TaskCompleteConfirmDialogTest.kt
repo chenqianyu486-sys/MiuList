@@ -23,7 +23,8 @@ import org.robolectric.annotation.Config
  *   没有指名道姓，用户得先自己对号，对不上就点错了。
  * - **用的是卡片上那个名字**：弹层里写「高等数学A（上） 第3周预习」而卡片上
  *   只写「第3周预习」，用户仍然对不上号（见 [taskDisplayTitle]）。
- * - **后果写在按钮旁边**：完成不是轻飘飘的开关，它会让待办从清单里消失。
+ * - **不再科普后果**：弹层不写「标成已完成后它会从清单里消失」——
+ *   用户点的是自己刚勾掉的那颗圆圈，确认的意义是**对号**而不是讲解。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -45,7 +46,7 @@ class TaskCompleteConfirmDialogTest {
     )
 
     @Test
-    fun `弹层里摆出待办名与后果`() {
+    fun `弹层里摆出待办名且不科普后果`() {
         composeTestRule.setContent {
             TaskCompleteConfirmDialog(task = task, onDismiss = {}, onConfirm = {})
         }
@@ -53,7 +54,10 @@ class TaskCompleteConfirmDialogTest {
         composeTestRule.onNodeWithText("完成这条待办？").assertIsDisplayed()
         // 裁掉课程名的那一份，与卡片上显示的同一个名字。
         composeTestRule.onNodeWithText("第3周周三预习").assertIsDisplayed()
-        composeTestRule.onNodeWithText("标成已完成后，它会从待办清单里消失。").assertIsDisplayed()
+        // 后果那句已经拿掉：确认是为了对号，不是给用户讲解「完成会发生什么」。
+        composeTestRule
+            .onNodeWithText("标成已完成后，它会从待办清单里消失。")
+            .assertDoesNotExist()
     }
 
     @Test

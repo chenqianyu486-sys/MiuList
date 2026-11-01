@@ -1,8 +1,5 @@
 package com.example.ui.components
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -31,9 +28,12 @@ import com.example.data.local.TaskEntity
  * 屏幕上往往有好几条待办，一句「完成这条待办？」没有指名道姓，
  * 用户得先自己在心里对上号，对不上就点了「完成」，于是又完成错一条。
  *
- * 所以这里把**待办名摆出来**，并且说清**按下会发生什么**
- * （它会从待办清单里消失）——「完成」不是一个轻飘飘的开关，
- * 它是有后果的动作，后果得写在按钮旁边。
+ * 所以这里把**待办名摆出来**。
+ *
+ * **不再解释「按完会怎样」**：这一层曾经有一句「标成已完成后，它会从待办清单里消失」，
+ * 那是把「完成」当成一个要科普的动作在说话 —— 用户点的是自己刚勾掉的那颗圆圈，
+ * 后果他比谁都清楚，多这一句只让弹层变啰嗦。
+ * 确认的意义是**对号**（这是哪一条），不是**讲解**。
  *
  * ## 什么时候弹
  *
@@ -57,24 +57,16 @@ fun TaskCompleteConfirmDialog(
             )
         },
         text = {
-            Column {
-                // 待办名：卡片上显示的是裁掉课程名的那一份（见 [taskDisplayTitle]），
-                // 弹层里要用**同一个**名字 —— 用户在卡上看到什么，这里就得是什么，
-                // 否则「对不上号」的问题又回来了。
-                Text(
-                    text = taskDisplayTitle(task),
-                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "标成已完成后，它会从待办清单里消失。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            // 待办名：卡片上显示的是裁掉课程名的那一份（见 [taskDisplayTitle]），
+            // 弹层里要用**同一个**名字 —— 用户在卡上看到什么，这里就得是什么，
+            // 否则「对不上号」的问题又回来了。
+            Text(
+                text = taskDisplayTitle(task),
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
         },
         confirmButton = {
             Button(
