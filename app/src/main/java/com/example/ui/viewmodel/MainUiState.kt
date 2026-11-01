@@ -313,6 +313,27 @@ data class MainUiState(
      * `QuickGeneratePreference`。
      */
     val isQuickGenerateEnabled: Boolean = false,
+
+    /**
+     * 「完成待办前要不要先确认」开没开。
+     *
+     * **默认开启**：勾掉一条待办是**不可见地丢掉了它** —— 它从清单里消失，
+     * 而「刚才那条是不是真的做完了」只有用户自己能回答。
+     * 一次多问一句，换来手滑勾掉不再发生。
+     *
+     * 它是一个**偏好**（落在 SharedPreferences 里），不是数据库派生的字段，
+     * 所以它不进 combine 那条流，只跟着 [_uiState] 走 —— 见
+     * `TaskCompleteConfirmPreference`。
+     */
+    val isTaskCompleteConfirmEnabled: Boolean = true,
+
+    /**
+     * 正在等用户确认的那条待办。null = 没在确认。
+     *
+     * 放在 state 里而不是让每个界面各记一个局部 flag：勾选入口有三个
+     * （总览 / 清单 / 课程详情弹层），各记各的就会出现「总览问一句、清单不问」。
+     */
+    val confirmingTaskComplete: TaskEntity? = null,
     /**
      * 引导被送去某个功能了，正在等那个功能做完。
      *

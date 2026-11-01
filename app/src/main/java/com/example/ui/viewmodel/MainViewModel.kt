@@ -69,6 +69,7 @@ class MainViewModel(
     private val wallpaperRepo = container.wallpaperRepository
     private val onboardingRepo = container.onboardingRepository
     private val quickGeneratePref = container.quickGeneratePreference
+    private val taskCompleteConfirmPref = container.taskCompleteConfirmPreference
     private val zjuCoursesClient = container.zjuCoursesClient
     private val coursesTodoCache = container.coursesTodoCache
 
@@ -204,6 +205,14 @@ private val ruleFlow = combine(
         // 不能等一个协程查完库才决定，否则老用户会看到按钮先在、又不在。
         // 还没决定过的（升级上来的老用户）留到下面那个协程里一次性判定。
         _uiState.update { it.copy(isQuickGenerateEnabled = quickGeneratePref.isEnabled) }
+
+        // 「完成待办前要不要确认」：同样是 SharedPreferences，第一帧同步读出来。
+        //
+        // 这一条尤其不能等：它是**点圆圈那一刻**要不要弹窗的依据，
+        // 等一个协程查完再决定，用户点下去的那一瞬间会看到「弹了、又没弹」。
+        _uiState.update {
+            it.copy(isTaskCompleteConfirmEnabled = taskCompleteConfirmPref.isEnabled)
+        }
 
         // 瞬间加载学在浙大待办的本地只读缓存（离线优先，零延迟呈现）
         val (cachedTodos, cachedTime) = coursesTodoCache.load()
@@ -408,8 +417,49 @@ private val ruleFlow = combine(
 
     fun closeTaskEditor() = _uiState.update { it.copy(taskEditor = null) }
 
-    fun toggleTaskComplete(task: TaskEntity) = viewModelScope.launch {
+    /**
+     * 勾选 / 取消勾选一条待办（待办卡左侧那颗小圆圈）。
+     *
+     * **标成已完成时先问一句**（设置里可以关掉这个确认）：
+     * 勾掉一条待办是**不可见地丢掉了它** —— 它从总览的清单里消失，
+     * 而「刚才那条是不是真的做完了」只有用户自己能回答。
+     * 一次多问一句，换来手滑勾掉不再发生。
+     *
+     * **取消完成不问**：那是一次撤销，把待办放回清单里没有风险，
+     * 而问一句只会让人多按一次。
+     *
+     * 确认弹窗的状态放在 state 里（[MainUiState.confirmingTaskComplete]），
+     * 而不是让每个界面各记一个局部 flag：勾选入口有三个（总览 / 清单 / 课程详情弹层），
+     * 各记各的就会出现「总览问一句、清单不问」这种不一致。
+     */
+    fun toggleTaskComplete(task: TaskEntity) {
+        if (shouldConfirmTaskComplete(task, taskCompleteConfirmPref.isEnabled)) {
+            _uiState.update { it.copy(confirmingTaskComplete = task) }
+            return
+        }
+        applyToggleTaskComplete(task)
+    }
+
+    /** 真的去改那条待办的完成状态（确认之后，或不需要确认时）。 */
+    private fun applyToggleTaskComplete(task: TaskEntity) = viewModelScope.launch {
         taskRepo.toggleTaskComplete(task.id, task.isCompleted)
+    }
+
+    /**
+     * 确认弹窗上按「完成」：把那条待办勾掉，然后收起弹窗。
+     *
+     * 状态先收再改：弹窗还开着的时候待办就已经变样了，
+     * 用户会看到「勾已经打上了、弹窗还杵在中间」。
+     */
+    fun confirmTaskComplete() {
+        val task = _uiState.value.confirmingTaskComplete ?: return
+        _uiState.update { it.copy(confirmingTaskComplete = null) }
+        applyToggleTaskComplete(task)
+    }
+
+    /** 确认弹窗上按「取消」：什么也不改，只收起弹窗。 */
+    fun cancelTaskCompleteConfirm() = _uiState.update {
+        it.copy(confirmingTaskComplete = null)
     }
 
     /**
@@ -1639,6 +1689,19 @@ private val ruleFlow = combine(
     fun setQuickGenerateEnabled(enabled: Boolean) {
         quickGeneratePref.isEnabled = enabled
         _uiState.update { it.copy(isQuickGenerateEnabled = enabled) }
+    }
+
+    /**
+     * 「完成待办前要不要确认」开没开。
+     *
+     * 写进偏好、也立刻反映到界面上（设置页里那颗开关）。
+     *
+     * **关掉只是不再问**：已经完成的待办不受影响，也不会被改回来 ——
+     * 这个开关管的是「接下来勾的那一下要不要问」，不是回滚数据。
+     */
+    fun setTaskCompleteConfirmEnabled(enabled: Boolean) {
+        taskCompleteConfirmPref.isEnabled = enabled
+        _uiState.update { it.copy(isTaskCompleteConfirmEnabled = enabled) }
     }
 
     /**

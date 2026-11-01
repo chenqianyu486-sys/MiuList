@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Category
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Explore
@@ -34,6 +35,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -58,7 +61,7 @@ import com.example.ui.theme.glassSurface
 /**
  * 设置页。
  *
- * **只剩四件事：课表导入/导出、待办分类管理、自定义壁纸、使用引导。**
+ * **五件事：待办完成确认、课表导入/导出、待办分类管理、自定义壁纸、使用引导。**
  *
  * 原来这里是六个入口（账号同步 / 课程联动规则 / 待办生成规则 / 导入导出 /
  * 本学期校历 / 课程管理列表），其中**五个都已经搬到顶栏展开的「更多」页**：
@@ -77,6 +80,10 @@ import com.example.ui.theme.glassSurface
  * 分类」、壁纸说当前用的是哪一张、引导说「四步走一遍：…」）。那些句子讲的**都是
  * 这一项本身是什么**，而点进去的弹层里本来就写着；门口再说一遍是同一件事说两遍。
  * 标题 + 按钮已经足够点，副标题一律不要。
+ *
+ * **「待办完成确认」是这一页里唯一一个开关**，它排在最前面：它是**每天都要碰到**
+ * 的一个决定（勾掉待办要不要多问一句），而下面那几张都是「不常动、动了要慎重」
+ * 的数据操作。常用的放最上面，是为了不必往下滚就能改掉它。
  */
 @Composable
 fun SettingsScreen(
@@ -84,6 +91,9 @@ fun SettingsScreen(
     onOpenCategoryManageDialog: () -> Unit,
     onOpenWallpaperDialog: () -> Unit = {},
     onOpenOnboardingGuide: () -> Unit = {},
+    /** 「完成待办前要不要先确认」。关掉之后点圆圈不再弹确认框。 */
+    taskCompleteConfirmEnabled: Boolean = true,
+    onTaskCompleteConfirmChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
@@ -96,6 +106,16 @@ fun SettingsScreen(
     ) {
         item {
             Spacer(modifier = Modifier.height(4.dp))
+        }
+
+        item {
+            SettingsToggleCard(
+                icon = Icons.Outlined.CheckCircle,
+                title = "待办完成确认",
+                checked = taskCompleteConfirmEnabled,
+                onCheckedChange = onTaskCompleteConfirmChange,
+                testTag = "settings_task_complete_confirm_switch"
+            )
         }
 
         item {
@@ -496,6 +516,81 @@ private fun SettingsActionCard(
             ) {
                 Text(actionLabel, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
             }
+        }
+    }
+}
+
+/**
+ * 设置页里「图标 + 标题 + 一颗开关」的一行。
+ *
+ * 形状照 [SettingsActionCard]：左边同一个图标方块 + 标题，右边换成一颗开关。
+ *
+ * **整行不可点**：改状态只有那颗开关一个落点。把整行也做成可点会多出第二个落点
+ * （按标题算「改了」，按空白处又像没反应），与「一行只留一个落点」的约定冲突
+ * （抽屉里那个开关行是同一条理由）。
+ *
+ * **同样没有副标题**：这一页的规矩是门口只说「这一项叫什么」，
+ * 要说清楚的事在点进去的那一层说。
+ */
+@Composable
+private fun SettingsToggleCard(
+    icon: ImageVector,
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    testTag: String
+) {
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .glassSurface(shape = RoundedCornerShape(18.dp))
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary
+                ),
+                modifier = Modifier.testTag(testTag)
+            )
         }
     }
 }

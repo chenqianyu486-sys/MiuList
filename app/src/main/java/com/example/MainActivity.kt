@@ -107,6 +107,7 @@ import com.example.ui.components.QuickGenerateDialog
 import com.example.ui.components.QuickZjuLoginDialog
 import com.example.ui.components.ScheduleTransferDialog
 import com.example.ui.components.TaskCategoryManageDialog
+import com.example.ui.components.TaskCompleteConfirmDialog
 import com.example.ui.components.TaskEditorSheet
 import com.example.ui.components.TaskRulesDialog
 import com.example.ui.components.WallpaperSettingDialog
@@ -758,7 +759,11 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                                     onOpenTransferDialog = { viewModel.openTransferDialog() },
                                     onOpenCategoryManageDialog = { viewModel.openTaskCategoryManageDialog() },
                                     onOpenWallpaperDialog = { viewModel.openWallpaperDialog() },
-                                    onOpenOnboardingGuide = { viewModel.openOnboardingGuide() }
+                                    onOpenOnboardingGuide = { viewModel.openOnboardingGuide() },
+                                    // 「完成待办前要不要确认」：改完立刻生效，
+                                    // 不用重启也不用等下一次进设置页。
+                                    taskCompleteConfirmEnabled = state.isTaskCompleteConfirmEnabled,
+                                    onTaskCompleteConfirmChange = { viewModel.setTaskCompleteConfirmEnabled(it) }
                                 )
                             }
                         }
@@ -1209,6 +1214,22 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                 onRequestSync = { direction -> webSyncViewModel.requestSync(direction) },
                 onSetPasscode = { passcode -> webSyncViewModel.setPasscode(passcode) },
                 onDismiss = { webSyncVisible = false }
+            )
+        }
+
+        // 勾掉待办前的二次确认。
+        //
+        // 位置在**所有弹层之后**：勾选入口有三个（总览 / 清单 / 课程详情弹层），
+        // 确认弹层必须压在那三个之上 —— 否则从课程详情弹层里点圆圈时，
+        // 确认框会被课程详情面板的遮罩盖住，用户只看到「点了一下没反应」。
+        //
+        // 它是**同窗口 overlay**：兄弟节点里排得靠后的画在上面，
+        // 所以放在这一摞的最后（Snackbar 之前）就对。
+        state.confirmingTaskComplete?.let { task ->
+            TaskCompleteConfirmDialog(
+                task = task,
+                onDismiss = { viewModel.cancelTaskCompleteConfirm() },
+                onConfirm = { viewModel.confirmTaskComplete() }
             )
         }
 

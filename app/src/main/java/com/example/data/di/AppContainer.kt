@@ -13,6 +13,7 @@ import com.example.data.repository.ExamRepository
 import com.example.data.repository.OnboardingRepository
 import com.example.data.repository.QuickGeneratePreference
 import com.example.data.repository.ScheduleSettingsRepository
+import com.example.data.repository.TaskCompleteConfirmPreference
 import com.example.data.repository.TaskRepository
 import com.example.data.repository.TaskTypeRepository
 import com.example.data.repository.WallpaperRepository
@@ -115,6 +116,16 @@ class AppContainer(context: Context) {
      */
     val quickGeneratePreference: QuickGeneratePreference by lazy {
         QuickGeneratePreference(appContext)
+    }
+
+    /**
+     * 「完成待办时要不要先确认」这个开关（默认开）。
+     *
+     * 同样是**偏好**而不是数据：没有表、没有行。与上面那个开关的默认值
+     * 方向相反，理由见 `TaskCompleteConfirmPreference` 的类头注释。
+     */
+    val taskCompleteConfirmPreference: TaskCompleteConfirmPreference by lazy {
+        TaskCompleteConfirmPreference(appContext)
     }
 
     val codec: ScheduleCodec by lazy { JsonScheduleCodec() }
