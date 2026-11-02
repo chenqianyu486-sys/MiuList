@@ -640,27 +640,6 @@ fun GlassBottomSheetHost(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                // 底部弹层原来只避让导航栏。异形屏横过来时，刘海/挖孔在**左右两侧**，
-                // 导航栏 inset 管不到那儿，弹层的内容会压在挖孔下面。
-                // 改用完整安全区：底部仍是导航栏，左右补上挖孔。
-                .windowInsetsPadding(
-                    // 用 safeDrawing 而不是只取导航栏：它 = 系统栏 ∪ 刘海/挖孔 ∪ **键盘**。
-                    //
-                    // 底部弹层现在**带输入框**（待办编辑弹层），键盘弹起时必须把内容
-                    // 抬到键盘上方 —— edge-to-edge 下窗口不会自己 resize，
-                    // 键盘是以 inset 形式给出的，不接这一项，内容就正好压在键盘底下，
-                    // 而这时候用户正要往标题里打字。
-                    //
-                    // 底边取的是**最大值**（导航栏与键盘不叠），所以键盘在时是键盘高、
-                    // 不在时是导航栏高，与居中弹窗那套 panelSafeArea 是同一个口径。
-                    WindowInsets.safeDrawing
-                        .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
-                )
-                .onGloballyPositioned { coordinates ->
-                    if (coordinates.size.height > 0) {
-                        sheetHeightPx = coordinates.size.height.toFloat()
-                    }
-                }
                 .graphicsLayer {
                     translationY = currentOffsetY
                     alpha = (0.2f + 0.8f * currentFraction).coerceIn(0f, 1f)
@@ -679,49 +658,86 @@ fun GlassBottomSheetHost(
                     interactionSource = remember { MutableInteractionSource() }
                 ) {}
         ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                if (showDragHandle) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .pointerInput(Unit) {
-                                detectVerticalDragGestures(
-                                    onDragStart = {
-                                        velocityTracker.resetTracking()
-                                    },
-                                    onVerticalDrag = { change, dragAmount ->
-                                        change.consume()
-                                        velocityTracker.addPosition(change.uptimeMillis, change.position)
-                                        if (dragAmount > 0) {
-                                            dragOffsetY += dragAmount
-                                        } else {
-                                            if (dragOffsetY > 0) {
-                                                dragOffsetY = (dragOffsetY + dragAmount).coerceAtLeast(0f)
-                                            } else {
-                                                dragOffsetY += dragAmount * 0.2f
-                                            }
-                                        }
-                                    },
-                                    onDragEnd = {
-                                        handleDragEnd(velocityTracker.calculateVelocity().y)
-                                    },
-                                    onDragCancel = {
-                                        handleDragEnd(0f)
-                                    }
-                                )
-                            }
-                            .padding(top = 10.dp, bottom = 4.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
+            // 安全区留白放在玻璃面**里面**，不是外面。
+            //
+            // 留白加在外面时，这一圈**不属于弹层**：玻璃面只画到内容为止，
+            // 留白那一段露出的是底下的页面。键盘弹起时这段正好是
+            // 「弹层底边到键盘顶边」之间的空档 —— 实测 110px，
+            // 底下的清单页（"换个筛选条件，或点右下角添加"）整句透上来，
+            // 看着像弹层没画完。导航栏那一档也一样：弹层玻璃到屏幕底之间有条缝。
+            //
+            // 挪进面里之后，玻璃一路铺到窗口底（键盘后面），内容照旧被抬到
+            // 键盘上方 —— 内容与面各归各位。
+            Box(
+                modifier = Modifier
+                    // 底部弹层原来只避让导航栏。异形屏横过来时，刘海/挖孔在**左右两侧**，
+                    // 导航栏 inset 管不到那儿，弹层的内容会压在挖孔下面。
+                    // 改用完整安全区：底部仍是导航栏，左右补上挖孔。
+                    .windowInsetsPadding(
+                        // 用 safeDrawing 而不是只取导航栏：它 = 系统栏 ∪ 刘海/挖孔 ∪ **键盘**。
+                        //
+                        // 底部弹层现在**带输入框**（待办编辑弹层），键盘弹起时必须把内容
+                        // 抬到键盘上方 —— edge-to-edge 下窗口不会自己 resize，
+                        // 键盘是以 inset 形式给出的，不接这一项，内容就正好压在键盘底下，
+                        // 而这时候用户正要往标题里打字。
+                        //
+                        // 底边取的是**最大值**（导航栏与键盘不叠），所以键盘在时是键盘高、
+                        // 不在时是导航栏高，与居中弹窗那套 panelSafeArea 是同一个口径。
+                        WindowInsets.safeDrawing
+                            .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
+                    )
+                    // 量的是**内容高**（留白之外）：进场动画的位移与下拉关闭的阈值
+                    // 都按内容高算，跟以前一致；留白只是把内容顶上去，不参与。
+                    .onGloballyPositioned { coordinates ->
+                        if (coordinates.size.height > 0) {
+                            sheetHeightPx = coordinates.size.height.toFloat()
+                        }
+                    }
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    if (showDragHandle) {
                         Box(
                             modifier = Modifier
-                                .size(width = 36.dp, height = 4.5.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f))
-                        )
+                                .fillMaxWidth()
+                                .pointerInput(Unit) {
+                                    detectVerticalDragGestures(
+                                        onDragStart = {
+                                            velocityTracker.resetTracking()
+                                        },
+                                        onVerticalDrag = { change, dragAmount ->
+                                            change.consume()
+                                            velocityTracker.addPosition(change.uptimeMillis, change.position)
+                                            if (dragAmount > 0) {
+                                                dragOffsetY += dragAmount
+                                            } else {
+                                                if (dragOffsetY > 0) {
+                                                    dragOffsetY = (dragOffsetY + dragAmount).coerceAtLeast(0f)
+                                                } else {
+                                                    dragOffsetY += dragAmount * 0.2f
+                                                }
+                                            }
+                                        },
+                                        onDragEnd = {
+                                            handleDragEnd(velocityTracker.calculateVelocity().y)
+                                        },
+                                        onDragCancel = {
+                                            handleDragEnd(0f)
+                                        }
+                                    )
+                                }
+                                .padding(top = 10.dp, bottom = 4.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(width = 36.dp, height = 4.5.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f))
+                            )
+                        }
                     }
+                    content()
                 }
-                content()
             }
         }
     }

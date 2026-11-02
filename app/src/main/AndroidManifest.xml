@@ -22,7 +22,22 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.MyApplication">
+            android:theme="@style/Theme.MyApplication"
+            android:windowSoftInputMode="adjustResize">
+            <!--
+                键盘策略必须是 adjustResize，不能用默认的 adjustPan。
+
+                adjustPan 的做法是「键盘挡上来时把整个窗口往上平移」，
+                挪到输入框露出来为止。本 App 是 edge-to-edge 的：窗口铺满整屏、
+                顶栏自己避让状态栏（windowInsetsPadding(topSafeArea)）。
+                窗口一平移，**整页内容跟着往上跑**，顶栏就从状态栏底下钻了出来 ——
+                实测顶栏行从 y=0 变成 y=-109px，正好顶在时钟与电量图标上。
+                用户看到的不是「顶栏没避让刘海」，而是「状态栏压在标题上」。
+
+                adjustResize 不平移窗口：键盘弹起时窗口高度变短（或 edge-to-edge 下
+                直接把键盘高度作为 ime inset 发下来），顶栏原地不动。
+                弹层那侧由 [GlassBottomSheetHost] 负责避让键盘（safeDrawing 含 ime）。
+            -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
