@@ -2,6 +2,7 @@ package com.example.data.source.weather
 
 import com.example.data.calendar.AppZone
 import kotlinx.coroutines.test.runTest
+import okhttp3.Request
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -116,5 +117,49 @@ class HostedWeatherLiveTest {
             SeniverseWeatherSource.REMOTE_URLS.size,
             SeniverseWeatherSource.REMOTE_URLS.distinct().size
         )
+    }
+
+    /**
+     * **拿到的必须是所有镜像里最新的那份。**
+     *
+     * 这条只有对着真服务器跑才有意义：镜像之间的新鲜度不一致是常态
+     * （Gitee 那次推送失败，它就停在几小时前那份），而「第一个 date 是今天的
+     * 就收手」的旧做法会把那份旧的当成现状。
+     *
+     * 所以这里自己把三个镜像挨个拉一遍，取它们 `lastUpdated` 的最大值，
+     * 再跟源实际选中的那份比 —— 不一样就是选错了。
+     */
+    @Test
+    fun `拿到的是所有镜像里最新的一份`() = runTest {
+        val source = SeniverseWeatherSource()
+        val fetched = source.fetchToday(location)
+        assertTrue(
+            "托管文件拉不到：${(fetched as? WeatherFetch.Unavailable)?.reason}",
+            fetched is WeatherFetch.Got
+        )
+        val picked = source.parseToday((fetched as WeatherFetch.Got).text, location)
+        assertNotNull("真实文件解析不出天气", picked)
+        assertNotNull(
+            "真实文件里必须有 lastUpdated —— 客户端靠它判新鲜度，少了它就退回盲选",
+            picked!!.updatedAtMillis
+        )
+
+        val client = SeniverseWeatherSource.defaultClient()
+        var newest: Long? = null
+        for (url in SeniverseWeatherSource.REMOTE_URLS) {
+            val body = runCatching {
+                client.newCall(Request.Builder().url(url).get().build())
+                    .execute()
+                    .use { it.body?.string() }
+            }.getOrNull() ?: continue
+            val parsed = runCatching { source.parseToday(body, location) }.getOrNull() ?: continue
+            // 只比「今天的」那些：源本来就只从今天的文件里选。
+            if (parsed.epochDay != AppZone.todayEpochDay()) continue
+            val stamp = parsed.updatedAtMillis ?: continue
+            if (newest == null || stamp > newest!!) newest = stamp
+        }
+
+        assertNotNull("至少一个镜像要能给出 lastUpdated", newest)
+        assertEquals("拿到的必须是最新的那份", newest, picked.updatedAtMillis)
     }
 }

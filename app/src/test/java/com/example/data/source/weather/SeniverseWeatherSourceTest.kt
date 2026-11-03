@@ -21,6 +21,9 @@ class SeniverseWeatherSourceTest {
     private companion object {
         val HANGZHOU = WeatherLocation.DEFAULT
 
+        const val MINUTE = 60_000L
+        const val HOUR = 60L * MINUTE
+
         val OK_STATIC_JSON = """
             {
               "lastUpdated": 1792195200000,
@@ -198,9 +201,8 @@ class SeniverseWeatherSourceTest {
      * **第一个镜像给的不是今天的，要继续试下一个。**
      *
      * 镜像之间的新鲜度不一致是常态，不是意外：Gitee 那份靠 CI 另推一次，
-     * 而 CI 那一步的推送是 `|| true` 兜底的 —— token 没配或过期时它**静默失败**，
-     * Gitee 上的 `weather.json` 就此停在昨天。实测撞到过：Gitee 是 10-18、
-     * ghproxy 是 10-19。
+     * 而 CI 那一步的推送会失败（实测 2026-11-02 那次就失败了，exit 128），
+     * Gitee 上的 `weather.json` 于是停在旧的一份上。
      *
      * 旧做法是「第一个能通的就算」，于是一个陈旧镜像排在前面就能把一整天的
      * 天气变成「读不到」—— 而它自己是好的，换个镜像就有今天的。
@@ -228,6 +230,162 @@ class SeniverseWeatherSourceTest {
     }
 
     /**
+     * **同一天里也要比新旧。**
+     *
+     * `date` 只分得出「今天 / 不是今天」。同一个今天里可以藏着差 8 小时的两份：
+     * Gitee 那次推送失败，GitHub 上已经是新的，它还停在 8 小时前 —— 实测
+     * 2026-11-02 就这样。旧做法是「第一个 date 是今天的就收手」，
+     * 于是那份旧的被当成现状显示，而后面那个镜像上更新的那份**根本读不到**。
+     */
+    @Test
+    fun `同一天里取最新的那份而不是第一个`() = runTest {
+        val today = AppZone.todayEpochDay()
+        val now = 1_792_131_086_000L
+        val client = clientReturning(
+            "old.example" to jsonFor(today, updatedAt = now - 8 * HOUR, high = 26),
+            "new.example" to jsonFor(today, updatedAt = now - 10 * MINUTE, high = 99)
+        )
+        val src = SeniverseWeatherSource(
+            client = client,
+            remoteUrls = listOf("https://old.example/weather.json", "https://new.example/weather.json"),
+            nowMillis = { now }
+        )
+
+        val result = src.fetchToday(HANGZHOU)
+
+        assertTrue("应该拿到文件：$result", result is WeatherFetch.Got)
+        val parsed = src.parseToday((result as WeatherFetch.Got).text, HANGZHOU)
+        assertNotNull(parsed)
+        assertEquals("必须取更新的那份（high=99）", 99, parsed!!.high)
+    }
+
+    /**
+     * **够新就收手**，不再白等后面的镜像。
+     *
+     * 三个镜像各 5 秒超时，逐个试就是 15 秒；而健康状态下第一个镜像
+     * 0.4 秒就拿到了最新的文件 —— 这时再去问后两个纯属浪费。
+     */
+    @Test
+    fun `第一份够新就不再问后面的镜像`() = runTest {
+        val today = AppZone.todayEpochDay()
+        val now = 1_792_131_086_000L
+        val hits = mutableListOf<String>()
+        val client = clientReturning(
+            "first.example" to jsonFor(today, updatedAt = now - 10 * MINUTE, high = 88),
+            hits = hits
+        )
+        val src = SeniverseWeatherSource(
+            client = client,
+            remoteUrls = listOf(
+                "https://first.example/weather.json",
+                "https://second.example/weather.json",
+                "https://third.example/weather.json"
+            ),
+            nowMillis = { now }
+        )
+
+        val result = src.fetchToday(HANGZHOU)
+
+        assertTrue(result is WeatherFetch.Got)
+        assertEquals("只该问第一个镜像", listOf("first.example"), hits)
+        val parsed = src.parseToday((result as WeatherFetch.Got).text, HANGZHOU)
+        assertEquals(88, parsed!!.high)
+    }
+
+    /**
+     * **全都够旧时，取 `lastUpdated` 最大的那份**，
+     * 而不是第一个（第一个有可能最旧）。
+     */
+    @Test
+    fun `都不够新时取写入时刻最大的那份`() = runTest {
+        val today = AppZone.todayEpochDay()
+        val now = 1_792_131_086_000L
+        val client = clientReturning(
+            "a.example" to jsonFor(today, updatedAt = now - 9 * HOUR, high = 11),
+            "b.example" to jsonFor(today, updatedAt = now - 6 * HOUR, high = 22),
+            "c.example" to jsonFor(today, updatedAt = now - 7 * HOUR, high = 33)
+        )
+        val src = SeniverseWeatherSource(
+            client = client,
+            remoteUrls = listOf(
+                "https://a.example/weather.json",
+                "https://b.example/weather.json",
+                "https://c.example/weather.json"
+            ),
+            nowMillis = { now }
+        )
+
+        val result = src.fetchToday(HANGZHOU)
+
+        val parsed = src.parseToday((result as WeatherFetch.Got).text, HANGZHOU)
+        assertEquals("要取写入时刻最大的那份（high=22）", 22, parsed!!.high)
+    }
+
+    /**
+     * **老格式（没有 `lastUpdated`）也能用。**
+     *
+     * 判不出年龄就等于判不出新旧，但那份文件仍然是今天的、仍然能显示 ——
+     * 不能因为少一个可选字段就让整天的天气作废。
+     */
+    @Test
+    fun `没有写入时刻的老格式文件照样能用`() = runTest {
+        val today = AppZone.todayEpochDay()
+        val now = 1_792_131_086_000L
+        val client = clientReturning("old.example" to jsonFor(today, updatedAt = null))
+        val src = SeniverseWeatherSource(
+            client = client,
+            remoteUrls = listOf("https://old.example/weather.json"),
+            nowMillis = { now }
+        )
+
+        val result = src.fetchToday(HANGZHOU)
+
+        assertTrue("老格式不该被判成拉不到：$result", result is WeatherFetch.Got)
+        val parsed = src.parseToday((result as WeatherFetch.Got).text, HANGZHOU)
+        assertNotNull(parsed)
+        assertEquals(today, parsed!!.epochDay)
+        assertNull("解析不出写入时刻就当没有", parsed.updatedAtMillis)
+    }
+
+    /**
+     * **找更新的预算用完了就收手。**
+     *
+     * 客户端只有在「自己那份已经旧了」时才联网，而镜像推的是同一份文件 ——
+     * 所以每次联网，几乎必然要去问第二、第三个镜像。没有预算的话，
+     * 一次冷启动要把三个镜像挨个走完（实测能到 20 秒以上）。
+     *
+     * 这里用一个「每调一次就往前跳 10 秒」的时钟把预算耗掉，
+     * 断言后面的镜像根本没被问。
+     */
+    @Test
+    fun `找更新的时间预算用完就不再问后面的镜像`() = runTest {
+        val today = AppZone.todayEpochDay()
+        val now = 1_792_131_086_000L
+        val hits = mutableListOf<String>()
+        val client = clientReturning(
+            "first.example" to jsonFor(today, updatedAt = now - 8 * HOUR, high = 26),
+            "second.example" to jsonFor(today, updatedAt = now - 8 * HOUR, high = 77),
+            hits = hits
+        )
+        var clockCalls = 0
+        val src = SeniverseWeatherSource(
+            client = client,
+            remoteUrls = listOf(
+                "https://first.example/weather.json",
+                "https://second.example/weather.json"
+            ),
+            nowMillis = { clockCalls++; now + clockCalls * 10_000L }
+        )
+
+        val result = src.fetchToday(HANGZHOU)
+
+        assertTrue("预算用完也要交出手上那份：$result", result is WeatherFetch.Got)
+        assertEquals("预算用完就不该再问第二个镜像", listOf("first.example"), hits)
+        val parsed = src.parseToday((result as WeatherFetch.Got).text, HANGZHOU)
+        assertEquals("交出的应该是手上那一份", 26, parsed!!.high)
+    }
+
+    /**
      * 全都不通时仍然归到网络问题。
      *
      * 顺带钉住「陈旧的文件不算网络问题」：它是**答复到了但内容不新**，
@@ -250,11 +408,15 @@ class SeniverseWeatherSourceTest {
     }
 
     /** 按 URL 里的主机名返回不同正文，模拟「几个镜像新鲜度不一致」。 */
-    private fun clientReturning(vararg pairs: Pair<String, String>): OkHttpClient {
+    private fun clientReturning(
+        vararg pairs: Pair<String, String>,
+        hits: MutableList<String> = mutableListOf()
+    ): OkHttpClient {
         val byHost = pairs.toMap()
         return OkHttpClient.Builder()
             .addInterceptor { chain ->
                 val host = chain.request().url.host
+                hits += host
                 val body = byHost[host]
                 okhttp3.Response.Builder()
                     .request(chain.request())
@@ -270,8 +432,20 @@ class SeniverseWeatherSourceTest {
             .build()
     }
 
-    private fun jsonFor(epochDay: Long): String {
+    /**
+     * 造一份托管文件。
+     *
+     * @param updatedAt 文件自己的写入时刻（`lastUpdated`）。
+     *   **null = 老格式没有这个字段** —— 那时客户端判不出新旧，
+     *   只能退回「第一个 date 是今天的就算」，这条退路也要有用例钉住。
+     * @param high 高低温，用来分辨「拿到的是哪一份」。
+     */
+    private fun jsonFor(epochDay: Long, updatedAt: Long? = null, high: Int = 26): String {
         val date = LocalDate.ofEpochDay(epochDay).toString()
-        return """{"date":"$date","textDay":"多云","textNight":"多云","high":26,"low":20,"aqi":69}"""
+        val stamp = updatedAt?.let { "\"lastUpdated\":$it," } ?: ""
+        // 用拼接而不是原始字符串：原始字符串里 "$stamp"date" 这种写法会让
+        // 引号配对错位，后面的 $date 掉到字符串外面，变成字面量 "$date"。
+        return "{$stamp\"date\":\"$date\",\"textDay\":\"多云\",\"textNight\":\"多云\"," +
+            "\"high\":$high,\"low\":20,\"aqi\":69}"
     }
 }

@@ -49,10 +49,23 @@ class WeatherServiceTest {
          *
          * 刻意不用上游原始格式：决策层不关心 JSON 长什么样，
          * 而用一份**线上真会出现的形状**意味着这个用例里没有第二个真相。
+         *
+         * @param updatedAt 文件自己的写入时刻（`lastUpdated`）。
+         *   **null = 老格式没有这个字段** —— 那时客户端判不出数据年龄，
+         *   只能退回本机下载时刻，那条退路也要有用例钉住。
          */
-        fun response(date: String, high: Double = 25.0, low: Double = 19.0) = """
-            {"date":"$date","textDay":"小雨","high":${high.toInt()},"low":${low.toInt()}}
-        """.trimIndent()
+        fun response(
+            date: String,
+            high: Double = 25.0,
+            low: Double = 19.0,
+            updatedAt: Long? = null
+        ): String {
+            val stamp = updatedAt?.let { "\"lastUpdated\":$it," } ?: ""
+            // 用拼接而不是原始字符串：原始字符串里 "$stamp"date" 这种写法会让
+            // 引号配对错位，后面的 $date 掉到字符串外面，变成字面量 "$date"。
+            return "{$stamp\"date\":\"$date\",\"textDay\":\"小雨\"," +
+                "\"high\":${high.toInt()},\"low\":${low.toInt()}}"
+        }
 
         /** 空气正常：64 = 良。空气是**另一份正文**，与天气分开取。 */
         const val AIR_OK = """{"current":{"time":"2026-10-16T14:00","interval":3600,"us_aqi":64}}"""
@@ -276,12 +289,105 @@ class WeatherServiceTest {
     fun `isFresh 的边界`() {
         val svc = service(now = T0)
 
-        assertTrue(svc.isFresh(T0, WINDOW))
-        assertTrue(svc.isFresh(T0 - WINDOW + MINUTE, WINDOW))
-        assertFalse(svc.isFresh(T0 - WINDOW, WINDOW))
-        assertFalse(svc.isFresh(T0 - WINDOW - MINUTE, WINDOW))
-        assertFalse(svc.isFresh(T0 + 1, WINDOW))
-        assertFalse("窗口为 0 时永不命中", svc.isFresh(T0, 0))
+        assertTrue(svc.isFresh(0, WINDOW))
+        assertTrue(svc.isFresh(WINDOW - MINUTE, WINDOW))
+        assertFalse(svc.isFresh(WINDOW, WINDOW))
+        assertFalse(svc.isFresh(WINDOW + MINUTE, WINDOW))
+        // 年龄为负（时间戳在未来：时钟回拨或两端时钟不一致）一律算过期。
+        assertFalse(svc.isFresh(-1, WINDOW))
+        assertFalse("窗口为 0 时永不命中", svc.isFresh(0, 0))
+    }
+
+    // ------------------------------------------------------------ 数据年龄
+
+    /**
+     * **数据年龄按文件自己的写入时刻算，不是本机下载时刻。**
+     *
+     * 一份 09:40 写下的文件，本机 21:00 才下载 —— 下载时刻很新，
+     * 数据却已经 11 小时了。以前这两个时刻只有一个（下载时刻），
+     * 于是「数据有多旧」被当成了「我多久没去拉」。
+     */
+    @Test
+    fun `数据年龄按文件自己的写入时刻算`() {
+        val cache = seededCache(response("2026-10-16", updatedAt = T0 - 4 * HOUR), T0)
+
+        val cached = service(cache = cache, now = T0).cachedToday()!!
+        assertEquals("数据年龄该按文件算", 4 * HOUR, service(cache = cache, now = T0).dataAgeMillis(cached))
+    }
+
+    /** 文件没有写入时刻（老格式）时退回本机下载时刻 —— 那是唯一能拿到的依据。 */
+    @Test
+    fun `文件没有写入时刻时退回本机下载时刻`() {
+        val cache = seededCache(response("2026-10-16"), T0)
+
+        val cached = service(cache = cache, now = T0 + MINUTE).cachedToday()!!
+        assertEquals(MINUTE, service(cache = cache, now = T0 + MINUTE).dataAgeMillis(cached))
+    }
+
+    /** 时间戳在未来（时钟回拨 / 两端时钟不一致）算无限旧，宁可多拉一次。 */
+    @Test
+    fun `写入时刻在未来时算无限旧`() {
+        val cache = seededCache(response("2026-10-16", updatedAt = T0 + HOUR), T0)
+
+        val cached = service(cache = cache, now = T0).cachedToday()!!
+        assertEquals(
+            Long.MAX_VALUE,
+            service(cache = cache, now = T0).dataAgeMillis(cached)
+        )
+    }
+
+    /**
+     * **文件太旧就重新去拉** —— 上游可能已经写出了更新的那份。
+     */
+    @Test
+    fun `文件太旧时重新去拉`() = runTest {
+        val cache = seededCache(
+            response("2026-10-16", high = 25.0, updatedAt = T0 - 4 * HOUR),
+            T0 - 4 * HOUR
+        )
+
+        val state = service(text = response("2026-10-16", high = 99.0), cache = cache, now = T0).loadForEntry()
+
+        assertEquals(99, (state as WeatherService.WeatherState.Available).weather.high)
+    }
+
+    /**
+     * **刚问过网络就不再问**，即使数据已经旧了。
+     *
+     * 这是「复查间隔」那条规则：上游一旦停更，数据年龄会一直超过 3 小时，
+     * 那时若没有这条规则，**每次进 App 都要发一次请求**，而拿回来的还是那份旧的。
+     */
+    @Test
+    fun `刚问过网络就不再问即使数据已经旧了`() = runTest {
+        val cache = seededCache(
+            response("2026-10-16", high = 25.0, updatedAt = T0 - 4 * HOUR),
+            T0 - 10 * MINUTE
+        )
+
+        val state = service(text = response("2026-10-16", high = 99.0), cache = cache, now = T0).loadForEntry()
+
+        val available = state as WeatherService.WeatherState.Available
+        assertEquals("不该重复发请求", 25, available.weather.high)
+        assertTrue(available.fromCache)
+    }
+
+    /**
+     * **拉到「不是今天」的正文时，不许覆盖本地那份好的。**
+     *
+     * 旧做法是照样写缓存 —— 而那份正文下一次就会被按「不是今天」判掉，
+     * 等于**用一份用不了的数据把唯一的好缓存擦掉**：用户本来存着一份今天的
+     * 天气，一次失败的拉取之后就没了。
+     */
+    @Test
+    fun `拉到不是今天的正文时不覆盖本地好缓存`() = runTest {
+        val cache = seededCache(response("2026-10-16", high = 25.0), T0)
+        val before = cache.read()
+
+        val state = service(text = response("2026-10-15", high = 99.0), cache = cache, now = T0 + MINUTE)
+            .refresh()
+
+        assertTrue(state is WeatherService.WeatherState.Unavailable)
+        assertEquals("拒绝的数据不该进缓存", before, cache.read())
     }
 
     /** 窗口内但缓存是昨天的：一样要去拉，不能拿旧的冒充今天。 */

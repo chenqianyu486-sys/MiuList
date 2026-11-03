@@ -11,25 +11,28 @@ import com.example.data.calendar.AppZone
  * 天气的**决策层**，也是唯一决定「界面上该显示什么」的地方。
  *
  * ```
- *   ① 本地缓存 filesDir/remote-weather.json（记着它是**什么时候**拉的）
- *      ↓ 缓存是今天的、且距上次拉取不足 [FRESH_WINDOW_MILLIS]
+ *   ① 本地缓存 filesDir/remote-weather.json（记着两件事：本机什么时候拉的、文件什么时候写的）
+ *      ↓ 缓存是今天的、且**这份文件**的年龄不足 [FRESH_WINDOW_MILLIS]
+ *        （或本机刚问过网络、距上次拉取不足 [REFETCH_INTERVAL_MILLIS]）
  *   直接用它，一次网络请求都不发
- *      ↓ 否则（没有 / 过期 / 不是今天的）
- *   ② 远程天气接口
+ *      ↓ 否则（没有 / 太旧 / 不是今天的）
+ *   ② 远程天气接口（源那边会按文件自己的 lastUpdated 挑最新的镜像）
  *      ↓ 拉不到
  *   退回今天的缓存（可能只是不够新鲜，不是没有）
  *      ↓ 连今天的缓存也没有
  *   ③ 界面显示「读不到天气」+ 原因
  * ```
  *
- * ## 为什么要给缓存记时间戳
+ * ## 两个时间戳，两件事
  *
- * 冷启动时界面要立刻有东西显示，但**不该每次都发请求**：
- * 天气是小时级变化的，20 分钟内重复拉十几次拿到的数据完全一样。
+ * | 时间戳 | 记的是什么 | 用来判什么 |
+ * |---|---|---|
+ * | 文件里的 `lastUpdated` | 上游写下这份数据的那一刻 | **这份数据有多旧** |
+ * | 缓存外壳里的 `fetchedAt` | 本机把它下载下来的那一刻 | 本机多久没去问过网络 |
  *
- * 时间戳不在上游的响应里（上游给的是**气象数据**的更新时间，
- * 那是说「这份预报什么时候算出来的」，不是说「我多久没去拉」——
- * 拿来判断新鲜度会把所有请求都判成过期），所以只能由本机在写缓存时自己记。
+ * 以前只有一个时间戳（`fetchedAt`），于是「数据有多旧」被当成了
+ * 「本机多久没去拉」——这两件事在托管文件这条路上**根本不是一回事**：
+ * 一份 09:40 写下的文件，本机 21:00 才下载，下载时刻很新，数据却已经 11 小时了。
  *
  * ## 为什么缓存还要按「是不是今天」筛
  *
@@ -87,7 +90,12 @@ class WeatherService(
         ) : WeatherState
     }
 
-    /** 缓存里的一条：天气本体 + **本机**拉取它的那一刻。 */
+    /**
+     * 缓存里的一条：天气本体 + **本机**拉取它的那一刻。
+     *
+     * 天气本体自己带着**文件**的写入时刻（[DailyWeather.updatedAtMillis]），
+     * 所以这一条里有两个时刻，两个含义不同：数据多旧看前者，本机多久没问过看后者。
+     */
     data class CachedEntry(
         val weather: DailyWeather,
         val fetchedAtMillis: Long
@@ -121,14 +129,32 @@ class WeatherService(
     }
 
     /**
-     * 距上次拉取是否还不到 [ttlMillis]。
+     * 这份数据有多旧（毫秒）。
      *
-     * `age < 0`（时钟被往回调过）算**过期**：那种情况下宁可多拉一次，
-     * 也不要让一份可能已经放了一整天的数据一直不过期。
+     * **优先用文件自己的 `lastUpdated`**（上游写下它的那一刻）——
+     * 那才是「这份天气有多旧」。本机下载时刻只说明「我多久没去问过网络」，
+     * 拿它当新鲜度会把一份 8 小时前的文件说成刚下的。
+     *
+     * 文件没有 `lastUpdated`（老格式）时退回本机下载时刻 —— 那是唯一能拿到的依据。
+     *
+     * `age < 0`（时间戳在未来：时钟被往回调过、或两端时钟不一致）算**无限旧**：
+     * 宁可多拉一次，也不要让一份来路不明的数据一直不过期。
      */
-    fun isFresh(fetchedAtMillis: Long, ttlMillis: Long): Boolean {
-        val age = nowMillis() - fetchedAtMillis
-        return age in 0 until ttlMillis
+    fun dataAgeMillis(cached: CachedEntry): Long {
+        val base = cached.weather.updatedAtMillis ?: cached.fetchedAtMillis
+        val age = nowMillis() - base
+        return if (age < 0) Long.MAX_VALUE else age
+    }
+
+    /**
+     * 这份数据是不是还比 [ttlMillis] 新。
+     *
+     * [ageMillis] 是**已经算好的年龄**，不是时间戳 —— 算年龄的规矩见 [dataAgeMillis]。
+     * 负数（一律按 [Long.MAX_VALUE] 传进来）与超时都算**过期**：
+     * 宁可多拉一次，也不要让一份可能已经放了一整天的数据一直不过期。
+     */
+    fun isFresh(ageMillis: Long, ttlMillis: Long): Boolean {
+        return ageMillis in 0 until ttlMillis
     }
 
     /**
@@ -137,11 +163,23 @@ class WeatherService(
      * **没有 ttl 参数了**（2026-10-16 用户定）：手动刷新是唯一一个传 0
      * 「无视窗口强制联网」的调用方，它被取消之后这个参数就没有调用方了。
      * 留着它等于留一个没人用的旋钮，下一个人会以为天气还能手动强刷。
+     *
+     * ## 什么时候才值得再问一次网络
+     *
+     * 两个理由，任一成立就不问：
+     *
+     * 1. **这份数据还不够新**（[dataAgeMillis] ≥ [FRESH_WINDOW_MILLIS]）——
+     *    上游可能已经写出了更新的文件，值得去拿；
+     * 2. **本机刚问过**（距上次下载不足 [REFETCH_INTERVAL_MILLIS]）——
+     *    再问一次多半还是同一份文件，白费一次请求。
+     *
+     * 第 2 条是「复查间隔」，不是新鲜度。少了它，上游一旦停更，
+     * 每次进 App 都会去问一次网络（而拿回来的还是那份旧的）。
      */
     suspend fun loadForEntry(): WeatherState {
         val cached = cachedToday()
-        if (cached != null && isFresh(cached.fetchedAtMillis, FRESH_WINDOW_MILLIS)) {
-            // 够新：一次网络请求都不发。
+        if (cached != null && !needsRefetch(cached)) {
+            // 不用问：一次网络请求都不发。
             return WeatherState.Available(cached.weather, fromCache = true)
         }
         return when (val fresh = refresh()) {
@@ -151,6 +189,21 @@ class WeatherService(
                 cached?.let { WeatherState.Available(it.weather, fromCache = true) } ?: fresh
             WeatherState.Loading -> WeatherState.Loading
         }
+    }
+
+    /**
+     * 缓存这份要不要**再去问一次网络**。
+     *
+     * 两条理由，任一成立就要问：
+     * - 这份数据太旧（上游可能已经写出了更新的）；
+     * - 本机上次问得够久了（上游可能在这之后更新过）。
+     */
+    private fun needsRefetch(cached: CachedEntry): Boolean {
+        if (isFresh(dataAgeMillis(cached), FRESH_WINDOW_MILLIS)) return false
+        val sinceFetch = nowMillis() - cached.fetchedAtMillis
+        // 负数（本机时钟被往回调过）**不算「刚问过」**：那种情况下我们其实
+        // 不知道上次问是什么时候，多问一次比拿着一份来路不明的缓存强。
+        return sinceFetch < 0 || sinceFetch >= REFETCH_INTERVAL_MILLIS
     }
 
     /**
@@ -172,9 +225,14 @@ class WeatherService(
                         WeatherFailureKind.REJECTED
                     )
                     // 拿到的是别的日期（时区传错、或服务端改了 forecast_days 的语义）：
-                    // 照样缓存，但不冒充今天。
+                    // **不冒充今天，也不写缓存。**
+                    //
+                    // 旧做法是照样写缓存 —— 但那份正文下一次就会被 [cachedToday]
+                    // 按「不是今天」判掉，等于**用一份用不了的数据把唯一的好缓存擦掉**：
+                    // 用户本来存着一份今天的天气，一次失败的拉取之后就没了，
+                    // 而下一次进来只能显示「读不到天气」。
+                    // 拒绝的数据不进缓存，这条与「拉取失败不动缓存」是同一条原则。
                     parsed.epochDay != today() -> {
-                        writeCache(fetched.text, airBody = null)
                         WeatherState.Unavailable(
                             "天气接口返回的不是今天的数据",
                             WeatherFailureKind.REJECTED
@@ -218,14 +276,19 @@ class WeatherService(
 
     companion object {
         /**
-         * 冷启动时直接用缓存的时间窗：**3 小时**（用户 2026-10-16 定，此前是 20 分钟）。
+         * 一份天气数据算「够新」的门槛：**3 小时**（沿用用户 2026-10-16 定的 3 小时）。
          *
-         * 为什么是 3 小时：Open-Meteo 的全球模式基本每 6 小时出一轮，
-         * 区域模式 1~3 小时一轮。窗口比这更短只是反复去拿同一份数据，
-         * 而 20 分钟那种窗口挡的其实是「切出去看一眼别的 App 就回来」这种高频重入 ——
-         * 反正那一两分钟里拿到的天气完全一样。
+         * ## 它量的现在是**文件年龄**，不是「本机多久没去拉」
          *
-         * 3 小时还顺带把请求量压到**每天至多 8 次**（还不含缓存命中的那几次）。
+         * 以前这个窗口量的是本机下载时刻，而那时候上游是直连 Open-Meteo
+         * （全球模式每 6 小时出一轮），下载时刻约等于数据年龄，两边碰巧一样。
+         * 换成托管文件之后**两者分家了**：上游的调度会滞后，
+         * 一份文件在 GitHub 上放着不动，本机什么时候下载它都不影响它有多旧。
+         *
+         * 现在量的是文件自己的 `lastUpdated`（见 [dataAgeMillis]）。
+         * 这也是为什么这个数字与上游的承诺对得上：
+         * 上游的看门狗保证 `weather.json` 的年龄 ≤ 3 小时，
+         * 客户端再用同一个 3 小时判，两端说的是同一件事。
          *
          * **代价要说明白：手动刷新已取消。** 一次拉取失败之后，用户在下一次
          * 重新进入软件（[com.example.ui.viewmodel.MainViewModel.syncWeather]
@@ -233,6 +296,27 @@ class WeatherService(
          * 天气这件事上这个代价值得，但别假装它不存在。
          */
         const val FRESH_WINDOW_MILLIS = 3L * 60L * 60L * 1000L
+
+        /**
+         * 本机**最短多久**才允许再问一次网络：**1 小时**。
+         *
+         * ## 它管的是请求量，不是新鲜度
+         *
+         * 上游一旦停更（看门狗也会红），数据年龄就会一直超过 3 小时 ——
+         * 那时「数据够不够新」这个理由会一直成立，于是**每次进 App 都要发一次请求**，
+         * 而拿回来的还是那份旧的。
+         *
+         * 这一条把那种情况按住：上次问过不到 1 小时，就不再问。
+         *
+         * ## 为什么是 1 小时
+         *
+         * 它是「上游写出一份新文件之后，App 多久能看见」的上限。
+         * 上游的目标节奏是 ≤3 小时，客户端 1 小时复查一次，
+         * 于是端到端最坏约 4 小时 —— 与「3 小时」同一个量级。
+         * 再短（比如 10 分钟）只是反复去拿同一份文件（每次几百字节），
+         * 再长（比如 3 小时）会让 App 比上游多落后一整个窗口。
+         */
+        const val REFETCH_INTERVAL_MILLIS = 1L * 60L * 60L * 1000L
 
         private val adapter by lazy {
             Moshi.Builder().build().adapter(WeatherCacheEnvelope::class.java)

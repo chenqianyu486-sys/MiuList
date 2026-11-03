@@ -1,0 +1,73 @@
+name: Weather Freshness Watchdog
+
+# 这个工作流**不抓天气**（那是 weather-sync 的活），它只回答一个问题：
+# 「现在这份 weather.json 还有多旧？」
+#
+# ## 为什么需要它
+#
+# GitHub 的定时任务在高峰期会**跳过整点** —— 实测 93 次调度，平均间隔
+# 4.45 小时、最长 10.77 小时，而 cron 写的是每小时一次。
+# 于是「声明每小时」与「实际多久一次」是两回事，而且**没有任何信号**说
+# 「这份天气已经多久没更新了」。
+#
+# 客户端那边已经改成了「按文件自己的 `lastUpdated` 判新鲜度」
+# （见 `SeniverseWeatherSource`），所以文件一旦停更，App 拿到的是一份
+# 越来越旧的数据 —— 而界面上看不出区别。
+#
+# 这个看门狗就是那个信号：太旧就**补跑一次同步**，补完还是太旧就红。
+# 有了它，「3 小时」才从一句注释变成**被验证的承诺**。
+
+on:
+  schedule:
+    # 每小时查两次（第 7 分、第 37 分）。
+    # 间隔比同步工作流密，是为了在「刚变旧」时就发现，而不是等下一轮同步。
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # 需要它去触发 weather-sync 补跑（workflow_dispatch 不在 contents 权限里）。
+  actions: write
+
+concurrency:
+  group: weather-watchdog
+  # 不取消：上一次检查还没跑完就说明已经有事要查了，别把正在查的那次杀掉。
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 这份天气有多旧
+        id: check
+        # 退出码非 0 = 太旧（或者读不出来）。不让它直接失败，
+        # 因为下面还有「补跑一次」这一步要做。
+        run: python scripts/check_weather_freshness.py --max-age-hours 3
+        continue-on-error: true
+
+      - name: 太旧就补跑一次同步
+        if: steps.check.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "::warning::这份天气太旧，触发一次 weather-sync 补跑"
+          gh workflow run weather-sync.yml --ref main
+
+      - name: 复检（最多等 5 分钟）
+        if: steps.check.outcome == 'failure'
+        run: |
+          for i in $(seq 1 10); do
+            sleep 30
+            git fetch origin main --quiet
+            git checkout FETCH_HEAD -- weather.json
+            if python scripts/check_weather_freshness.py --max-age-hours 3; then
+              echo "补跑之后已经更新（第 ${i} 次检查）"
+              exit 0
+            fi
+          done
+          echo "::error::补跑同步之后这份天气仍然太旧"
+          exit 1

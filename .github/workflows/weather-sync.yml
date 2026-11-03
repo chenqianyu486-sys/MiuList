@@ -2,7 +2,21 @@ name: Sync Weather Data (Seniverse)
 
 on:
   schedule:
-    # 每小时的第 25 分钟执行一次（避免整点高峰，一天 24 次，完全在免费额度内）
+    # **每小时试一次**（第 25 分钟，避开整点高峰）。
+    #
+    # ## 为什么不是「每 3 小时」
+    #
+    # 因为 GitHub 的定时任务在高峰期会**跳过整点**。实测 93 次调度，
+    # 平均间隔 4.45 小时、最长 10.77 小时 —— 而 cron 写的是每小时一次。
+    # 2026-11-03 09:40 之后连续 6 个整点全部没跑（实测）。
+    #
+    # **跳一个点就欠一整个间隔**：cron 写得越稀，被跳过时欠得越多。
+    # 3 小时的 cron 在这种调度器下，实际间隔会奔着 6~9 小时去。
+    #
+    # 所以这里是**每小时试一次**，而「数据有多新」由另一个工作流看着：
+    # `weather-watchdog.yml` 每半小时查一次，超过 3 小时就补跑并把结论亮出来。
+    #
+    # 换句话说：**每小时是尝试频率，3 小时是被看守的承诺。**
     - cron: '25 * * * *'
   workflow_dispatch: # 支持在 GitHub Actions 页面手动点击运行
 
@@ -50,7 +64,7 @@ jobs:
             echo "weather.json 没有变化，无需提交。"
           fi
 
-      # 推 Gitee 镜像。这里有两个坑，都踩过：
+      # 推 Gitee 镜像。这里有三个坑，都踩过：
       #
       # 1. 不能写成 `git remote set-url gitee <url>`：Actions 全新 checkout 里
       #    只有 origin 这一个 remote，set-url 对不存在的 remote 会以退出码 2
@@ -61,13 +75,49 @@ jobs:
       #    没有任何痕迹，镜像就停在旧版本上（实测滞留了 19 小时的天气数据）。
       #    宁可让这一步红，也不要在没人知道的情况下让镜像悄悄烂掉。
       #    这一步在推 origin 之后，失败也不影响 GitHub 上的天气数据本身。
+      #
+      # 3. **重试 + 推后回读**（2026-11-03 加）：
+      #    跑这个工作流的是美国机房的 runner，而 gitee.com 在国内 ——
+      #    传输层超时是常事（实测 2026-11-02 那次 exit 128，耗时 63 秒）。
+      #    一次超时就让镜像滞后 7 小时（下次调度要等几小时才轮得到），代价太大。
+      #    所以这里重试三次，并且**推完回读远端的 main**：它必须指到本次提交。
+      #    「push 成功」只说明命令返回了 0；「远端指对了」才是镜像真的更新了。
+      #    回读走的是与推送同一条链路（同一个 URL），所以它通 = 推送确实到位，
+      #    不受「从美国机房能不能打开 gitee 的 raw 页面」这种跨链路差异的影响。
       - name: Push to Gitee (mirror)
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
+          set -eu
           if [ -z "$GITEE_TOKEN" ]; then
             echo "::error::GITEE_TOKEN 未配置（或为空），Gitee 镜像不会更新"
             exit 1
           fi
-          git push "https://zjuchenqianyu:${GITEE_TOKEN}@gitee.com/zjuchenqianyu/MiuList.git" main
+          GITEE_URL="https://zjuchenqianyu:${GITEE_TOKEN}@gitee.com/zjuchenqianyu/MiuList.git"
+          for attempt in 1 2 3; do
+            echo "第 ${attempt} 次推送 Gitee 镜像…"
+            # connectTimeout 20s + 低速中止：别让一次传输卡满 63 秒再失败。
+            if git -c http.connectTimeout=20 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 \
+                 push "$GITEE_URL" main; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "::error::Gitee 镜像推送重试 3 次仍失败"
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
 
+          REMOTE_HEAD="$(git ls-remote "$GITEE_URL" refs/heads/main | cut -f1)"
+          LOCAL_HEAD="$(git rev-parse HEAD)"
+          if [ "$REMOTE_HEAD" != "$LOCAL_HEAD" ]; then
+            echo "::error::Gitee 远端 main 指向 $REMOTE_HEAD，本次提交是 $LOCAL_HEAD —— 镜像没有更新"
+            exit 1
+          fi
+          echo "Gitee 镜像已确认指向 $LOCAL_HEAD"
+
+      # 最后再自检一次**这份文件本身**有多旧。
+      # 上面几步全绿也可能是一份 8 小时前的文件被推来推去 ——
+      # 这条把「新鲜」这件事也纳入流水线自己的结论。
+      - name: 自检这份文件够不够新
+        run: python scripts/check_weather_freshness.py --max-age-hours 3

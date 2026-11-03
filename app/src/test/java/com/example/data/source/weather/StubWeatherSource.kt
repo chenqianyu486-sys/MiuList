@@ -64,7 +64,10 @@ internal class StubWeatherSource(
             // 托管文件只给白天的词，夜间值为空 —— 与线上一致。
             textNight = "",
             high = dto.high,
-            low = dto.low
+            low = dto.low,
+            // **文件自己的写入时刻**。桩源必须带上它，
+            // 否则决策层那条「按文件年龄判新鲜度」的规则在这组用例里根本没被走到。
+            updatedAtMillis = dto.lastUpdated
         )
     }
 
@@ -84,7 +87,9 @@ internal class StubWeatherSource(
         val date: String? = null,
         val textDay: String? = null,
         val high: Int? = null,
-        val low: Int? = null
+        val low: Int? = null,
+        /** 文件自己的写入时刻（`scripts/sync_weather.py` 写进去的那个）。 */
+        val lastUpdated: Long? = null
     )
 
     private data class AirDto(val current: AirCurrentDto? = null)

@@ -9,6 +9,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 
 /**
@@ -45,7 +46,14 @@ class SeniverseWeatherSource(
     /** 静态文件远程地址列表，逐个尝试。 */
     private val remoteUrls: List<String> = REMOTE_URLS,
     /** 单测注入：给定文本完全跳过网络。 */
-    private val responseText: String? = null
+    private val responseText: String? = null,
+    /**
+     * 单测注入：固定「现在」，这样「这份文件有多旧」是确定的值而不是碰运气。
+     *
+     * 默认走系统时钟。这个时刻有两个用途：算文件年龄，以及判断**够不够新**
+     * （见 [FRESH_FILE_WINDOW_MILLIS]）。
+     */
+    private val nowMillis: () -> Long = { System.currentTimeMillis() }
 ) : WeatherSource {
 
     override suspend fun fetchToday(location: WeatherLocation): WeatherFetch {
@@ -56,23 +64,56 @@ class SeniverseWeatherSource(
             // 昨天的文件，把它交上去，好让决策层说「不是今天的数据」，
             // 而不是一句笼统的「拉取失败」。
             var notToday: WeatherFetch.Got? = null
+            // 今天的那几份里**最新的**那个（按文件自己的 lastUpdated 比）。
+            var best: WeatherFetch.Got? = null
+            var bestAge = Long.MAX_VALUE
+            // 「找更新的那份」的时间预算。见 [SEARCH_BUDGET_MILLIS]。
+            var searchDeadline = 0L
 
             for (url in remoteUrls) {
-                when (val result = fetchOne(url)) {
+                // 已经有一份今天的了，后面的镜像就只是「去看看有没有更新的」——
+                // 那就不值得再等满一整个超时，超时上限压到剩余预算里。
+                val searching = searchDeadline > 0L
+                val callClient = if (searching) {
+                    val remaining = searchDeadline - nowMillis()
+                    if (remaining <= 0L) {
+                        reasons += "${hostOf(url)}: 找更新的时间预算用完了"
+                        break
+                    }
+                    client.newBuilder().callTimeout(Duration.ofMillis(remaining)).build()
+                } else {
+                    client
+                }
+
+                when (val result = fetchOne(url, callClient)) {
                     is WeatherFetch.Got -> {
-                        // **关键：日期不对就继续试下一个镜像。**
-                        //
-                        // 镜像之间的新鲜度**不一致**，而且不一致是常态：
-                        // Gitee 那份靠 CI 另推一次，而 CI 那一步的推送是
-                        // `|| true` 兜底的 —— token 没配/过期时它**静默失败**，
-                        // 于是 Gitee 上的 weather.json 可以比 GitHub 上那份
-                        // 旧上一天。实测就撞到过：Gitee 是 10-18、ghproxy 是 10-19。
-                        //
-                        // 旧的做法是「第一个能通的就算」，于是一个陈旧镜像排在前面，
-                        // 就能把一整天的天气变成「读不到」—— 而它自己明明是好的。
-                        if (isToday(result.text, location)) return@withContext result
-                        if (notToday == null) notToday = result
-                        reasons += "${hostOf(url)}: 文件不是今天的"
+                        val parsed = parseToday(result.text, location)
+                        if (parsed == null || parsed.epochDay != AppZone.todayEpochDay()) {
+                            if (notToday == null) notToday = result
+                            reasons += if (parsed == null) {
+                                "${hostOf(url)}: 正文解析不出来"
+                            } else {
+                                "${hostOf(url)}: 文件不是今天的"
+                            }
+                            continue
+                        }
+                        val age = ageOf(parsed.updatedAtMillis)
+                        // 已经选过一份、而这份不比它新 → 不用再管这个镜像。
+                        if (best != null && age >= bestAge) {
+                            reasons += "${hostOf(url)}: 比已选中的那份还旧"
+                            continue
+                        }
+                        best = result
+                        bestAge = age
+                        // 从这一刻起才算「找更新的」：预算从此刻开始走。
+                        if (searchDeadline == 0L) {
+                            searchDeadline = nowMillis() + SEARCH_BUDGET_MILLIS
+                        }
+                        // **够新就收手**：后面的镜像推的是同一份文件，只是推送时刻不同，
+                        // 再问下去只是白等。
+                        if (age in 0 until FRESH_FILE_WINDOW_MILLIS) {
+                            return@withContext result
+                        }
                     }
                     is WeatherFetch.Unavailable -> {
                         reasons += "${hostOf(url)}: ${result.reason}"
@@ -80,23 +121,33 @@ class SeniverseWeatherSource(
                 }
             }
 
-            notToday ?: WeatherFetch.Unavailable(
+            best ?: notToday ?: WeatherFetch.Unavailable(
                 reasons.joinToString("；").ifEmpty { "没有配置任何天气远程地址" },
                 WeatherFailureKind.OFFLINE
             )
         }
     }
 
-    /** 这份文件是不是**今天**的。解不出来也算「不是今天」—— 交给决策层去报错。 */
-    private fun isToday(text: String, location: WeatherLocation): Boolean {
-        val parsed = parseToday(text, location) ?: return false
-        return parsed.epochDay == AppZone.todayEpochDay()
+    /**
+     * 这份文件有多旧（毫秒）。
+     *
+     * **没有 `lastUpdated` 的文件按「无限旧」算**，而不是按「刚刚」算：
+     * 判不出年龄就等于判不出新旧，而把它当成新的会正好毁掉这个机制
+     * （第一个没有时间戳的镜像会把后面更新的那份比下去）。
+     *
+     * 时间戳在未来（时钟不一致）同样按「无限旧」算 —— 宁可多问一个镜像，
+     * 也不要让一份来路不明的时间戳把顺序搅乱。
+     */
+    private fun ageOf(updatedAtMillis: Long?): Long {
+        if (updatedAtMillis == null) return Long.MAX_VALUE
+        val age = nowMillis() - updatedAtMillis
+        return if (age < 0) Long.MAX_VALUE else age
     }
 
     private fun hostOf(url: String): String = url.toHttpUrlOrNull()?.host ?: url
 
-    private fun fetchOne(url: String): WeatherFetch = try {
-        client.newCall(Request.Builder().url(url).get().build()).execute().use { res ->
+    private fun fetchOne(url: String, callClient: OkHttpClient = client): WeatherFetch = try {
+        callClient.newCall(Request.Builder().url(url).get().build()).execute().use { res ->
             classify(res.body?.string(), res.code)
         }
     } catch (e: Exception) {
@@ -129,7 +180,11 @@ class SeniverseWeatherSource(
             // （空气来自 Open-Meteo，它只给 us_aqi、不给中文等级），
             // 于是走 describeAqi 兜底。字段本身留着：换回心知时它就有值了，
             // 而那时它比本地那张表更权威（等级和数值出自同一份数据）。
-            aqiQuality = dto.aqiQuality?.takeIf { it.isNotBlank() }
+            aqiQuality = dto.aqiQuality?.takeIf { it.isNotBlank() },
+            // **文件自己的写入时刻**。这是判断「这份数据有多旧」的唯一依据，
+            // 少了它，客户端只能靠 `date`（是不是今天）去猜新鲜度 ——
+            // 而 `date` 分不开「今天早上的」和「今天晚上的」。
+            updatedAtMillis = dto.lastUpdated
         )
     }
 
@@ -145,6 +200,56 @@ class SeniverseWeatherSource(
 
     companion object {
         /**
+         * 一份托管文件「够新」的门槛：**3 小时**。
+         *
+         * ## 这个数字从哪来
+         *
+         * 上游的调度目标是「`weather.json` 的年龄 ≤ 3 小时」，看门狗工作流
+         * （`.github/workflows/weather-watchdog.yml`）每 30 分钟查一次，
+         * 超过 3 小时就补跑一次同步并把结论亮出来。
+         * 所以「3 小时」在这里不是一句愿望，而是**上游在维持的承诺**。
+         *
+         * ## 它在这里干什么用
+         *
+         * 只决定**要不要继续试下一个镜像**：手上这份够新就不问了
+         * （快路径，国内直连的 Gitee 0.4 秒就能拿到）；
+         * 不够新才把剩下的镜像挨个试一遍，最后取 `lastUpdated` 最大的那份。
+         *
+         * ## 为什么不能只看 `date`
+         *
+         * `date` 只能分出「今天 / 不是今天」。同一个今天里可以藏着差别巨大的
+         * 两份数据：一份 20 分钟前的，一份 8 小时前的（Gitee 那次推送失败，
+         * GitHub 上已经是新的，它还停在 8 小时前 —— 实测 2026-11-02 就这样）。
+         * 「第一个 date 是今天的就收手」会把那份旧的当成现状显示，
+         * 而后面那个镜像上更新的那份**根本读不到**。
+         */
+        const val FRESH_FILE_WINDOW_MILLIS = 3L * 60L * 60L * 1000L
+
+        /**
+         * 「再去找一份更新的」这件事**最多花多久**：**3 秒**。
+         *
+         * ## 为什么要有这个上限
+         *
+         * 客户端只有在**自己那份缓存已经旧了**（≥ [FRESH_FILE_WINDOW_MILLIS]）时才会联网，
+         * 而镜像推的是同一份文件 —— 所以**每次联网，手上那份几乎必然也是旧的**，
+         * 「够新就收手」那条快路径在日常里基本不触发。
+         * 不设上限的话，一次冷启动就要把三个镜像挨个走完（每个 5 秒连接超时、
+         * 8 秒读取超时），实测能到 20 秒以上 —— 那是天气块那种次要信息
+         * 拖慢整屏的代价。
+         *
+         * ## 3 秒怎么来的
+         *
+         * 实测国内直连：Gitee 0.4 秒、ghproxy 1.5 秒、raw.githubusercontent 连不上。
+         * 也就是说**有用的是前两个**，第三个基本是必挂的 —— 3 秒预算够问完
+         * 前两个，而问第三个的那部分被预算自动截断。
+         *
+         * 预算**从拿到第一份今天的文件那一刻开始走**，所以：
+         * 第一个镜像（它可能本来就是唯一能通的那个）仍然用完整的超时；
+         * 后面的才是「找更新的」，超时就走人，拿到手上有几份算几份。
+         */
+        const val SEARCH_BUDGET_MILLIS = 3L * 1000L
+
+        /**
          * 静态天气数据的托管地址，逐个镜像回退。
          *
          * **顺序按「国内能直连」排，不按「离源近」排。**
@@ -155,6 +260,11 @@ class SeniverseWeatherSource(
          *
          * 排在最后的 raw.githubusercontent 仍要留着：它在墙外网络上反而最稳，
          * 而 App 只服务国内这件事不该写死成一个「只有这几个能用」的假设。
+         *
+         * **顺序不再决定「谁被采纳」。** 采纳的是 `lastUpdated` 最大的那份
+         * （见 [FRESH_FILE_WINDOW_MILLIS]）—— 排在前面的镜像只是**先被问**，
+         * 它排第一不代表它更权威。这也正是 Gitee 排第一却曾经拖累一整天
+         * 天气的原因：它恰好是那个会推送失败的镜像。
          */
         val REMOTE_URLS = listOf(
             "https://gitee.com/zjuchenqianyu/MiuList/raw/main/weather.json",
