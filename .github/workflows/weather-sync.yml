@@ -116,8 +116,11 @@ jobs:
           fi
           echo "Gitee 镜像已确认指向 $LOCAL_HEAD"
 
-      # 最后再自检一次**这份文件本身**有多旧。
-      # 上面几步全绿也可能是一份 8 小时前的文件被推来推去 ——
-      # 这条把「新鲜」这件事也纳入流水线自己的结论。
-      - name: 自检这份文件够不够新
+      # 最后再自检一次**这份文件本身**能不能用：年龄 ≤ 3 小时，且 `date` 是今天。
+      #
+      # 年龄这一半在这里基本恒真（`sync_weather.py` 刚写下 `lastUpdated = now`），
+      # 它挡的是 runner 时钟跑飞；**`date` 这一半是实打实的** ——
+      # 心知偶尔会返回前一天的 `daily[0]`，那样推上去的文件客户端根本不会显示
+      # （`cachedToday()` 按「不是今天」判掉），而上面几步全是绿的。
+      - name: 自检这份文件还能不能用
         run: python scripts/check_weather_freshness.py --max-age-hours 3
