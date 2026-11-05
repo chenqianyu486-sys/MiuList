@@ -115,14 +115,17 @@ class WeatherService(
         // 日期对不上 = 昨天的那份，不能当今天显示。
         val today = parsed.takeIf { it.epochDay == today() } ?: return null
         // 空气质量解不出来就当没有这一项 —— 天气本身仍然是今天的，照常显示。
-        // **注意那个 `?: parsed.aqi`**：空气是可选的额外端点，托管源里它本来就
-        // 嵌在天气正文里（airBody 恒为 null）。少了这个回退就会把已经解析出来的
-        // 读数覆盖成 null，于是每次命中缓存都把空气抹掉 —— 症状是「联网那一下有，
-        // 三小时内再进 App 就没了」。
+        //
+        // **正文里的国标值优先。** 托管源把国标/美国两套空气读数都嵌在天气
+        // 正文里；旧缓存可能另带一份 `airBody`（旧源/旧格式），它的标准不确定，
+        // 不能覆盖已经解析出来的国标读数。只有正文没有 `aqi` 时才退回它。
+        //
+        // 少了这个回退又会把已经解析出来的读数覆盖成 null，于是每次命中缓存
+        // 都把空气抹掉 —— 症状是「联网那一下有，三小时内再进 App 就没了」。
         val airBody = envelope?.airBody
-        val aqi = airBody
+        val airAqi = airBody
             ?.let { runCatching { source.parseAirQuality(it) }.getOrNull() }
-            ?: parsed.aqi
+        val aqi = parsed.aqi ?: airAqi
         // 只换数值，不动 aqiQuality：等级是跟着 parseToday 一起从上游来的，
         // 单独覆盖数值会让这两个字段来自不同口径。
         return CachedEntry(today.copy(aqi = aqi), fetchedAt)
@@ -239,12 +242,14 @@ class WeatherService(
                         )
                     }
                     else -> {
-                        // 空气是**另一个端点**，单独拉、单独成败。它挂了不该把
-                        // 整块天气变成「读不到」，所以失败就是 null，不进 Unavailable。
-                        // 天气照常显示，只是城市名旁边少一段。
+                        // 托管源的空气已经嵌在正文里，这个独立端点只剩旧源/测试桩
+                        // 会用。它挂了不该把整块天气变成「读不到」，所以失败就是
+                        // null，不进 Unavailable。天气照常显示，只是少一段空气。
+                        //
+                        // 正文里的国标值优先；独立端点只有在正文没有 aqi 时才补位。
                         val airBody = fetchAirQualityBody()
                         writeCache(fetched.text, airBody)
-                        val aqi = airBody?.let(::parseAirQualityOrNull) ?: parsed.aqi
+                        val aqi = parsed.aqi ?: airBody?.let(::parseAirQualityOrNull)
                         WeatherState.Available(
                             parsed.copy(aqi = aqi),
                             fromCache = false

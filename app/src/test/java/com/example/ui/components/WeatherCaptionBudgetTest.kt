@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.font.FontWeight
+import com.example.data.source.weather.AqiStandard
 import com.example.data.source.weather.DailyWeather
 import com.example.data.source.weather.WeatherLocation
 import com.example.data.source.weather.describeAqi
@@ -49,7 +50,14 @@ class WeatherCaptionBudgetTest {
     private fun widthDp(text: String): Double =
         text.sumOf { advanceEm(it) + letterSpacingEm } * CaptionFontSize.value
 
-    private fun caption(city: String, aqi: Int?, quality: String? = null) = weatherCaption(
+    private fun caption(
+        city: String,
+        aqi: Int? = null,
+        quality: String? = null,
+        usAqi: Int? = null,
+        usQuality: String? = null,
+        standard: AqiStandard = AqiStandard.CN
+    ) = weatherCaption(
         DailyWeather(
             cityName = city,
             epochDay = 0L,
@@ -58,8 +66,11 @@ class WeatherCaptionBudgetTest {
             high = 25,
             low = 19,
             aqi = aqi,
-            aqiQuality = quality
-        )
+            aqiQuality = quality,
+            usAqi = usAqi,
+            usAqiQuality = usQuality
+        ),
+        standard
     )
 
     private fun assertFits(text: String) {
@@ -94,6 +105,38 @@ class WeatherCaptionBudgetTest {
     @Test
     fun `上游给的等级也放得下`() {
         assertFits(caption(WeatherLocation.DEFAULT.name, 302, quality = "严重污染"))
+    }
+
+    /**
+     * 美国模式：「杭州 · 空气轻度污染 121」。
+     *
+     * 文案格式与国标相同，只是数值/等级来自 `usAqi`。
+     * 它和国标最坏那句一样长，不能因为“美国模式少见”就不量。
+     */
+    @Test
+    fun `美国口径的读数也放得下`() {
+        listOf(50, 121, 302, 500).forEach { aqi ->
+            assertFits(
+                caption(
+                    WeatherLocation.DEFAULT.name,
+                    usAqi = aqi,
+                    standard = AqiStandard.US
+                )
+            )
+        }
+    }
+
+    /** 上游给了美国等级时，用上游的等级，同样要放得下。 */
+    @Test
+    fun `上游给的美国等级也放得下`() {
+        assertFits(
+            caption(
+                WeatherLocation.DEFAULT.name,
+                usAqi = 302,
+                usQuality = "严重污染",
+                standard = AqiStandard.US
+            )
+        )
     }
 
     /** 本地表里每一个等级都得放得下 —— 别只测了最长的那档。 */

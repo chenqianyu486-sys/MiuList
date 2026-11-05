@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import com.example.data.source.weather.AqiStandard
 import com.example.data.source.weather.DailyWeather
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -16,7 +17,8 @@ class WeatherCaptionTest {
     private fun weather(
         city: String = "杭州",
         aqi: Int? = 68,
-        quality: String? = null
+        quality: String? = null,
+        usAqi: Int? = 121
     ) = DailyWeather(
         cityName = city,
         epochDay = 0L,
@@ -25,7 +27,8 @@ class WeatherCaptionTest {
         high = 25,
         low = 19,
         aqi = aqi,
-        aqiQuality = quality
+        aqiQuality = quality,
+        usAqi = usAqi
     )
 
     /** 用户本轮定的样子：地名与空气读数之间用「·」。 */
@@ -72,5 +75,32 @@ class WeatherCaptionTest {
     @Test
     fun `最长的组合写成什么样`() {
         assertEquals("杭州 · 空气严重污染 500", weatherCaption(weather(aqi = 500)))
+    }
+
+    /**
+     * 美国模式换成美国的**数值和等级**，文案仍是自然的中文。
+     *
+     * 「美国严重污染」不是正常中文；当前标准由设置开关说明，
+     * 这一行只负责说清「空气怎么样」。
+     */
+    @Test
+    fun `美国模式用美国数值但文案保持自然`() {
+        assertEquals(
+            "杭州 · 空气轻度污染 121",
+            weatherCaption(weather(aqi = 60, usAqi = 121), AqiStandard.US)
+        )
+    }
+
+    /** 选中的口径没有值时不回退到另一套，也不留下半个标点。 */
+    @Test
+    fun `所选口径没有值时不回退`() {
+        assertEquals(
+            "杭州",
+            weatherCaption(weather(aqi = 60, usAqi = null), AqiStandard.US)
+        )
+        assertEquals(
+            "杭州",
+            weatherCaption(weather(aqi = null, usAqi = 121), AqiStandard.CN)
+        )
     }
 }

@@ -33,8 +33,11 @@ class SeniverseWeatherSourceTest {
               "textNight": "阴",
               "high": 24,
               "low": 15,
-              "aqi": 45,
-              "aqiQuality": "优"
+              "aqi": 30,
+              "aqiQuality": "优",
+              "usAqi": 45,
+              "usAqiQuality": "优",
+              "aqiStandard": "CN"
             }
         """.trimIndent()
 
@@ -55,45 +58,50 @@ class SeniverseWeatherSourceTest {
         assertEquals("阴", weather.textNight)
         assertEquals(24, weather.high)
         assertEquals(15, weather.low)
-        assertEquals(45, weather.aqi)
+        // 两套数各在各的字段里，**不互相覆盖**。
+        assertEquals(30, weather.aqi)
+        assertEquals(45, weather.usAqi)
         // 等级必须跟着一起解析出来：它和数值是同一份数据里的，
-        // 丢了就得靠 EPA 表去猜一个（见 aqiQuality 优先那条用例）。
+        // 丢了才退回本地那张表（见 aqiQuality 优先那条用例）。
         assertEquals("优", weather.aqiQuality)
+        assertEquals("优", weather.usAqiQuality)
     }
 
     /**
      * **等级要和数值一起从托管文件里出来。**
      *
-     * 托管文件里的 `aqi` 是**心知口径**，而界面上那张等级表是 EPA 的分段 ——
-     * 同一片空气两边能差出一整个等级。所以上游给了 `aqiQuality` 就必须用它，
-     * 不能只取数值、把等级交给本地那张猜出来的表。
+     * 新文件里 `aqi` 是国标、`usAqi` 是美国值，各带各的等级。上游给了
+     * `aqiQuality` 就必须用它，不能只取数值、把等级交给本地那张表 ——
+     * 尤其是美国值：它和国标的等级名一样，数值却不同。
      */
     @Test
-    fun `托管文件里的等级跟着数值一起解析`() {
+    fun `国标等级跟着国标数值一起解析`() {
         val json = """
             {"date":"2026-10-17","textDay":"阴","textNight":"阴","high":24,"low":15,
-             "aqi":132,"aqiQuality":"轻度污染"}
+             "aqi":132,"aqiQuality":"轻度污染",
+             "usAqi":161,"usAqiQuality":"中度污染","aqiStandard":"CN"}
         """.trimIndent()
 
         val weather = source().parseToday(json, HANGZHOU)!!
 
         assertEquals(132, weather.aqi)
         assertEquals("轻度污染", weather.aqiQuality)
-        // 132 在那张兜底表里也是「轻度污染」，但那是巧合 —— 这里钉的是「用上游的」。
+        assertEquals(161, weather.usAqi)
+        assertEquals("中度污染", weather.usAqiQuality)
         assertEquals("空气轻度污染 132", weather.airQualityLabel())
+        assertEquals("空气中度污染 161", weather.airQualityLabel(AqiStandard.US))
     }
 
     /**
-     * **当前真实的托管文件形态：只有 `aqi`，`aqiQuality` 是 null。**
+     * **旧格式：只有 `aqi`，而那个 `aqi` 其实是美国 `us_aqi`。**
      *
-     * 空气这一项 2026-10-18 起换成了 Open-Meteo，它只给 `us_aqi`、不给中文等级，
-     * 所以同步脚本写进去的 `aqiQuality` 就是 null。于是等级**必须**由客户端
-     * 那张表算出来 —— 少了这一步，界面上会直接不显示这一段。
-     *
-     * 这条用的是线上真实拿到的形状，别把它简化成「顺手带上 quality」。
+     * 2026-11 之前同步脚本只取了 Open-Meteo 的 `us_aqi`，却写在 `aqi` 键上，
+     * 客户端再按国标等级表翻译 —— 这是这次要修的错的根源。
+     * 新客户端遇到这种文件时，把它搬到 `usAqi`，国标留空：
+     * 宁可国标模式暂时不显示，也不把美国数当国标。
      */
     @Test
-    fun `没有上游等级时由本地表算出等级`() {
+    fun `旧文件的 aqi 按美国口径解析`() {
         val json = """
             {"lastUpdated":1792324861294,"cityName":"杭州","date":"2026-10-18",
              "textDay":"阴","textNight":"多云","high":32,"low":21,
@@ -102,9 +110,47 @@ class SeniverseWeatherSourceTest {
 
         val weather = source().parseToday(json, HANGZHOU)!!
 
-        assertEquals(90, weather.aqi)
+        assertNull("旧 aqi 不能当国标", weather.aqi)
         assertNull(weather.aqiQuality)
-        assertEquals("空气良 90", weather.airQualityLabel())
+        assertEquals(90, weather.usAqi)
+        assertNull(weather.airQualityLabel(AqiStandard.CN))
+        assertEquals("空气良 90", weather.airQualityLabel(AqiStandard.US))
+    }
+
+    /**
+     * 新文件没有上游等级时，国标模式才用本地那张表算等级。
+     *
+     * 这张表只在「指数 → 等级」这一步用；浓度 → 指数已经在服务端做完了。
+     */
+    @Test
+    fun `新文件没有上游等级时由本地表算出等级`() {
+        val json = """
+            {"lastUpdated":1792324861294,"cityName":"杭州","date":"2026-10-18",
+             "textDay":"阴","textNight":"多云","high":32,"low":21,
+             "aqi":60,"aqiQuality":null,
+             "usAqi":100,"usAqiQuality":null,"aqiStandard":"CN"}
+        """.trimIndent()
+
+        val weather = source().parseToday(json, HANGZHOU)!!
+
+        assertEquals(60, weather.aqi)
+        assertNull(weather.aqiQuality)
+        assertEquals("空气良 60", weather.airQualityLabel())
+    }
+
+    /** 文件明确标了 `"US"` 时，`aqi` 仍然是美国值，不能倒过来当国标。 */
+    @Test
+    fun `明确标记美国口径时 aqi 按美国解析`() {
+        val json = """
+            {"date":"2026-10-17","textDay":"晴","textNight":"晴","high":20,"low":10,
+             "aqi":120,"aqiQuality":"轻度污染","aqiStandard":"US"}
+        """.trimIndent()
+
+        val weather = source().parseToday(json, HANGZHOU)!!
+
+        assertNull(weather.aqi)
+        assertEquals(120, weather.usAqi)
+        assertEquals("空气轻度污染 120", weather.airQualityLabel(AqiStandard.US))
     }
 
     /**
@@ -160,8 +206,10 @@ class SeniverseWeatherSourceTest {
     }
 
     @Test
-    fun `parseAirQuality 能正确提取内嵌 AQI`() {
-        assertEquals(45, source().parseAirQuality(OK_STATIC_JSON))
+    fun `parseAirQuality 能正确提取内嵌国标 AQI`() {
+        // 空气已内嵌在天气文件里，这条独立入口只剩兼容用途；
+        // 它取的是 `aqi`（国标），不是 `usAqi`。
+        assertEquals(30, source().parseAirQuality(OK_STATIC_JSON))
         assertNull(source().parseAirQuality("""{"textDay":"晴"}"""))
         assertNull(source().parseAirQuality("invalid json"))
     }

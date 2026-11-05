@@ -83,11 +83,16 @@ class HostedWeatherLiveTest {
     /**
      * 空气那一项是**嵌在天气文件里**的（由 CI 拿 Open-Meteo 的读数拼进去）。
      *
-     * 这一条断掉时，界面上会在城市名旁边少一段空气质量 —— 而那是个
-     * **没有报错、没有日志、只是少了一小段**的故障，最难被用户当成故障报上来。
+     * 新文件应该同时带**国标** `aqi` 和**美国** `usAqi`。这一条断掉时，
+     * 界面上会在城市名旁边少一段空气质量 —— 而那是个**没有报错、没有日志、
+     * 只是少了一小段**的故障，最难被用户当成故障报上来。
+     *
+     * 旧镜像可能只有 `aqi`（且那是美国值），所以这里分开校验：
+     * 两套有值时都必须在合理区间，不硬性要求同时存在 ——
+     * 这一条守的是「解析口径没变」，不是 CI 的空气质量健康检查。
      */
     @Test
-    fun `文件里带着空气质量`() = runTest {
+    fun `文件里带着两套空气质量`() = runTest {
         val source = SeniverseWeatherSource()
         val fetched = source.fetchToday(location)
         assertTrue(
@@ -102,9 +107,13 @@ class HostedWeatherLiveTest {
         // 这里只断言「有值时它得是个合理的读数」，不硬性要求非空 ——
         // Open-Meteo 偶尔会短时拿不到，硬要求会让这条用例变成 CI 的健康检查，
         // 而它该守的是「解析口径没变」。
-        val aqi = parsed!!.aqi
-        if (aqi != null) {
-            assertTrue("AQI 读数离谱：$aqi", aqi in 0..500)
+        val usAqi = parsed!!.usAqi
+        if (usAqi != null) {
+            assertTrue("美国 AQI 读数离谱：$usAqi", usAqi in 0..500)
+        }
+        val cnAqi = parsed.aqi
+        if (cnAqi != null) {
+            assertTrue("国标 AQI 读数离谱：$cnAqi", cnAqi in 0..500)
         }
     }
 

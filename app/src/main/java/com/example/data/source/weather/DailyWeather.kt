@@ -17,21 +17,27 @@ package com.example.data.source.weather
  *   见 [WeatherLocation.name]——坐标接口不回传地名，显示什么由我们声明。
  * @property epochDay 这一份预报对应的**当地日期**。
  *   缓存能不能用、新旧能不能混，全靠它 —— 昨天的高低温不叫今天的天气。
- * @property aqi 抓取这一份时的**当前**空气质量指数。拉不到就是 null。
+ * @property aqi **中国国标 HJ 633-2012** 的 AQI。服务端用 Open-Meteo 的
+ *   六污染物按国标断点算出（PM / NO₂ / SO₂ / CO 用 24h 均值，O₃ 用 8h 均值），
+ *   拉不到就是 null。
  *
- *   **原样存，不做任何换算。** AQI 的换算涉及主污染物与平均时间的口径差异，
- *   不是一条线性公式，换算表只在数据源手里 —— 在客户端猜一个就是凭空造一个数。
- *   等级判定不受影响：见 [describeAqi]，国标与 EPA 的分段一致，
- *   所以那张表对心知、Open-Meteo 两种来源都成立。
+ *   旧格式的 `weather.json`（2026-11 之前）里这个键装的是美国 `us_aqi`。
+ *   数据源解析时会把那种文件搬到 [usAqi]，并把这里的国标值留空 ——
+ *   宁可这一段不显示，也不把美国数当国标显示。
  *
  *   它**不是**「当天的 AQI」—— 天气是逐日聚合，空气是抓的那一刻的读数，
  *   两者的有效期本来就不同，所以它可空，而且没有任何「昨天那份」可退回：
  *   拉不到就是拉不到，界面不显示这一段，而不是继续显示几小时前的旧读数。
  *   用户会照着它决定今天戴不戴口罩，旧的比没有更糟。
- * @property aqiQuality **数据源自己给的等级文字**（如「优」「轻度污染」）。
+ * @property aqiQuality 服务端给的**国标等级**（如「优」「轻度污染」），
+ *   与 [aqi] 出自同一份数据；为空时才退回 [describeAqi]。
+ * @property usAqi **美国 EPA** 口径的 AQI，Open-Meteo 原生 `us_aqi`。
  *
- *   有它就说明这套等级是跟着数值一起从上游来的，配对关系由上游保证；
- *   没有它才退回 [describeAqi] 按 EPA 分段推 —— 那是一张猜出来的表。
+ *   它按 PM2.5 的 24h 均值算，不是「当前小时浓度」的指数；和 [aqi] 是两个
+ *   不同的数，不是同一个数的两种写法。只在美国模式下显示。
+ * @property usAqiQuality 美国口径的等级（如「良」「轻度污染」）。
+ *   它和 [usAqi] 出自同一份数据；为空时才用 [describeAqi] 兜底。
+ *   两套的等级名一样、数值不同；当前显示哪套由设置决定，不在这行文案里区分。
  */
 data class DailyWeather(
     val cityName: String,
@@ -42,6 +48,8 @@ data class DailyWeather(
     val low: Int?,
     val aqi: Int? = null,
     val aqiQuality: String? = null,
+    val usAqi: Int? = null,
+    val usAqiQuality: String? = null,
     /**
      * 这一份数据是**上游文件写下来的那一刻**（epoch 毫秒）。
      *
@@ -99,19 +107,27 @@ data class DailyWeather(
     }
 
     /**
-     * 「空气良 64」。拉不到（[aqi] 为 null）就返回 null，界面直接不画这一段。
+     * 「空气良 64」或「空气轻度污染 121」。两侧的等级名一样，数值不同。
+     * 所选口径没有读数就返回 null，界面直接不画这一段。
      *
-     * 等级**优先用 [aqiQuality]**（上游给的，和数值同一份、同一套口径）；
-     * 没有才退回 [describeAqi] 那张 EPA 分段表 —— 那是猜的，
-     * 所以只在真的没有上游等级时才用。
+     * **两套不互相回退**：选了国标但文件里只有美国值，就当作没有；
+     * 选了美国但只有国标值，同理。混着显示比少一段更坏 ——
+     * 用户会以为两个数可以直接比较。
      *
-     * 只写等级 + 数值，不写「AQI」三个字母：那一块就 92dp 宽，
-     * 而「良 64」已经足够让人判断今天要不要戴口罩 —— 指数这东西对多数人是陌生的，
-     * 等级才是他们真正会用的。
+     * **两套共用同一种自然写法。** 不在这一行里写「美国」：
+     * 「美国严重污染」不是正常中文，而那一格只有 92dp 宽，字号又是 9sp。
+     * 当前标准由设置页那颗开关说明；这里只负责把等级和数值说清楚。
      */
-    fun airQualityLabel(): String? {
-        val value = aqi ?: return null
-        val word = aqiQuality?.takeIf { it.isNotBlank() } ?: describeAqi(value)
+    fun airQualityLabel(standard: AqiStandard = AqiStandard.CN): String? {
+        val value = when (standard) {
+            AqiStandard.CN -> aqi
+            AqiStandard.US -> usAqi
+        } ?: return null
+        val quality = when (standard) {
+            AqiStandard.CN -> aqiQuality
+            AqiStandard.US -> usAqiQuality
+        }
+        val word = quality?.takeIf { it.isNotBlank() } ?: describeAqi(value)
         return "空气$word $value"
     }
 
@@ -159,23 +175,27 @@ sealed interface WeatherFetch {
 enum class WeatherFailureKind { OFFLINE, REJECTED }
 
 /**
- * 空气质量指数 → 中文等级。
+ * AQI 指数 → 中文等级。
  *
  * 分段抄自**中国国标 HJ 633-2012 附录 1**：
  * `0-50 优`、`51-100 良`、`101-150 轻度污染`、`151-200 中度污染`、
  * `201-300 重度污染`、`300+ 严重污染`。
  *
- * ## 为什么这张表同时适用于两种口径
+ * ## 这张表只管「指数 → 等级」，不管「浓度 → 指数」
  *
- * 美国 EPA 用的分段与国标**在这六个分界点上完全一致**，所以不必问
- * 「当前数据是哪套口径的」—— 换上游（心知 ↔ Open-Meteo）不影响结果。
- * 这也是这张表能当兜底的前提。
+ * 美国 EPA 与国标在**这六个指数分界**上完全一致，所以同一个指数
+ * （比如 64）在两套口径下都叫「良」。但这**不表示两套指数可以互换**：
+ * 浓度断点不一样 —— PM2.5 35 µg/m³ 国标算出 50，美国算出 99；
+ * 75 µg/m³ 国标 100，美国约 161。把美国指数套上这张表，
+ * 等于用一把尺子的刻度去读另一把尺子的长度。
+ *
+ * 浓度→指数只由数据源/服务端做：国标在 `scripts/sync_weather.py`，
+ * 美国值直接用 Open-Meteo 的 `us_aqi`。客户端不猜、不换算。
  *
  * ## 它是兜底，不是首选
  *
- * 数值由数据源给，而**等级优先用 [DailyWeather.aqiQuality]**（上游自己那份）。
- * 上游的等级和数值出自同一份数据、配对关系由它保证；这张表是把一个裸整数
- * 映射成等级。当前上游（Open-Meteo）不给中文等级，走的正是这张兜底表。
+ * **等级优先用 [DailyWeather.aqiQuality]**（服务端算出的国标等级，
+ * 与数值同一份数据）。为空时才用这张表把一个裸整数映射成等级。
  *
  * 超上限一律算「严重污染」：真出现 >500 说明这一片已经不能呼吸了，
  * 给它一个单独的名字没有意义，它该触发的是别的东西（不是本项目的活）。

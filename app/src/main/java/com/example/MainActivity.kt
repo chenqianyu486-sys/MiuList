@@ -769,6 +769,9 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                                     // 不用重启也不用等下一次进设置页。
                                     taskCompleteConfirmEnabled = state.isTaskCompleteConfirmEnabled,
                                     onTaskCompleteConfirmChange = { viewModel.setTaskCompleteConfirmEnabled(it) },
+                                    // AQI 两套数都在 weather.json 里，拨开关只换显示，不重新联网。
+                                    aqiStandard = state.aqiStandard,
+                                    onAqiStandardChange = { viewModel.setAqiStandard(it) },
                                     // 「检查更新」：只有手动点才会联网。
                                     appVersion = BuildConfig.VERSION_NAME,
                                     isCheckingAppUpdate = state.isCheckingAppUpdate,

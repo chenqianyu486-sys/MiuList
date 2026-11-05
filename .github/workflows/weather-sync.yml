@@ -44,6 +44,11 @@ jobs:
         with:
           python-version: '3.11'
 
+      # 国标 AQI 的浓度断点与 EPA 不同，改错一位就会让界面差一个等级。
+      # 这一步不联网，先跑纯函数测试，再覆盖 weather.json。
+      - name: Test AQI conversion
+        run: python scripts/test_sync_weather.py
+
       - name: Run sync script
         env:
           SENIVERSE_KEY: ${{ secrets.SENIVERSE_KEY }}

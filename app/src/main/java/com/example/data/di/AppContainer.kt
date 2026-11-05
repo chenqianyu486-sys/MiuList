@@ -8,6 +8,7 @@ import com.example.data.local.AppDatabase
 import com.example.data.model.CategoryRule
 import com.example.data.model.CourseCategory
 import com.example.data.repository.AcademicCalendarRepository
+import com.example.data.repository.AqiStandardPreference
 import com.example.data.repository.CourseRepository
 import com.example.data.repository.ExamRepository
 import com.example.data.repository.OnboardingRepository
@@ -129,6 +130,16 @@ class AppContainer(context: Context) {
         TaskCompleteConfirmPreference(appContext)
     }
 
+    /**
+     * 「天气块用国标还是美国 AQI」这个偏好（默认国标）。
+     *
+     * 同样是**偏好**而不是数据：两份 AQI 都由 CI 写进 weather.json，
+     * 这里只记住用户想看哪一个，拨开关不会触发任何网络请求。
+     */
+    val aqiStandardPreference: AqiStandardPreference by lazy {
+        AqiStandardPreference(appContext)
+    }
+
     val codec: ScheduleCodec by lazy { JsonScheduleCodec() }
 
     /**
@@ -218,6 +229,8 @@ class AppContainer(context: Context) {
      * 现在的形态是**静态托管**：客户端只拉一份公开的 `weather.json`，
      * 那份文件由 GitHub Actions 在云端合成 —— 天气本体用心知（地面观测），
      * 空气质量用 Open-Meteo（心知的空气接口要单独开通产品权限，一把 key 没有）。
+     * 空气在这个文件里带两套口径：国标（服务端换算）与美国（Open-Meteo 原生），
+     * 客户端设置里二选一，见 [AqiStandardPreference]。
      * 密钥只在 CI 的 Secrets 里，永远不进包，也不需要 `isConfigured` 闸门。
      *
      * 天气走托管而不是客户端直连心知，是因为直连就得把私钥塞进 APK。

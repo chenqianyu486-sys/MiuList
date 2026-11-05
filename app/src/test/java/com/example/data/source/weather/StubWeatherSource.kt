@@ -79,7 +79,7 @@ internal class StubWeatherSource(
     }
 
     override fun parseAirQuality(text: String): Int? =
-        runCatching { airAdapter.fromJson(text)?.current?.usAqi }.getOrNull()
+        runCatching { airAdapter.fromJson(text)?.current?.aqi }.getOrNull()
 
     private data class WeatherDto(
         val error: Boolean? = null,
@@ -95,14 +95,13 @@ internal class StubWeatherSource(
     private data class AirDto(val current: AirCurrentDto? = null)
 
     /**
-     * ⚠️ `us_aqi` 必须显式写 `@Json`。
+     * 这个桩模拟的是**旧版独立空气端点**：它的读数按国标处理（`aqi`）。
      *
-     * Moshi 默认**不**做驼峰 ↔ 下划线的转换：Kotlin 属性叫 `usAqi`，
-     * 它默认只认 JSON 键 `usAqi`。而上游那个键就叫 `us_aqi`。
-     * 少写这个注解的后果很安静：读数恒为 null，空气那一段永远不显示，
-     * 而天气照常显示 —— 界面上看不出任何异常。
+     * 真实托管源已经把国标/美国两套都嵌在天气正文里，这条独立路径只剩
+     * 兼容与测试用途 —— 所以这里的值必须是国标，不能拿 `us_aqi` 来顶替，
+     * 否则这组用例又会把美国数当成国标数来断言。
      */
-    private data class AirCurrentDto(@Json(name = "us_aqi") val usAqi: Int? = null)
+    private data class AirCurrentDto(@Json(name = "aqi") val aqi: Int? = null)
 
     private companion object {
         val moshi = Moshi.Builder()

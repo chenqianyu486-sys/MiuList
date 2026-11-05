@@ -852,6 +852,7 @@ fun DashboardScreen(
                                     state = state.weather,
                                     hourOfDay = AppZone.hourOfDayNow(),
                                     layout = WeatherLayout.STRIP,
+                                    aqiStandard = state.aqiStandard,
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
@@ -889,7 +890,8 @@ fun DashboardScreen(
                                     state = state.weather,
                                     hourOfDay = AppZone.hourOfDayNow(),
                                     layout = WeatherLayout.COLUMN,
-                                    blockWidth = heroLayout.weatherWidth
+                                    blockWidth = heroLayout.weatherWidth,
+                                    aqiStandard = state.aqiStandard
                                 )
                             }
                         }

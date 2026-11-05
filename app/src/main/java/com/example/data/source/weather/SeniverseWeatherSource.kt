@@ -31,8 +31,16 @@ import java.util.concurrent.TimeUnit
  * 只开通天气类的 key 调 `air/now.json` 会返回 `AP010002`（没有权限访问这个 API 接口）。
  * Open-Meteo 的空气端点不要 key，配额也不绑定账号。
  *
- * 所以这个类名里的 Seniverse 只对**天气**成立；空气是同一份文件里的另一个字段，
- * 它的口径与上游等级的处理见 [DailyWeather.aqi] 与 [DailyWeather.airQualityLabel]。
+ * 所以这个类名里的 Seniverse 只对**天气**成立；空气是同一份文件里的另一个字段。
+ *
+ * ## 文件里有两套 AQI
+ *
+ * Open-Meteo 原生给的是美国 EPA 的 `us_aqi`，不是国标。文件里同时带
+ * **国标值**（服务端按 HJ 633-2012 从六污染物换算）和**美国值**，
+ * 客户端设置里二选一，见 [AqiStandard] 与 [DailyWeather.airQualityLabel]。
+ *
+ * 旧文件只有一个 `aqi`，而且那一个是美国值 —— [parseToday] 会把它搬到
+ * `usAqi`，国标留空。宁可国标模式暂时不显示，也不把美国数当国标。
  *
  * ## 为什么不改成客户端直连 Open-Meteo 拿天气
  *
@@ -168,6 +176,28 @@ class SeniverseWeatherSource(
         val dto = runCatching { adapter.fromJson(text) }.getOrNull() ?: return null
         val epochDay = parseEpochDay(dto.date) ?: return null
 
+        // 新格式（2026-11 起）：`aqi` 是国标，`usAqi` 是美国值，文件里同时有两个。
+        // 旧格式：只有 `aqi`，而那个值其实是当时的美国 `us_aqi` —— 把它当国标
+        // 显示，就是这次要修的错的根源。所以旧格式一律搬到 `usAqi`，国标留空。
+        //
+        // 判据不是版本号，而是**字段形状**：有 `usAqi` 或明确写了
+        // `aqiStandard: "CN"`，说明 `aqi` 是国标；否则就是旧文件。
+        val standard = dto.aqiStandard?.trim()?.uppercase()
+        val hasCnField = dto.usAqi != null || standard == "CN"
+
+        val cnAqi = if (hasCnField) dto.aqi else null
+        val cnQuality = if (hasCnField) dto.aqiQuality.cleanQuality() else null
+        val usAqi = when {
+            standard == "US" -> dto.usAqi ?: dto.aqi
+            hasCnField -> dto.usAqi
+            else -> dto.aqi
+        }
+        val usQuality = when {
+            standard == "US" -> dto.usAqiQuality.cleanQuality() ?: dto.aqiQuality.cleanQuality()
+            hasCnField -> dto.usAqiQuality.cleanQuality()
+            else -> dto.aqiQuality.cleanQuality()
+        }
+
         return DailyWeather(
             cityName = dto.cityName?.takeIf { it.isNotBlank() } ?: location.name,
             epochDay = epochDay,
@@ -175,18 +205,22 @@ class SeniverseWeatherSource(
             textNight = dto.textNight.orEmpty(),
             high = dto.high,
             low = dto.low,
-            aqi = dto.aqi,
-            // **有上游等级就用上游那份。** 当前托管文件里这个字段是 null
-            // （空气来自 Open-Meteo，它只给 us_aqi、不给中文等级），
-            // 于是走 describeAqi 兜底。字段本身留着：换回心知时它就有值了，
-            // 而那时它比本地那张表更权威（等级和数值出自同一份数据）。
-            aqiQuality = dto.aqiQuality?.takeIf { it.isNotBlank() },
+            aqi = cnAqi,
+            // **有上游等级就用上游那份**。服务端现在会把国标等级一起写进文件；
+            // 旧文件/异常文件没有时才走 describeAqi 兜底。
+            aqiQuality = cnQuality,
+            usAqi = usAqi,
+            usAqiQuality = usQuality,
             // **文件自己的写入时刻**。这是判断「这份数据有多旧」的唯一依据，
             // 少了它，客户端只能靠 `date`（是不是今天）去猜新鲜度 ——
             // 而 `date` 分不开「今天早上的」和「今天晚上的」。
             updatedAtMillis = dto.lastUpdated
         )
     }
+
+    /** 空白等级等于没给；别让它进到「空气 $word」里变成两个空格。 */
+    private fun String?.cleanQuality(): String? =
+        this?.trim()?.takeIf { it.isNotBlank() }
 
     /**
      * 空气质量已合并在静态 `weather.json` 中，由 [parseToday] 一并解析。
@@ -303,6 +337,12 @@ data class StaticWeatherDto(
     @Json(name = "textNight") val textNight: String? = null,
     @Json(name = "high") val high: Int? = null,
     @Json(name = "low") val low: Int? = null,
+    /** 中国国标 AQI。旧文件里这个键装的是美国值，见 [parseToday] 的形状判定。 */
     @Json(name = "aqi") val aqi: Int? = null,
-    @Json(name = "aqiQuality") val aqiQuality: String? = null
+    @Json(name = "aqiQuality") val aqiQuality: String? = null,
+    /** 美国 EPA AQI（Open-Meteo 原生 `us_aqi`）。新文件才有。 */
+    @Json(name = "usAqi") val usAqi: Int? = null,
+    @Json(name = "usAqiQuality") val usAqiQuality: String? = null,
+    /** `"CN"` = [aqi] 是国标；缺省时靠 [usAqi] 是否存在区分新旧格式。 */
+    @Json(name = "aqiStandard") val aqiStandard: String? = null
 )

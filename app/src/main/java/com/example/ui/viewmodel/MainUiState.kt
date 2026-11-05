@@ -17,6 +17,7 @@ import com.example.data.model.TaskType
 import com.example.data.model.WallpaperConfig
 import com.example.data.source.zju.CoursesTodoItem
 import com.example.data.source.zju.ZjuFailureKind
+import com.example.data.source.weather.AqiStandard
 import com.example.data.source.weather.WeatherService
 import com.example.data.sync.SyncFailure
 import com.example.data.timetable.PeriodTable
@@ -415,6 +416,17 @@ data class MainUiState(
      * 是两件事，共用一个可空字段的话，界面上分不出该显示骨架还是该显示「未配置」。
      */
     val weather: WeatherService.WeatherState = WeatherService.WeatherState.Loading,
+
+    /**
+     * 天气块最后一行显示哪套 AQI。
+     *
+     * **默认国标**：国内用户比较的是国内天气 App / 国控站。美国口径是
+     * Open-Meteo 原生的 `us_aqi`，与国标不是同一个数（见 [AqiStandard]）。
+     *
+     * 它是偏好（SharedPreferences），不是数据库派生字段；设置页拨动后
+     * 只改这里，天气本身不用重新联网 —— 两个数都已经在 weather.json 里。
+     */
+    val aqiStandard: AqiStandard = AqiStandard.CN,
 
     // 学在浙大 (courses.zju.edu.cn) 待办事项
     val coursesTodoList: List<CoursesTodoItem> = emptyList(),

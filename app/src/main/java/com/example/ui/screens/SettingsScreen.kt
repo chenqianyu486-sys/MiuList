@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Explore
@@ -53,6 +54,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.source.weather.AqiStandard
 import com.example.ui.components.islandBottomInset
 import com.example.ui.theme.CardBlockGap
 import com.example.ui.theme.PageHInset
@@ -62,7 +64,8 @@ import com.example.ui.theme.glassSurface
 /**
  * 设置页。
  *
- * **六件事：待办完成确认、检查更新、课表导入/导出、待办分类管理、自定义壁纸、使用引导。**
+ * **七件事：待办完成确认、空气质量标准、检查更新、课表导入/导出、
+ * 待办分类管理、自定义壁纸、使用引导。**
  *
  * 原来这里是六个入口（账号同步 / 课程联动规则 / 待办生成规则 / 导入导出 /
  * 本学期校历 / 课程管理列表），其中**五个都已经搬到顶栏展开的「更多」页**：
@@ -82,9 +85,10 @@ import com.example.ui.theme.glassSurface
  * 这一项本身是什么**，而点进去的弹层里本来就写着；门口再说一遍是同一件事说两遍。
  * 标题 + 按钮已经足够点，副标题一律不要。
  *
- * **「待办完成确认」是这一页里唯一一个开关**，它排在最前面：它是**每天都要碰到**
- * 的一个决定（勾掉待办要不要多问一句），而下面那几张都是「不常动、动了要慎重」
- * 的数据操作。常用的放最上面，是为了不必往下滚就能改掉它。
+ * **前两项是偏好开关**，排在最前面：待办完成确认是每天都会碰到的决定
+ * （勾掉待办要不要多问一句）；空气质量标准决定天气块那一行显示国标还是
+ * 美国 AQI —— 两套数都在 weather.json 里，拨开关只换显示，不联网。
+ * 下面那几张都是「不常动、动了要慎重」的数据操作，常用的放最上面。
  */
 @Composable
 fun SettingsScreen(
@@ -95,6 +99,9 @@ fun SettingsScreen(
     /** 「完成待办前要不要先确认」。关掉之后点圆圈不再弹确认框。 */
     taskCompleteConfirmEnabled: Boolean = true,
     onTaskCompleteConfirmChange: (Boolean) -> Unit = {},
+    /** 天气块最后一行显示哪套 AQI。 */
+    aqiStandard: AqiStandard = AqiStandard.CN,
+    onAqiStandardChange: (AqiStandard) -> Unit = {},
     /** 当前版本号，显示在「关于」那一行。 */
     appVersion: String = "",
     /** 正在检查更新（按钮显示「检查中…」并禁用）。 */
@@ -106,6 +113,9 @@ fun SettingsScreen(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
+            // 加了一项 AQI 标准之后这一页变长了；测试要能滚到屏幕外的卡片，
+            // 不能靠“默认窗口里刚好露出来”这种脆弱的假设。
+            .testTag("settings_list")
             .padding(horizontal = PageHInset),
         verticalArrangement = Arrangement.spacedBy(CardBlockGap),
         // 底部给浮岛导航留出收尾空间，内容本身仍会滚到岛底下被毛玻璃糊住
@@ -122,6 +132,20 @@ fun SettingsScreen(
                 checked = taskCompleteConfirmEnabled,
                 onCheckedChange = onTaskCompleteConfirmChange,
                 testTag = "settings_task_complete_confirm_switch"
+            )
+        }
+
+        item {
+            // 两套 AQI 的**数值**不一样，不只是标签。天气块两套都用
+            // “空气 + 等级 + 数值”的自然文案，当前标准由这颗开关说明。
+            SettingsToggleCard(
+                icon = Icons.Outlined.Cloud,
+                title = "空气质量用美国 AQI",
+                checked = aqiStandard == AqiStandard.US,
+                onCheckedChange = { useUs ->
+                    onAqiStandardChange(if (useUs) AqiStandard.US else AqiStandard.CN)
+                },
+                testTag = "settings_us_aqi_switch"
             )
         }
 
@@ -455,8 +479,9 @@ internal val AcknowledgementsList = listOf(
         contributors = "Open-Meteo 团队；空气质量由哥白尼大气监测服务（CAMS）提供",
         // CC BY 4.0 的署名义务，必须带作者、许可协议、以及「数据可能有误」的免责。
         // 这一条不是客气话：删掉它就是把别人的数据拿来用而不署名。
-        note = "提供空气质量（AQI）数据，按 CC BY 4.0 授权（creativecommons.org/licenses/by/4.0/）；" +
-            "数据由数值模式生成，可能与地面实测存在偏差，不作为健康决策依据",
+        note = "提供空气质量原始污染物浓度与美国 EPA AQI，按 CC BY 4.0 授权" +
+            "（creativecommons.org/licenses/by/4.0/）；中国国标 AQI 由本应用按 HJ 633-2012" +
+            "从这些浓度换算。数据由数值模式生成，可能与地面实测存在偏差，不作为健康决策依据",
         url = "https://open-meteo.com"
     ),
     AcknowledgementInfo(

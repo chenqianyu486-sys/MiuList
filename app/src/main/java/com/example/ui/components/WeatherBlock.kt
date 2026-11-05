@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.source.weather.AqiStandard
 import com.example.data.source.weather.DailyWeather
 import com.example.data.source.weather.WeatherFailureKind
 import com.example.data.source.weather.WeatherService
@@ -194,6 +195,13 @@ fun WeatherBlock(
      */
     blockWidth: Dp = BlockWidth,
     /**
+     * 最后一行显示哪一套 AQI：国标（默认）或美国。
+     *
+     * 两套的数值来自同一份 weather.json 的不同字段，**不做换算**；
+     * 选了哪套就只显示哪套，另一套缺值时这一段直接不画。
+     */
+    aqiStandard: AqiStandard = AqiStandard.CN,
+    /**
      * 这一块的修饰符。
      *
      * **宽度不由它决定**：竖排版固定 [blockWidth]，横排版铺满父级给的宽度。
@@ -212,7 +220,7 @@ fun WeatherBlock(
                 value = weather.temperatureRange() ?: "--",
                 valueColor = MaterialTheme.colorScheme.onSurface,
                 valueWeight = FontWeight.ExtraBold,
-                caption = weatherCaption(weather),
+                caption = weatherCaption(weather, aqiStandard),
                 captionColor = TextSecondary,
                 layout = layout,
                 blockWidth = blockWidth,
@@ -274,11 +282,19 @@ fun WeatherBlock(
  *
  * 空气拉不到是常事（另一个端点，挂了就挂）。只显示「杭州」，
  * 绝不能显示成「杭州 ·」—— 那等于告诉用户有一段数据被吞了。
+ *
+ * [standard] 决定第二段用哪套 AQI 的**数值和等级**，文案格式两套相同：
+ * 都是「空气良 60」/「空气轻度污染 121」。当前标准由设置页开关说明，
+ * 不在这一行里写「美国」—— 两套都不回退到另一套，见
+ * [DailyWeather.airQualityLabel]。
  */
-internal fun weatherCaption(weather: DailyWeather): String =
+internal fun weatherCaption(
+    weather: DailyWeather,
+    standard: AqiStandard = AqiStandard.CN
+): String =
     listOfNotNull(
         weather.cityName.takeIf { it.isNotBlank() },
-        weather.airQualityLabel()
+        weather.airQualityLabel(standard)
     ).joinToString(SEPARATOR)
 
 /** 两段之间的分隔符，带两侧空格。UI 只有一个拼接点，符号与空格一起定在这里。 */

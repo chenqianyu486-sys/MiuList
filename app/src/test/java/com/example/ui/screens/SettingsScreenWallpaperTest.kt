@@ -1,10 +1,12 @@
 package com.example.ui.screens
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -33,6 +35,9 @@ class SettingsScreenWallpaperTest {
 
         // 这一项**只留标题**：原来卡下面还挂着「默认壁纸 · Cloudy Knoxville」
         // 这样的副标题，现在整个设置页的副标题一律不要了。
+        // 设置页现在比一屏长，先滚到这一项再断言。
+        composeTestRule.onNodeWithTag("settings_list")
+            .performScrollToNode(hasText("自定义壁纸"))
         composeTestRule.onNodeWithText("自定义壁纸").assertIsDisplayed()
         composeTestRule.onNodeWithText("默认壁纸 · Cloudy Knoxville").assertDoesNotExist()
 
@@ -51,8 +56,12 @@ class SettingsScreenWallpaperTest {
             )
         }
 
+        val list = composeTestRule.onNodeWithTag("settings_list")
+        list.performScrollToNode(hasText("数据导入 / 导出"))
         composeTestRule.onNodeWithText("数据导入 / 导出").assertIsDisplayed()
+        list.performScrollToNode(hasText("待办分类管理"))
         composeTestRule.onNodeWithText("待办分类管理").assertIsDisplayed()
+        list.performScrollToNode(hasText("自定义壁纸"))
         composeTestRule.onNodeWithText("自定义壁纸").assertIsDisplayed()
 
         // 四条副标题都不该再出现

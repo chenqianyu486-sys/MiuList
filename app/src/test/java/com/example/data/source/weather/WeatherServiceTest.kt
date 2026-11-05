@@ -67,8 +67,8 @@ class WeatherServiceTest {
                 "\"high\":${high.toInt()},\"low\":${low.toInt()}}"
         }
 
-        /** 空气正常：64 = 良。空气是**另一份正文**，与天气分开取。 */
-        const val AIR_OK = """{"current":{"time":"2026-10-16T14:00","interval":3600,"us_aqi":64}}"""
+        /** 空气正常：64 = 良（国标）。旧版独立端点，托管源已改为内嵌两套。 */
+        const val AIR_OK = """{"current":{"time":"2026-10-16T14:00","interval":3600,"aqi":64}}"""
     }
 
     @get:Rule
@@ -650,13 +650,13 @@ class DailyWeatherTextTest {
 /**
  * 空气质量的分级与文案。
  *
- * 分段抄的是**中国国标 HJ 633-2012**（心知空气产品采用的那套，
- * 与美国 EPA 的分段恰好逐点相同）而不是欧洲那套 —— 界面上写「良」时
- * 用户对的就是这套。选错一套，同一个 64 会一个叫「良」一个叫「较差」，
- * 那就不是翻译问题而是撒谎了。
+ * 分段抄的是**中国国标 HJ 633-2012**。美国 EPA 与它在**六档指数边界**
+ * （50/100/150/200/300）上一致，所以同一个指数在两套下叫同一个等级；
+ * 但**浓度断点不同**（PM2.5 35 µg/m³ 国标 50、美国 99），所以两套的
+ * 数值不能互换 —— 这是这次「AQI 不准」的根因。
  *
- * **但这张表只是兜底。** 托管源给的 `aqi` 带着上游自己的等级（`aqiQuality`），
- * 那个才优先用 —— 见下面「上游给了等级就用上游的」那几条。
+ * **这张表只是兜底。** 服务端给的 `aqiQuality` 优先用 —— 见下面
+ * 「上游给了等级就用上游的」那几条。
  */
 class AirQualityLabelTest {
 
@@ -727,5 +727,28 @@ class AirQualityLabelTest {
     @Test
     fun `没有读数时不产出文案`() {
         assertNull(DailyWeather("杭州", 0L, "晴", "", 20, 10).airQualityLabel())
+    }
+
+    /**
+     * 两套口径各显示各的，**绝不互相回退**。
+     *
+     * 同一个空气可能有 60（国标）和 121（美国）两个数；选哪套就只显示哪套。
+     * 如果美国模式回退到国标数、或反过来，用户会拿两个不同尺子的读数直接比较。
+     */
+    @Test
+    fun `国标与美国口径各显示各的`() {
+        val w = DailyWeather(
+            "杭州", 0L, "晴", "", 20, 10,
+            aqi = 60, aqiQuality = "良",
+            usAqi = 121, usAqiQuality = "轻度污染"
+        )
+
+        assertEquals("空气良 60", w.airQualityLabel())
+        // 美国模式只换数值和等级，文案仍是自然的中文。
+        assertEquals("空气轻度污染 121", w.airQualityLabel(AqiStandard.US))
+
+        // 缺了所选那套就当作没有，不拿另一套顶替。
+        assertNull(w.copy(usAqi = null).airQualityLabel(AqiStandard.US))
+        assertNull(w.copy(aqi = null).airQualityLabel(AqiStandard.CN))
     }
 }

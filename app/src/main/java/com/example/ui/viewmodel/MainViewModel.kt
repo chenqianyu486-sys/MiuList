@@ -31,6 +31,7 @@ import com.example.data.model.TaskType
 import com.example.data.repository.AcademicCalendarRepository
 import com.example.data.source.zju.CalendarUpdateService
 import com.example.data.source.zju.ZjuImportService
+import com.example.data.source.weather.AqiStandard
 import com.example.data.source.weather.WeatherService
 import com.example.data.sync.SyncFailure
 import com.example.data.sync.SyncResult
@@ -72,6 +73,7 @@ class MainViewModel(
     private val onboardingRepo = container.onboardingRepository
     private val quickGeneratePref = container.quickGeneratePreference
     private val taskCompleteConfirmPref = container.taskCompleteConfirmPreference
+    private val aqiStandardPref = container.aqiStandardPreference
     private val appUpdateChecker = container.appUpdateChecker
     private val zjuCoursesClient = container.zjuCoursesClient
     private val coursesTodoCache = container.coursesTodoCache
@@ -216,6 +218,10 @@ private val ruleFlow = combine(
         _uiState.update {
             it.copy(isTaskCompleteConfirmEnabled = taskCompleteConfirmPref.isEnabled)
         }
+
+        // 天气块用哪套 AQI：同步读出来，第一帧就是用户选的那套，
+        // 否则会先闪一下国标再跳成美国。
+        _uiState.update { it.copy(aqiStandard = aqiStandardPref.standard) }
 
         // 瞬间加载学在浙大待办的本地只读缓存（离线优先，零延迟呈现）
         val (cachedTodos, cachedTime) = coursesTodoCache.load()
@@ -1705,6 +1711,18 @@ private val ruleFlow = combine(
     fun setTaskCompleteConfirmEnabled(enabled: Boolean) {
         taskCompleteConfirmPref.isEnabled = enabled
         _uiState.update { it.copy(isTaskCompleteConfirmEnabled = enabled) }
+    }
+
+    /**
+     * 天气块最后一行用国标还是美国 AQI。
+     *
+     * 只改显示，**不重新联网**：两套数都已经在下一次拉到的 weather.json 里；
+     * 旧缓存里可能只有其中一套，那就按选中那套显示（缺了就不画这一段），
+     * 不回退到另一套。
+     */
+    fun setAqiStandard(standard: AqiStandard) {
+        aqiStandardPref.standard = standard
+        _uiState.update { it.copy(aqiStandard = standard) }
     }
 
     /**
