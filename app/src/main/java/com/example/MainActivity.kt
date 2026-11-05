@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -171,6 +172,9 @@ class MainActivity : ComponentActivity() {
      * 被拒绝之后不再每次冷启动追问：`hasRequestedPostNotifications` 只允许问一次，
      * 之后走设置弹层里的系统设置入口。用户明确想开的时候再开，比反复弹框尊重人。
      */
+    // 本项目不使用 Fragment；Activity 1.10.1 的 ComponentActivity 直接支持
+    // registerForActivityResult。lint 这条检查假设依赖了旧版 fragment，属误报。
+    @SuppressLint("InvalidFragmentVersionForActivityResult")
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             viewModel.onNotificationPermissionResult(granted)

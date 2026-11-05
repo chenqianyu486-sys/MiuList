@@ -1,6 +1,7 @@
 package com.example.notification
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -314,6 +315,11 @@ class ReminderNotifier(private val context: Context) {
         )
     }
 
+    /**
+     * 发送通知。**调用前必须过 [canPost]**：那里已经检查 POST_NOTIFICATIONS
+     * 与系统通知总开关；lint 看不到这层间接关系，所以这里显式抑制。
+     */
+    @SuppressLint("MissingPermission")
     private fun notify(tag: String, id: Int, notification: Notification): Boolean {
         if (!canPost()) return false
         return runCatching {
