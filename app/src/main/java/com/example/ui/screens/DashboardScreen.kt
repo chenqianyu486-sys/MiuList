@@ -433,6 +433,11 @@ fun DashboardScreen(
     onOpenWeekPicker: () -> Unit,
     onRefreshCoursesTodo: () -> Unit = {},
     onOpenQuickLoginDialog: () -> Unit = {},
+    /**
+     * 「去总览看今日课程」的一次性请求（上课 / 考试通知点进来的）。
+     * 每次进来换一个新值，列表据此滚到今日课程那一段；0 = 不滚动。
+     */
+    focusTodayCoursesRequest: Long = 0L,
     modifier: Modifier = Modifier
 ) {
     val todayCalendar = remember { todayCalendar() }
@@ -707,6 +712,14 @@ fun DashboardScreen(
     // 滚动浮现（淡入 + 轻微放大）要读列表的滚动位置，所以得有 listState。
     val listState = rememberLazyListState()
     val scrollRevealEnabled = rememberScrollRevealEnabled(listState)
+
+    // 从上课提醒进来时滚到「今日课程」：主卡之后的第一段就是它（下标 1）。
+    // 不按内容算下标：今日有课 / 没课只是 item 内部的分支，段头位置不变。
+    LaunchedEffect(focusTodayCoursesRequest) {
+        if (focusTodayCoursesRequest > 0L) {
+            listState.animateScrollToItem(1)
+        }
+    }
 
     // 入场序号是**整页**一条，从上往下数：学期卡 → 今日课程 → 待办。
     // 每段的起点由前面段落的条数推出来，而不是三个各从 0 开始——各从 0 开始的话

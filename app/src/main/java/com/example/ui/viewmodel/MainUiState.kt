@@ -26,6 +26,7 @@ import com.example.data.transfer.ImportReport
 import com.example.data.transfer.ImportStrategy
 import com.example.data.update.AppUpdateAvailable
 import com.example.data.validate.ImportIssue
+import com.example.notification.NotificationSettings
 
 // 底部浮岛只有三个入口，标签一律两字：含义交给图标，文案不再抢位置。
 // 设置**不在这个枚举的浮岛里**：它由顶栏展开出来的抽屉进入，
@@ -328,6 +329,34 @@ data class MainUiState(
      * `TaskCompleteConfirmPreference`。
      */
     val isTaskCompleteConfirmEnabled: Boolean = true,
+
+    /**
+     * 本地提醒的偏好。
+     *
+     * 存在 UI state 里只为了让设置弹层与开关即时反映；真相仍在
+     * `NotificationSettingsRepository`（SharedPreferences）。
+     */
+    val notificationSettings: NotificationSettings = NotificationSettings(),
+    /** 设置页的「通知提醒」弹层。 */
+    val isNotificationSettingsDialogOpen: Boolean = false,
+
+    /**
+     * 「去总览看今日课程」的一次性请求。每次从上课/考试通知进来就换一个新值，
+     * 总览页据此滚到今日课程那一段。
+     *
+     * 用递增令牌而不是 Boolean：同一个 Boolean 连续两次置 true 不会触发重组，
+     * 用户第二次点通知时会表现成「没反应」。
+     */
+    val dashboardFocusRequest: Long = 0L,
+
+    /**
+     * 待办通知点进来时要定位的那条待办，以及这一次定位的令牌。
+     *
+     * 同样用令牌而不是只存 id：同一条待办可能被提醒两次（改了截止时间），
+     * 第二次点通知时 id 没变，只靠 id 不会重新滚动/高亮。
+     */
+    val highlightedTaskId: Long? = null,
+    val taskHighlightRequest: Long = 0L,
 
     /**
      * 正在等用户确认的那条待办。null = 没在确认。

@@ -115,7 +115,14 @@ fun TaskItemCard(
      *
      * 这种位置不能自己再染一遍颜色；改成近白面，靠「浅在深上」撑出层次。
      */
-    nestedInCourseCard: Boolean = false
+    nestedInCourseCard: Boolean = false,
+    /**
+     * 从通知点进来时，短暂地给这一条加一道主题绿描边。
+     *
+     * 只是**定位记号**，不是新的状态：几秒后由调用方收回，
+     * 不会改写待办本身、也不会影响排序或筛选。
+     */
+    highlighted: Boolean = false
 ) {
     val courseColor = parseColor(task.courseColorHex)
 
@@ -151,6 +158,13 @@ fun TaskItemCard(
         modifier = modifier
             .fillMaxWidth()
             .testTag("task_card_${task.id}")
+            .then(
+                if (highlighted) {
+                    Modifier.border(2.dp, MaterialTheme.colorScheme.primary, MiuSurface.CardShape)
+                } else {
+                    Modifier
+                }
+            )
             .clickable { onOpenDetail() },
         shape = MiuSurface.CardShape,
         // 卡片本体画在里面的 Row 上（云母面），Card 这层只做点击和裁剪

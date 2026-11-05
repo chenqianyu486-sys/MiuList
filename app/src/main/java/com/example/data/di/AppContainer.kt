@@ -1,6 +1,7 @@
 package com.example.data.di
 
 import android.content.Context
+import com.example.data.calendar.AppZone
 import com.example.data.calendar.CalendarCache
 import com.example.data.codec.JsonScheduleCodec
 import com.example.data.codec.ScheduleCodec
@@ -23,6 +24,7 @@ import com.example.data.source.zju.CoursesTodoCache
 import com.example.data.source.zju.ZjuCalendarSource
 import com.example.data.source.zju.ZjuCoursesClient
 import com.example.data.source.zju.ZjuImportService
+import com.example.data.source.weather.DailyWeather
 import com.example.data.source.weather.SeniverseWeatherSource
 import com.example.data.source.weather.WeatherCache
 import com.example.data.source.weather.WeatherService
@@ -34,6 +36,12 @@ import com.example.data.transfer.ScheduleImportService
 import com.example.data.update.AppUpdateChecker
 import com.example.data.validate.ScheduleBundleValidator
 import com.example.data.validate.SnapshotValidator
+import com.example.notification.NotificationScheduler
+import com.example.notification.NotificationSettingsRepository
+import com.example.notification.ReminderDeliveryStore
+import com.example.notification.ReminderNotifier
+import com.example.notification.ReminderSnapshotLoader
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 /**
@@ -138,6 +146,76 @@ class AppContainer(context: Context) {
      */
     val aqiStandardPreference: AqiStandardPreference by lazy {
         AqiStandardPreference(appContext)
+    }
+
+    /**
+     * 本地提醒的偏好与投递记录。
+     *
+     * 都是 SharedPreferences：提醒「几点、提前多久」是配置不是数据，
+     * 「哪条待办已经提醒过」是排期状态不是用户内容 —— 两样都不该进 Room，
+     * 它们不参与导出快照，也不需要按行查询。
+     */
+    val notificationSettingsRepository: NotificationSettingsRepository by lazy {
+        NotificationSettingsRepository(appContext)
+    }
+
+    private val reminderDeliveryStore: ReminderDeliveryStore by lazy {
+        ReminderDeliveryStore(appContext)
+    }
+
+    val reminderNotifier: ReminderNotifier by lazy {
+        ReminderNotifier(appContext)
+    }
+
+    /**
+     * 本机提醒的唯一调度入口。三只 Alarm + 三个通知渠道，不依赖任何推送 SDK。
+     *
+     * 所有数据都来自本机的 Room 与天气缓存：提醒的内容与时刻在这里算，
+     * 不经过服务器，也不把待办标题发到任何地方。
+     */
+    val notificationScheduler: NotificationScheduler by lazy {
+        NotificationScheduler(
+            context = appContext,
+            settingsRepository = notificationSettingsRepository,
+            snapshotLoader = ReminderSnapshotLoader(this),
+            notifier = reminderNotifier,
+            deliveryStore = reminderDeliveryStore,
+            weatherLine = ::weatherLineForReminder
+        )
+    }
+
+    /**
+     * 每日汇总里那句天气。
+     *
+     * ## 先用缓存，缺了再做一次很短的补充拉取
+     *
+     * 绝大多数早晨，本机已经有今天那份天气缓存（用户打开过 App 就会刷新），
+     * 这时**一次网络都不发**。
+     *
+     * 缓存不是今天的、或者压根没有时，才给一次很短的窗口去拉：
+     * 07:30 的提醒里带一句「多云 18° ~ 24°」是需求的一部分，
+     * 而完全不出网就只能在一半的早晨省掉这一行。超时 2.5 秒就放弃 ——
+     * 提醒本身必须准点，不能被天气拖住。
+     *
+     * 这次拉取只发固定的杭州坐标，不携带课程、待办或账号信息。
+     */
+    private suspend fun weatherLineForReminder(): String? {
+        cachedWeatherLine()?.let { return it }
+        val state = withTimeoutOrNull(REMINDER_WEATHER_TIMEOUT_MILLIS) {
+            runCatching { weatherService.loadForEntry() }.getOrNull()
+        }
+        val weather = (state as? WeatherService.WeatherState.Available)?.weather ?: return null
+        return weatherLineOf(weather)
+    }
+
+    /** 只读本机缓存。没有今天那份就返回 null。 */
+    private fun cachedWeatherLine(): String? =
+        weatherService.cachedToday()?.weather?.let(::weatherLineOf)
+
+    private fun weatherLineOf(weather: DailyWeather): String? {
+        val text = weather.textAt(AppZone.hourOfDayNow()).takeIf { it.isNotBlank() }
+        val temperature = weather.temperatureRange()
+        return listOfNotNull(text, temperature).joinToString(" ").takeIf { it.isNotBlank() }
     }
 
     val codec: ScheduleCodec by lazy { JsonScheduleCodec() }
@@ -272,6 +350,14 @@ class AppContainer(context: Context) {
     }
 
     companion object {
+        /**
+         * 每日汇总缺当天天气缓存时，最多等这么久去补一次。
+         *
+         * 2.5 秒：足够一次正常的 HTTPS 往返，又短到用户感觉不到提醒变慢；
+         * 断网时宁可少一行天气，也不让「07:30 的提醒」变成「07:30 开始等网络」。
+         */
+        private const val REMINDER_WEATHER_TIMEOUT_MILLIS = 2_500L
+
         /**
          * 内置类别规则。这 5 条现在退居为「默认值层」：课程 × 类型的规则优先，
          * 这里只在课程级没配时兜底（见 `GenerationRuleResolver`）。

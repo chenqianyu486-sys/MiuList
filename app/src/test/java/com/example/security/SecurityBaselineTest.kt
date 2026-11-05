@@ -110,8 +110,29 @@ class SecurityBaselineTest {
         assertTrue("导出组件必须是启动器", hasLauncher)
     }
 
+    /**
+     * 权限白名单。
+     *
+     * 前两个是原基线：同步课表和天气要联网、要读网络状态。
+     * 后三个是**纯本地提醒**所需，与推送服务无关：
+     *
+     * - POST_NOTIFICATIONS：Android 13+ 发通知；
+     * - SCHEDULE_EXACT_ALARM：课前/截止提醒要准点，Doze 下也不被折叠；
+     * - RECEIVE_BOOT_COMPLETED：重启后把未触发的闹钟重新注册。
+     *
+     * 没有 FCM、没有第三方推送 SDK、没有后台定位、没有读取通知。
+     * 这张表就是全部；多出任何一个都说明有人绕过「只申请必需权限」这条线。
+     */
+    private val allowedPermissions = setOf(
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.INTERNET",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.RECEIVE_BOOT_COMPLETED"
+    )
+
     @Test
-    fun `清单只申请联网相关的两个权限`() {
+    fun `清单只申请白名单内的权限`() {
         val manifest = parse("src/main/AndroidManifest.xml")
 
         val permissions = manifest.childElements("uses-permission")
@@ -119,12 +140,26 @@ class SecurityBaselineTest {
             .sorted()
 
         assertEquals(
-            "权限只应包含联网与读网络状态；多一个都意味着多一份被索取的权限",
-            listOf(
-                "android.permission.ACCESS_NETWORK_STATE",
-                "android.permission.INTERNET"
-            ),
+            "权限必须在白名单内；多一个都意味着多一份被索取的权限",
+            allowedPermissions.sorted(),
             permissions
+        )
+    }
+
+    @Test
+    fun `提醒接收器不对外导出`() {
+        val manifest = parse("src/main/AndroidManifest.xml")
+
+        val reminderReceiver = manifest.childElements("receiver")
+            .firstOrNull {
+                it.getAttribute("android:name") == ".notification.ReminderReceiver"
+            }
+            ?: throw AssertionError("提醒接收器不在清单里：提醒将收不到闹钟与开机广播")
+
+        assertEquals(
+            "提醒接收器只应接收显式闹钟与系统受保护广播，不能对外导出",
+            "false",
+            reminderReceiver.getAttribute("android:exported")
         )
     }
 

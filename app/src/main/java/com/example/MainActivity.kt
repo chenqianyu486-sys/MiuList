@@ -1,9 +1,14 @@
 package com.example
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -104,6 +109,7 @@ import com.example.ui.components.MoreDrawer
 import com.example.ui.components.DeleteTaskTypeConfirmDialog
 import com.example.ui.components.ExamEditDialog
 import com.example.ui.components.NewTaskTypeDialog
+import com.example.ui.components.NotificationSettingsDialog
 import com.example.ui.components.OnboardingGuide
 import com.example.ui.components.QuickGenerateDialog
 import com.example.ui.components.QuickZjuLoginDialog
@@ -136,6 +142,7 @@ import com.example.ui.viewmodel.NavigationTab
 import com.example.ui.viewmodel.WebSyncUiState
 import com.example.ui.viewmodel.WebSyncViewModel
 import com.example.ui.viewmodel.WebSyncViewModelFactory
+import com.example.notification.NotificationNavigation
 import kotlinx.coroutines.flow.MutableStateFlow
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
@@ -158,14 +165,71 @@ class MainActivity : ComponentActivity() {
         WebSyncViewModelFactory((application as MiuListApplication).container)
     }
 
+    /**
+     * Android 13+ 的通知权限。
+     *
+     * 被拒绝之后不再每次冷启动追问：`hasRequestedPostNotifications` 只允许问一次，
+     * 之后走设置弹层里的系统设置入口。用户明确想开的时候再开，比反复弹框尊重人。
+     */
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            viewModel.onNotificationPermissionResult(granted)
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // 处理通知带来的跳转。处理完会把 action 清掉，所以同进程内的
+        // 配置变化重建不会再来一遍；进程被杀后由系统重新交付的那一次，
+        // 仍然应该落到通知目标，而不是只恢复到最后停留的页面。
+        handleNotificationIntent(intent)
         setContent {
             MyApplicationTheme {
                 MainApp(viewModel = viewModel, webSyncViewModel = webSyncViewModel)
             }
         }
+        maybeRequestNotificationPermission()
+    }
+
+    /**
+     * App 已在后台 / 栈里时，点通知走这里。
+     *
+     * Manifest 里 MainActivity 是 `singleTop`：通知 Intent 带着
+     * CLEAR_TOP + SINGLE_TOP 回来，复用现有实例，不叠一个新 Activity ——
+     * 叠出来的那个会拿到一份新的 ViewModel，看起来像是「回到首页」。
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationIntent(intent)
+    }
+
+    private fun handleNotificationIntent(intent: Intent?) {
+        if (intent?.action != NotificationNavigation.ACTION_OPEN) return
+        val destination = intent.getStringExtra(NotificationNavigation.EXTRA_DESTINATION) ?: return
+        val taskId = intent
+            .getLongExtra(NotificationNavigation.EXTRA_TASK_ID, -1L)
+            .takeIf { it > 0L }
+        viewModel.openFromNotification(destination, taskId)
+        // 消费掉 action：同一个 Activity 实例之后再被系统重建时，
+        // 不会因为这条旧 Intent 又把用户送回通知目标。
+        intent.action = null
+    }
+
+    private fun maybeRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        val repository = (application as MiuListApplication)
+            .container.notificationSettingsRepository
+        // 总开关关着就不要打断用户 —— 他明确表示过不需要提醒。
+        if (!repository.read().enabled) return
+        if (repository.hasRequestedPostNotifications) return
+        repository.hasRequestedPostNotifications = true
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 }
 
@@ -547,7 +611,12 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) viewModel.syncWeather()
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.syncWeather()
+                // 回到前台时重排一次：用户可能刚在系统设置里给了通知 / 精确闹钟权限，
+                // 也可能改了系统时间。排一次的成本只是几张本地表的一次读取。
+                viewModel.refreshNotifications()
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -730,7 +799,9 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                                     onOpenWeekPicker = { viewModel.openWeekPicker() },
                                     onRefreshCoursesTodo = { viewModel.refreshCoursesTodos(silent = false) },
                                     onOpenQuickLoginDialog = { viewModel.setQuickZjuLoginDialogOpen(true) },
-                                    onEditExam = { viewModel.openExamEditor(it) }
+                                    onEditExam = { viewModel.openExamEditor(it) },
+                                    // 从「上课提醒」通知进来时滚到今日课程那一段。
+                                    focusTodayCoursesRequest = state.dashboardFocusRequest
                                 )
                             }
 
@@ -755,7 +826,10 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                                     onToggleStatusFilter = { viewModel.toggleStatusFilter(it) },
                                     onToggleTaskComplete = { viewModel.toggleTaskComplete(it) },
                                     onToggleTaskStar = { viewModel.toggleTaskStar(it) },
-                                    onInspectTask = { viewModel.inspectTask(it) }
+                                    onInspectTask = { viewModel.inspectTask(it) },
+                                    // 从「待办截止」通知进来时定位并高亮那一条。
+                                    highlightedTaskId = state.highlightedTaskId,
+                                    highlightRequest = state.taskHighlightRequest
                                 )
                             }
 
@@ -765,6 +839,7 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                                     onOpenCategoryManageDialog = { viewModel.openTaskCategoryManageDialog() },
                                     onOpenWallpaperDialog = { viewModel.openWallpaperDialog() },
                                     onOpenOnboardingGuide = { viewModel.openOnboardingGuide() },
+                                    onOpenNotificationDialog = { viewModel.openNotificationSettingsDialog() },
                                     // 「完成待办前要不要确认」：改完立刻生效，
                                     // 不用重启也不用等下一次进设置页。
                                     taskCompleteConfirmEnabled = state.isTaskCompleteConfirmEnabled,
@@ -1079,6 +1154,22 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                 onCommit = { viewModel.commitImport() },
                 onDismissReport = { viewModel.dismissImportReport() },
                 onDismiss = { viewModel.closeTransferDialog() }
+            )
+        }
+
+        // 本地提醒设置。和设置页里其它数据操作一样是一层弹层：
+        // 设置页那一列只负责「点进来」，具体几项在这里摆开。
+        if (state.isNotificationSettingsDialogOpen) {
+            NotificationSettingsDialog(
+                settings = state.notificationSettings,
+                onDismiss = { viewModel.closeNotificationSettingsDialog() },
+                onMasterEnabledChange = { viewModel.setNotificationsEnabled(it) },
+                onDailyEnabledChange = { viewModel.setDailyBriefingEnabled(it) },
+                onDailyMinuteChange = { viewModel.setDailyBriefingMinute(it) },
+                onClassEnabledChange = { viewModel.setClassReminderEnabled(it) },
+                onClassLeadChange = { viewModel.setClassLeadMinutes(it) },
+                onTodoEnabledChange = { viewModel.setTodoReminderEnabled(it) },
+                onTodoLeadChange = { viewModel.setTodoLeadMinutes(it) }
             )
         }
 

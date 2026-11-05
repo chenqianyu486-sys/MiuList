@@ -27,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,6 +67,7 @@ import com.example.ui.viewmodel.MainUiState
 import com.example.data.calendar.AppZone
 import com.example.ui.viewmodel.TaskGroupingMode
 import com.example.ui.viewmodel.TaskStatusFilter
+import kotlinx.coroutines.delay
 import java.util.Calendar
 
 /**
@@ -451,6 +453,14 @@ fun ChecklistScreen(
     onToggleTaskComplete: (TaskEntity) -> Unit,
     onToggleTaskStar: (TaskEntity) -> Unit,
     onInspectTask: (TaskEntity) -> Unit,
+    /**
+     * 从待办截止通知点进来时要定位的那一条，以及这一次定位的令牌。
+     *
+     * 令牌每点一次通知就换一个新值：同一条待办改了截止时间后会被提醒第二次，
+     * 只传 id 的话第二次点通知没有任何反应（值没变，Compose 不会重新执行）。
+     */
+    highlightedTaskId: Long? = null,
+    highlightRequest: Long = 0L,
     modifier: Modifier = Modifier
 ) {
     val cardRevealProgress = LocalCardRevealProgress.current
@@ -458,14 +468,26 @@ fun ChecklistScreen(
     // 「从下方滚入」的淡入 + 轻微放大见 [scrollRevealAt]。
     val listState = rememberLazyListState()
     val scrollRevealEnabled = rememberScrollRevealEnabled(listState)
+
+    // 通知定位后的高亮。只活一小会儿：它回答的是「你点的那条在这里」，
+    // 不是给这条待办加一个永久装饰。
+    var activeHighlightTaskId by remember { mutableStateOf<Long?>(null) }
+
     // Filter tasks based on search, type, and status
     val filteredTasks = remember(
         state.tasks,
         state.searchQuery,
         state.selectedTaskTypeKey,
-        state.statusFilters
+        state.statusFilters,
+        activeHighlightTaskId
     ) {
         state.tasks.filter { task ->
+            // 通知点进来的那一条**临时穿透所有筛选**：用户是按通知来找它的，
+            // 它可能已经被勾成「已完成」、被搜索词或类型筛选挡在外面。
+            // 只对 id 放行、不改用户自己的筛选条件 —— 几秒后高亮收回，
+            // 列表回到用户原来那份筛选结果，不留下被悄悄改过的开关。
+            if (task.id == activeHighlightTaskId) return@filter true
+
             val matchSearch = state.searchQuery.isBlank() ||
                     task.title.contains(state.searchQuery, ignoreCase = true) ||
                     task.courseName.contains(state.searchQuery, ignoreCase = true) ||
@@ -492,6 +514,14 @@ fun ChecklistScreen(
     // 键里带了分组模式前缀，所以切模式不会把另一模式的折叠状态带过来。
     var collapsedGroups by remember { mutableStateOf(emptySet<String>()) }
 
+    // 先把所有组展开再定位：目标很可能落在某个用户上次折起来的组里，
+    // 不展开的话滚动找不到它，表现成「点了通知，列表根本没动」。
+    LaunchedEffect(highlightRequest) {
+        if (highlightRequest <= 0L) return@LaunchedEffect
+        collapsedGroups = emptySet()
+        activeHighlightTaskId = highlightedTaskId
+    }
+
     // 课程缺 colorHex 时的兜底色，以及组头默认字色。
     // 必须在 LazyListScope 外面取：MaterialTheme.colorScheme 是 @Composable 读，
     // 而 buildChecklistRows 不是 composable 作用域。
@@ -517,6 +547,21 @@ fun ChecklistScreen(
             defaultInk = defaultInk,
             errorInk = errorInk
         )
+    }
+
+    // 行数组是定位的唯一依据：组头 / 折叠状态 / 排序都可能改变目标的下标，
+    // 在 effects 里重新算一遍 indexOfFirst，而不是从通知里带一个下标过来。
+    LaunchedEffect(activeHighlightTaskId, rows) {
+        val id = activeHighlightTaskId ?: return@LaunchedEffect
+        val index = rows.indexOfFirst { it is ChecklistRow.Item && it.task.id == id }
+        if (index >= 0) {
+            listState.animateScrollToItem(index)
+            delay(2600)
+        } else {
+            // 待办可能刚被删掉。不必久留一个找不到目标的高亮。
+            delay(400)
+        }
+        if (activeHighlightTaskId == id) activeHighlightTaskId = null
     }
 
     // 入场序号按卡片从上往下数，**组头不占号**。
@@ -709,6 +754,7 @@ fun ChecklistScreen(
                             onToggleComplete = { onToggleTaskComplete(row.task) },
                             onToggleStar = { onToggleTaskStar(row.task) },
                             onOpenDetail = { onInspectTask(row.task) },
+                            highlighted = activeHighlightTaskId == row.task.id,
                             modifier = Modifier
                                 .animateItem(fadeInSpec = null, fadeOutSpec = null)
                                 .cardRevealAt(

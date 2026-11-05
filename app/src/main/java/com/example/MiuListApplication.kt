@@ -19,5 +19,8 @@ class MiuListApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        // 渠道要在第一条通知之前建好。放在 Application 而不是 Receiver 里兜底：
+        // 用户可能在设置里先关掉某一类，渠道不存在时系统设置里连开关都看不到。
+        container.reminderNotifier.ensureChannels()
     }
 }

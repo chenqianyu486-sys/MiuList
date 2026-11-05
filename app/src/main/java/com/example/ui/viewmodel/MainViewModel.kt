@@ -41,11 +41,15 @@ import com.example.data.transfer.ImportStrategy
 import com.example.data.transfer.PreviewResult
 import com.example.data.update.AppUpdateAvailable
 import com.example.data.update.AppUpdateChecker
+import com.example.notification.NotificationNavigation
+import com.example.notification.NotificationSettings
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -74,6 +78,8 @@ class MainViewModel(
     private val quickGeneratePref = container.quickGeneratePreference
     private val taskCompleteConfirmPref = container.taskCompleteConfirmPreference
     private val aqiStandardPref = container.aqiStandardPreference
+    private val notificationSettingsRepo = container.notificationSettingsRepository
+    private val notificationScheduler = container.notificationScheduler
     private val appUpdateChecker = container.appUpdateChecker
     private val zjuCoursesClient = container.zjuCoursesClient
     private val coursesTodoCache = container.coursesTodoCache
@@ -223,6 +229,18 @@ private val ruleFlow = combine(
         // 否则会先闪一下国标再跳成美国。
         _uiState.update { it.copy(aqiStandard = aqiStandardPref.standard) }
 
+        // 本地提醒的偏好：同步读出来，设置弹层第一帧就是真实值。
+        _uiState.update { it.copy(notificationSettings = notificationSettingsRepo.read()) }
+
+        // 数据一变就重排三只本地闹钟（勾待办、改课、改校历、同步、导入都会走到）。
+        //
+        // 合并的是「课表 / 待办 / 考试 / 校历」这几路真正的**排期输入**，
+        // 而不是整个 uiState —— 切页、开弹层、输入搜索词也都会改 uiState，
+        // 拿它当触发器会让每敲一个字都去读一遍库、重排一遍闹钟。
+        viewModelScope.launch {
+            observeReminderInputs()
+        }
+
         // 瞬间加载学在浙大待办的本地只读缓存（离线优先，零延迟呈现）
         val (cachedTodos, cachedTime) = coursesTodoCache.load()
         _uiState.update {
@@ -333,6 +351,35 @@ private val ruleFlow = combine(
     // ------------------------------------------------------------ 天气
 
     /**
+     * 排期输入一有变化，就把三只本地闹钟重排一遍。
+     *
+     * 不直接观察 [uiState]：那个流里还有当前页、筛选、弹层开关，
+     * 敲一个字也会触发一次重排。这里只订阅**真正影响提醒内容**的几张表。
+     *
+     * `conflate()` 与 600ms 延迟合成一只低成本防抖：一次同步会连续改
+     * 课程、时段、开课周次、考试四张表，不防抖就会重排四遍。
+     */
+    private suspend fun observeReminderInputs() {
+        val scheduleInputs = combine(
+            taskRepo.getAllTasks(),
+            courseRepo.getAllCoursesWithSlots(),
+            examRepo.getAllExams()
+        ) { _, _, _ -> Unit }
+        val calendarInputs = combine(
+            courseRepo.getAllSlots(),
+            courseRepo.getWeeksBySlotId(),
+            calendarRepo.calendarState
+        ) { _, _, _ -> Unit }
+
+        combine(scheduleInputs, calendarInputs) { _, _ -> Unit }
+            .conflate()
+            .collect {
+                delay(REMINDER_RESCHEDULE_DEBOUNCE_MILLIS)
+                notificationScheduler.reschedule()
+            }
+    }
+
+    /**
      * 总览页当天那块天气的唯一入口。
      *
      * 「先用缓存立刻显示，再后台刷新」的两段式在这里是**自动完成**的：
@@ -401,6 +448,105 @@ private val ruleFlow = combine(
     fun closeWeekPicker() = _uiState.update { it.copy(isWeekPickerDialogOpen = false) }
 
     fun clearUserMessage() = _uiState.update { it.copy(userMessage = null) }
+
+    // ------------------------------------------------------------ 通知点击跳转
+
+    /**
+     * 通知点进来的入口。
+     *
+     * ## 只清搜索词，不动筛选开关
+     *
+     * 提醒发出后用户可能过了一阵才点，其间那条待办完全可能已经被勾掉。
+     * 「已完成」被用户自己的筛选挡在外面时，清单页会让**被定位的那一条**
+     * 临时穿透筛选显示（见 `ChecklistScreen.filteredTasks`）—— 这样既找得到它，
+     * 又不会把用户的筛选条件悄悄改掉。
+     *
+     * 搜索词仍然清掉：搜索框在顶栏里，留着它会让用户看到一个主动收窄过的列表，
+     * 却不知道为什么会这样。
+     */
+    fun openFromNotification(destination: String, taskId: Long?) {
+        _uiState.update { current ->
+            when (destination) {
+                NotificationNavigation.DEST_CHECKLIST -> current.copy(
+                    currentTab = NavigationTab.CHECKLIST,
+                    searchQuery = "",
+                    highlightedTaskId = taskId,
+                    taskHighlightRequest = current.taskHighlightRequest + 1,
+                    taskEditor = null,
+                    inspectingCourse = null,
+                    confirmingTaskComplete = null,
+                    isNotificationSettingsDialogOpen = false
+                )
+
+                NotificationNavigation.DEST_TODAY_COURSES -> current.copy(
+                    currentTab = NavigationTab.DASHBOARD,
+                    dashboardFocusRequest = current.dashboardFocusRequest + 1,
+                    isNotificationSettingsDialogOpen = false
+                )
+
+                else -> current.copy(
+                    currentTab = NavigationTab.DASHBOARD,
+                    isNotificationSettingsDialogOpen = false
+                )
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ 本地提醒设置
+
+    fun openNotificationSettingsDialog() = _uiState.update {
+        it.copy(
+            isNotificationSettingsDialogOpen = true,
+            notificationSettings = notificationSettingsRepo.read()
+        )
+    }
+
+    fun closeNotificationSettingsDialog() = _uiState.update {
+        it.copy(isNotificationSettingsDialogOpen = false)
+    }
+
+    fun setNotificationsEnabled(enabled: Boolean) =
+        updateNotificationSettings { it.copy(enabled = enabled) }
+
+    fun setDailyBriefingEnabled(enabled: Boolean) =
+        updateNotificationSettings { it.copy(dailyEnabled = enabled) }
+
+    fun setDailyBriefingMinute(minuteOfDay: Int) =
+        updateNotificationSettings { it.copy(dailyMinuteOfDay = minuteOfDay) }
+
+    fun setClassReminderEnabled(enabled: Boolean) =
+        updateNotificationSettings { it.copy(classEnabled = enabled) }
+
+    fun setClassLeadMinutes(minutes: Int) =
+        updateNotificationSettings { it.copy(classLeadMinutes = minutes) }
+
+    fun setTodoReminderEnabled(enabled: Boolean) =
+        updateNotificationSettings { it.copy(todoEnabled = enabled) }
+
+    fun setTodoLeadMinutes(minutes: Int) =
+        updateNotificationSettings { it.copy(todoLeadMinutes = minutes) }
+
+    /**
+     * 每次 App 回到前台都重排一次。
+     *
+     * 覆盖三类「在 App 外面发生的变化」：用户刚在系统设置里给了通知/精确闹钟权限、
+     * 手动改了系统时间、以及长时间没打开（滚动链在某个时刻断掉）。
+     * 重排成本是几张本地表的一次读取，远小于「回来发现提醒全没了」的代价。
+     */
+    fun refreshNotifications() {
+        viewModelScope.launch { notificationScheduler.reschedule() }
+    }
+
+    fun onNotificationPermissionResult(granted: Boolean) {
+        if (granted) refreshNotifications()
+    }
+
+    private fun updateNotificationSettings(transform: (NotificationSettings) -> NotificationSettings) {
+        val next = transform(notificationSettingsRepo.read())
+        notificationSettingsRepo.save(next)
+        _uiState.update { it.copy(notificationSettings = next) }
+        viewModelScope.launch { notificationScheduler.reschedule() }
+    }
 
     // ------------------------------------------------------------ 待办
 
@@ -2048,6 +2194,14 @@ private val ruleFlow = combine(
         refreshCoursesTodos(silent = false)
     }
 }
+
+/**
+ * 数据变化 → 重排本地闹钟之间的防抖窗口。
+ *
+ * 一次同步会连续改课程、时段、开课周次、考试四张表；600ms 足以把它们收成一次重排，
+ * 又短到用户勾完待办、切到后台之前就已经注销了旧闹钟。
+ */
+private const val REMINDER_RESCHEDULE_DEBOUNCE_MILLIS = 600L
 
 class MainViewModelFactory(
     private val container: AppContainer

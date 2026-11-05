@@ -27,6 +27,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.ImportExport
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.SystemUpdateAlt
 import androidx.compose.material.icons.outlined.Wallpaper
 import androidx.compose.material3.Button
@@ -64,8 +65,8 @@ import com.example.ui.theme.glassSurface
 /**
  * 设置页。
  *
- * **七件事：待办完成确认、空气质量标准、检查更新、课表导入/导出、
- * 待办分类管理、自定义壁纸、使用引导。**
+ * **八件事：待办完成确认、空气质量标准、通知提醒、检查更新、
+ * 课表导入/导出、待办分类管理、自定义壁纸、使用引导。**
  *
  * 原来这里是六个入口（账号同步 / 课程联动规则 / 待办生成规则 / 导入导出 /
  * 本学期校历 / 课程管理列表），其中**五个都已经搬到顶栏展开的「更多」页**：
@@ -96,6 +97,8 @@ fun SettingsScreen(
     onOpenCategoryManageDialog: () -> Unit,
     onOpenWallpaperDialog: () -> Unit = {},
     onOpenOnboardingGuide: () -> Unit = {},
+    /** 打开本地提醒设置（每日汇总 / 上课 / 待办截止）。 */
+    onOpenNotificationDialog: () -> Unit = {},
     /** 「完成待办前要不要先确认」。关掉之后点圆圈不再弹确认框。 */
     taskCompleteConfirmEnabled: Boolean = true,
     onTaskCompleteConfirmChange: (Boolean) -> Unit = {},
@@ -146,6 +149,18 @@ fun SettingsScreen(
                     onAqiStandardChange(if (useUs) AqiStandard.US else AqiStandard.CN)
                 },
                 testTag = "settings_us_aqi_switch"
+            )
+        }
+
+        item {
+            // 提醒和「待办完成确认」一样属于每天都会碰到的偏好，所以排在数据类操作之前。
+            // 它本身是一项独立功能，不塞进别的卡片里当一行开关。
+            SettingsActionCard(
+                icon = Icons.Outlined.Notifications,
+                title = "通知提醒",
+                actionLabel = "设置",
+                actionTestTag = "open_notification_settings_button",
+                onAction = onOpenNotificationDialog
             )
         }
 
