@@ -9,6 +9,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -46,6 +48,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.setValue
@@ -68,6 +71,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import com.example.ui.security.SecureWindowEffect
@@ -81,6 +85,7 @@ import com.example.ui.theme.panelSafeArea
 import com.example.ui.theme.rememberContentMaxWidth
 import com.example.ui.theme.scaledWithText
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /** 弹层圆角。原来所有 AlertDialog 都写死 20.dp，页内卡片也是同一档。 */
 val GlassDialogShape = RoundedCornerShape(20.dp)
@@ -479,7 +484,10 @@ fun panelScrollMaxHeight(designHeight: Dp): Dp {
  * 1. 物理弹簧展开：初始帧定位在屏幕底部之外（结合首帧兜底保证零闪烁），以物理阻尼弹簧平滑升起；
  * 2. 遮罩层（Scrim）与透明度渐变同步：随弹层升起同步淡入，随收起或拖拽平滑淡出；
  * 3. 拖拽胶囊指示条（Drag Handle）：顶部居中展示 36×4.5dp 圆角胶囊，直观表达弹层交互性；
- * 4. 下拉手势收起（Drag-to-dismiss）：支持顶部指示条直接拖拽，并配合 NestedScrollConnection 支持内容联动；
+ * 4. 下拉手势收起（Drag-to-dismiss）：支持顶部指示条直接拖拽；内容里下拉也能带着弹层一起走，
+ *    但**只在内容整体已经在顶时**才接管（见参数 `contentAtTop`）——
+ *    内容滚到头时那一下「滑不动」的剩余位移不属于「关闭弹层」，
+ *    抢过来拖动弹层会让弹层沉下去并淡到 20% 不透明度，看着像「弹层突然变透」；
  * 5. 阻尼与弹性复位：向上推带有橡胶阻尼感，下拉未达阈值松手时自然回弹，超过阈值顺势滑出屏幕；
  * 6. 返回键/点击遮罩平滑退场：播放顺滑的下沉淡出动画后再触发销毁。
  */
@@ -496,7 +504,19 @@ fun GlassBottomSheetHost(
      * 这一层目前只有课程详情和待办详情两个弹层在用，所以默认值就是这两个弹层的值；
      * 参数留着是为了以后若有第三种弹层（比如更高的抽屉）需要另一档时，不必再改公共件。
      */
-    blurRadius: Dp = GlassSheetBlurRadius,    content: @Composable () -> Unit,
+    blurRadius: Dp = GlassSheetBlurRadius,
+    /**
+     * 内容是否**整体**已经在顶部。
+     *
+     * 弹层只在这个条件成立时接管内容的下拉手势（把弹层一起往下带）。
+     * 必须是**全局**判断，不能只看某一个滚动容器：
+     * 待办编辑弹层里同时有「表单」和「课程滚筒」两个可滚区域，
+     * 滚筒在顶但表单不在顶时，下拉应该滚表单，而不是把弹层整个拽下去。
+     *
+     * 内容**没有**可滚区域时传 `{ true }`：此时下拉拖走弹层正是想要的行为。
+     */
+    contentAtTop: () -> Boolean = { true },
+    content: @Composable () -> Unit,
 ) {
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
@@ -587,6 +607,11 @@ fun GlassBottomSheetHost(
         }
     }
 
+    // 连接对象是 remember 出来的，捕获的是**第一次**组合时的那份 lambda。
+    // 内容侧每次重组传进来的 lambda 都是新的，直接捕获会读到过期的判断。
+    // rememberUpdatedState 保证回调里读到的一定是最新的一份。
+    val currentContentAtTop by rememberUpdatedState(contentAtTop)
+
     val nestedScrollConnection = remember(sheetHeightPx) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -605,7 +630,18 @@ fun GlassBottomSheetHost(
                 source: NestedScrollSource
             ): Offset {
                 val delta = available.y
-                if (delta > 0 && source == NestedScrollSource.UserInput) {
+                // **只有内容整体已经在顶时**，剩下的下拉位移才是「把弹层往下带」。
+                //
+                // 这里拿到的 available 是「内容没吃掉的剩余位移」，而它在两种情形下
+                // 长得**一模一样**：
+                //   1. 内容还能往回滚（滚到头了）；
+                //   2. 内容本来就滚不动（比如只剩课程滚筒一个滚动容器，且它已经在顶）。
+                // 分不出来的时候一律拖动弹层，后果是：用户只是在弹层里滑一下，
+                // 弹层却被整个拽下去，并且一路淡到 20% 不透明度 ——
+                // 看着就是「弹层突然变透」。
+                //
+                // 所以判断权交给内容：[contentAtTop] 只有内容自己知道。
+                if (delta > 0 && source == NestedScrollSource.UserInput && currentContentAtTop()) {
                     dragOffsetY += delta
                     return Offset(0f, delta)
                 }
@@ -621,7 +657,12 @@ fun GlassBottomSheetHost(
             }
 
             override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                handleDragEnd(available.y)
+                // 只有弹层真的被拖下去过，惯性收尾才轮到它做决定。
+                // 内容自己的快速滚动（长备注一甩到底）也会走到这里并带着大速度，
+                // 不加这个判断，甩一下内容就把整个弹层甩关了。
+                if (dragOffsetY > 0f) {
+                    handleDragEnd(available.y)
+                }
                 return available
             }
         }
@@ -631,17 +672,26 @@ fun GlassBottomSheetHost(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = currentScrimAlpha))
-            .clickable(
-                indication = null,
-                interactionSource = remember { MutableInteractionSource() }
-            ) { dismissWithAnimation() },
+            // 遮罩层自己吃掉点击：外面那一大片空白就是「点外面关闭」的区域。
+            //
+            // 和面板一样用 pointerInput 而不是 clickable：clickable 是语义合并边界，
+            // 会把弹层里滚动容器的 ScrollBy 语义并到这块全屏节点上 ——
+            // 无障碍/测试工具拿到的滚动视口就成了整块屏幕。
+            .pointerInput(Unit) {
+                detectTapGestures {
+                    dismissWithAnimation()
+                }
+            },
         contentAlignment = Alignment.BottomCenter,
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                .padding(top = 24.dp)
+                // Haze 按布局定位缓存采样坐标，纯图层平移会让入场后的坐标滞留在屏幕外。
+                .offset { IntOffset(0, currentOffsetY.roundToInt()) }
                 .graphicsLayer {
-                    translationY = currentOffsetY
                     alpha = (0.2f + 0.8f * currentFraction).coerceIn(0f, 1f)
                 }
                 .glassOverlaySurface(
@@ -653,10 +703,16 @@ fun GlassBottomSheetHost(
                     hazeFloor = GlassSheetFace.FLOOR,
                 )
                 .nestedScroll(nestedScrollConnection)
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) {}
+                // 面板根吃掉点击，否则点面板的空白会当成「点外面」把弹层关掉。
+                //
+                // 用 pointerInput 而不是 clickable：clickable 会带一个空的 onClick 语义，
+                // 而它又是 mergeDescendants 的合并边界，会把内容里的滚动语义
+                // （ScrollBy / ScrollAxisRange）并进「整个面板」这个节点 ——
+                // 无障碍与测试工具拿到的滚动视口就成了整块面板（连固定操作栏都算进去），
+                // 按它去滚内容会少滚一截，目标行停在视口外。吃掉点击不需要语义。
+                .pointerInput(Unit) {
+                    detectTapGestures { }
+                }
         ) {
             // 安全区留白放在玻璃面**里面**，不是外面。
             //

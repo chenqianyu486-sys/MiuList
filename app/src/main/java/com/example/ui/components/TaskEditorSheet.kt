@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -40,7 +41,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
@@ -87,6 +87,7 @@ import com.example.ui.theme.AdaptiveDialogContent
 import com.example.ui.theme.ChipSurfaceNeutral
 import com.example.ui.theme.readableOn
 import com.example.ui.theme.scaledWithText
+import com.example.ui.theme.withNoteLineHeight
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
@@ -169,61 +170,97 @@ fun TaskEditorSheet(
     // 第 0 项永远是「不关联课程」，其余是真实课程
     val courseOptions: List<CourseEntity?> = remember(courses) { buildList { add(null); addAll(courses) } }
 
+    /**
+     * 这条待办**是不是已经在库里**。
+     *
+     * id == 0 = 还没落库。它有两种样子：
+     * - 空白新建（[initialTask] 为 null）；
+     * - **带预填的新建草稿**（[initialTask] 非 null 但 id == 0）——
+     *   例如从学在浙大搬一条作业过来，名称、截止、备注、关联课程都先填好。
+     *
+     * 为什么要分出第二种：预填的那份是**草稿**，不是「打开弹层时本来就有的东西」。
+     * 拿它当基准去比有没有改动，用户会看到一堆填好的内容却被判成「什么都没改」，
+     * 主按钮于是变成「关闭」—— 明明有一整条作业，却存不下来。
+     */
+    val isExistingTask = initialTask != null && initialTask.id != 0L
+
+    // 新建时的默认截止**只算一次**：算两次会差几毫秒，于是新建待办刚打开
+    // 就被判成「已经改过了」。
+    val defaultDue = remember { defaultDueTimestamp() }
+
     // 用 index 表示选择，避免同时持有「选中的课程对象」——课程可能刚好在编辑期间被删掉
     val initialIndex = remember(initialTask, courseOptions, preselectedCourseId) {
         val wantedId = initialTask?.courseId ?: preselectedCourseId
         courseOptions.indexOfFirst { it?.id == wantedId }.let { if (it < 0) 0 else it }
     }
-    var selectedIndex by remember { mutableIntStateOf(initialIndex) }
+    // 选中项跟着「默认选中项」走：key 用 [initialIndex]，不用空 key。
+    //
+    // 空 key 的 remember 只在**第一次**组合时取值，而弹层是复用的 —— 上一条待办
+    // 选中的课会留到下一条上（从学在浙大搬一条作业进来，弹层里挂的还是上一条
+    // 挂的那门课，而那一门可能压根不是这门课的作业）。
+    //
+    // 用 [initialIndex] 当 key 是安全的：它只在这三件事变了的时候才变 ——
+    // 换了草稿、换了课程表、换了预选课程 —— 正好都是「该重新算默认值」的时候。
+    // 用户自己在滚筒里改选中项不会动它（initialIndex 不变），所以手选不会被冲掉。
+    var selectedIndex by remember(initialIndex) { mutableIntStateOf(initialIndex) }
     val selectedCourse = courseOptions.getOrNull(selectedIndex)
 
-    // ---- 初值：留着算「有没有改动过」 ----
-    // 打开弹层时的那一份。它不参与渲染，只用来跟草稿比差别 ——
-    // 有差别才谈得上「保存」。
-    val initialTitle = remember(initialTask) { initialTask?.title ?: "" }
-    val initialDescription = remember(initialTask) { initialTask?.description ?: "" }
-    val initialTypeKey = remember(initialTask) { initialTask?.taskType.orEmpty() }
-    val initialIsStarred = remember(initialTask) {
-        // 旧的三级值（高/中/低）在这里就已经归一成两态了。
-        initialTask?.let { TaskStar.isMarked(it.priority) } ?: false
+    // ---- 两个滚动容器：表单 + 课程滚筒 ----
+    //
+    // 都要**提到弹层外面**来：弹层要靠它们判断「内容是不是整体已经在顶」，
+    // 只有内容自己知道这件事（滚筒在顶但表单不在顶时，下拉该滚表单，
+    // 而不是把弹层整个拽下去 —— 那会让弹层淡到 20%，看着就是「突然变透」）。
+    val formScrollState = rememberScrollState()
+    val wheelListState = rememberLazyListState(initialFirstVisibleItemIndex = selectedIndex)
+
+    // ---- 草稿的初值：真正显示在弹层里的那份 ----
+    // 空白新建 = 什么都没有；带预填的新建 = 预填的那份；已存在的 = 它自己。
+    val draftHasDue = remember(initialTask, isExistingTask) {
+        initialTask?.let { TaskEntity.hasDue(it) } ?: true
+    }
+    val draftDueMillis = remember(initialTask, draftHasDue, defaultDue) {
+        initialTask?.dueDateTimestamp?.takeIf { draftHasDue } ?: defaultDue
     }
 
-    var title by remember { mutableStateOf(initialTitle) }
-    var description by remember { mutableStateOf(initialDescription) }
+    // ---- 基准：留着算「有没有改动过」 ----
+    // 它不参与渲染，只用来跟草稿比差别 —— 有差别才谈得上「保存」。
+    val baseline = remember(initialTask, isExistingTask, initialIndex, defaultDue) {
+        editorBaseline(initialTask, initialIndex, defaultDue)
+    }
+
+    var title by remember { mutableStateOf(initialTask?.title ?: "") }
+    var description by remember { mutableStateOf(initialTask?.description ?: "") }
     // 类型存 key 字符串（枚举名 / CUSTOM:<id> / 空串），不再存枚举：
     // 用户新建的类型不在枚举里，存枚举就等于把新建的类型在编辑时也一起丢掉。
     // 新建待办时默认不选类型——「先想清楚这条属于哪类」不该是记一件事的前置条件。
-    var selectedTypeKey by remember { mutableStateOf(initialTypeKey) }
-    var isStarred by remember { mutableStateOf(initialIsStarred) }
+    var selectedTypeKey by remember { mutableStateOf(initialTask?.taskType.orEmpty()) }
+    var isStarred by remember {
+        mutableStateOf(
+            // 旧的三级值（高/中/低）在这里就已经归一成两态了。
+            initialTask?.let { TaskStar.isMarked(it.priority) } ?: false
+        )
+    }
 
     // 截止存真实时间戳，不存「几天后」的偏移——偏移只在保存那一刻才有意义。
     // 关掉「不设截止」时 dueMillis 里的值原样留着不清零，这样用户改主意打开它，
     // 日期回到刚才那个而不是跳成 6 天后。
-    val initialHasDue = remember(initialTask) {
-        initialTask?.let { TaskEntity.hasDue(it) } ?: true
-    }
-    // 新建时的默认截止**只算一次**：算两次会差几毫秒，于是新建待办刚打开
-    // 就被判成「已经改过了」。
-    val initialDueMillis = remember(initialTask, initialHasDue) {
-        initialTask?.dueDateTimestamp?.takeIf { initialHasDue } ?: defaultDueTimestamp()
-    }
-    var hasDue by remember { mutableStateOf(initialHasDue) }
-    var dueMillis by remember { mutableStateOf(initialDueMillis) }
+    var hasDue by remember { mutableStateOf(draftHasDue) }
+    var dueMillis by remember { mutableStateOf(draftDueMillis) }
     val dueCal = remember(dueMillis) { AppZone.calendar(dueMillis) }
 
     // ---- 有没有改动过 ----
     // 没改动就没有东西要存，主按钮就不该叫「保存」，该叫「关闭」。
     // 新建待办尤其要紧：什么都没填就按「保存」，会造出一条标题是「待办」的
     // 空记录 —— 而用户其实只是误点开了这个弹层。
-    val hasChanges = title != initialTitle ||
-        description != initialDescription ||
-        selectedTypeKey != initialTypeKey ||
-        isStarred != initialIsStarred ||
-        hasDue != initialHasDue ||
+    val hasChanges = title != baseline.title ||
+        description != baseline.description ||
+        selectedTypeKey != baseline.typeKey ||
+        isStarred != baseline.isStarred ||
+        hasDue != baseline.hasDue ||
         // 截止按**秒**比：时间选择器会把毫秒清零，拿毫秒比会算出「改过了」，
         // 而用户其实只是选了个一样的时刻。
-        (hasDue && dueMillis / 1000 != initialDueMillis / 1000) ||
-        selectedIndex != initialIndex
+        (hasDue && dueMillis / 1000 != baseline.dueMillis / 1000) ||
+        selectedIndex != baseline.courseIndex
 
     // 保存：把草稿拼成一条待办交出去。抽成 lambda 是为了让操作栏里只剩
     // 「按了会发生什么」，不夹着一大段拼字段的代码。
@@ -284,8 +321,24 @@ fun TaskEditorSheet(
 
     val focusManager = LocalFocusManager.current
 
-    GlassBottomSheetHost(onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.fillMaxWidth()) {
+    // 「内容整体在顶」= 表单在顶 **且** 课程滚筒在顶。
+    // 少了后半个条件，滚筒滑到尽头时那一下「滑不动」的剩余位移会被
+    // 弹层当成「把弹层往下拖」—— 弹层整个沉下去并淡到 20% 不透明度。
+    val contentAtTop = remember(formScrollState, wheelListState) {
+        {
+            sheetContentAtTop(
+                formScrollOffset = formScrollState.value,
+                wheelFirstVisibleIndex = wheelListState.firstVisibleItemIndex,
+                wheelFirstVisibleOffset = wheelListState.firstVisibleItemScrollOffset
+            )
+        }
+    }
+
+    GlassBottomSheetHost(
+        onDismissRequest = onDismiss,
+        contentAtTop = contentAtTop,
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().testTag("task_editor_content")) {
             // ---------- 可滚动区 ----------
             Column(
                 modifier = Modifier
@@ -294,7 +347,7 @@ fun TaskEditorSheet(
                     // 「面板剩下的高度」——底下的操作栏是固定的不参与滚动，
                     // 内容再长也不能把它挤出屏幕。
                     .weight(1f, fill = false)
-                    .verticalScroll(rememberScrollState())
+                    .verticalScroll(formScrollState)
                     .padding(horizontal = 20.dp)
                     .padding(top = 2.dp, bottom = 10.dp)
             ) {
@@ -356,11 +409,13 @@ fun TaskEditorSheet(
                     value = description,
                     onValueChange = { description = it },
                     placeholder = "（点击编辑备注）",
+                    // 备注是**用户自己写的段落**：行高按 [withNoteLineHeight] 走 1.25 倍字号。
+                    // 输入框里做不了段间距（加空行会破坏光标位置），
+                    // 所以这里只管行高；段间距在只读展示时由 [NoteText] 负责。
                     textStyle = MaterialTheme.typography.bodyMedium.copy(
                         fontSize = 14.sp,
-                        lineHeight = 21.sp,
                         color = MaterialTheme.colorScheme.onSurface
-                    ),
+                    ).withNoteLineHeight(),
                     // 提示用**小号灰字**。
                     //
                     // 这条备注区是**无边框**的（静止时连底线都不留），平时读起来
@@ -374,7 +429,6 @@ fun TaskEditorSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     ),
                     singleLine = false,
-                    maxLines = 6,
                     restingUnderline = false,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
@@ -415,7 +469,7 @@ fun TaskEditorSheet(
                                 // 名字是用户自己的话，App 替他写好等于先塞一段字给他删。
                                 selectedCourse?.let { c ->
                                     nextAutoTitle(
-                                        isNewTask = initialTask == null,
+                                        isNewTask = !isExistingTask,
                                         currentTitle = title,
                                         oldTemplate = autoTitle(previousTypeKey, c),
                                         newTemplate = autoTitle(option.key, c)
@@ -448,7 +502,7 @@ fun TaskEditorSheet(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Switch(checked = hasDue, onCheckedChange = { hasDue = it })
+                        CompactSwitch(checked = hasDue, onCheckedChange = { hasDue = it })
                         if (hasDue) {
                             Spacer(modifier = Modifier.width(6.dp))
                             PickerSegment(
@@ -533,6 +587,8 @@ fun TaskEditorSheet(
                     CourseWheelPicker(
                         options = courseOptions,
                         selectedIndex = selectedIndex,
+                        // 状态由外面持有：弹层要靠它判断内容是不是整体在顶
+                        listState = wheelListState,
                         onSelected = { index ->
                             val previousCourse = courseOptions.getOrNull(selectedIndex)
                             selectedIndex = index
@@ -540,7 +596,7 @@ fun TaskEditorSheet(
                             val c = courseOptions.getOrNull(index)
                             if (c != null) {
                                 nextAutoTitle(
-                                    isNewTask = initialTask == null,
+                                    isNewTask = !isExistingTask,
                                     currentTitle = title,
                                     // 上一门课是「不关联课程」时没有模板可言：
                                     // 传空串（任何非空标题都匹配不上它）。
@@ -579,7 +635,7 @@ fun TaskEditorSheet(
                         Text("确认删除", color = MaterialTheme.colorScheme.error)
                     }
                 } else {
-                    if (initialTask == null) {
+                    if (!isExistingTask) {
                         // 新建待办：没改动时**没有「取消」的意义** —— 右边那个
                         // 「关闭」做的就是同一件事，两个都摆着只会让人犹豫按哪个。
                         if (hasChanges) {
@@ -603,7 +659,7 @@ fun TaskEditorSheet(
                             modifier = Modifier.testTag("save_task_button")
                         ) {
                             Text(
-                                text = if (initialTask == null) "保存待办" else "保存",
+                                text = if (!isExistingTask) "保存待办" else "保存",
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onPrimary
                             )
@@ -912,13 +968,20 @@ private fun TypeChoiceChip(
 private fun CourseWheelPicker(
     options: List<CourseEntity?>,
     selectedIndex: Int,
+    /**
+     * 滚动状态由外面持有。
+     *
+     * 弹层要靠它判断「内容是不是整体已经在顶」（见 [GlassBottomSheetHost] 的 `contentAtTop`）：
+     * 滚筒滑到尽头时那一下「滑不动」的剩余位移，不能被当成「把弹层往下拖」——
+     * 那会让弹层整个沉下去并一路淡到 20% 不透明度。
+     */
+    listState: LazyListState,
     onSelected: (Int) -> Unit
 ) {
     val itemHeight: Dp = 40.dp
     val visibleCount = 3
     val itemHeightPx = with(LocalDensity.current) { itemHeight.toPx() }
 
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = selectedIndex)
     val flingBehavior = rememberSnapFlingBehavior(lazyListState = listState)
     val scope = rememberCoroutineScope()
 
@@ -1083,6 +1146,117 @@ internal fun nextAutoTitle(
     currentTitle.isBlank() || currentTitle == oldTemplate -> newTemplate
     else -> null
 }
+
+/**
+ * 「打开弹层时的那一份」——只用来跟草稿比差别，有差别才谈得上「保存」。
+ *
+ * 它**不参与渲染**：弹层里显示的是草稿，这份是尺子。
+ */
+internal data class EditorBaseline(
+    val title: String,
+    val description: String,
+    val typeKey: String,
+    val isStarred: Boolean,
+    val hasDue: Boolean,
+    val dueMillis: Long,
+    /** 课程选择器里的基准位置（0 = 不关联课程）。 */
+    val courseIndex: Int
+)
+
+/**
+ * 算「打开弹层时的那一份」。
+ *
+ * ## 三种情形，三个基准
+ *
+ * | 情形 | 基准 |
+ * |---|---|
+ * | 已存在的待办（id != 0） | 它自己 —— 那是用户要看、要改的东西 |
+ * | 空白新建（task 为 null） | 「什么都没有」：空标题、空备注、默认截止、不关联课程 |
+ * | **带预填的新建草稿**（task 非 null 但 id == 0） | **也是「什么都没有」** |
+ *
+ * 第三行是这里唯一需要解释的一行。
+ *
+ * 预填的那份是**草稿**，不是「打开弹层时本来就有的东西」。
+ * 拿它当基准去比，用户会看到一整条填好的作业却被判成「什么都没改」，
+ * 主按钮于是变成「关闭」—— 明明有东西可存，却存不下来。
+ *
+ * 而空白新建的基准必须是「什么都没有」而不是「默认截止」：
+ * 新建待办刚打开就该是「没改动过」，否则主按钮一开始就是可按的，
+ * 用户随手一点就造出一条标题是「待办」的空记录。
+ *
+ * @param selectedCourseIndex 打开弹层时选中的课程下标。
+ * @param defaultDueMillis 新建待办的默认截止（只算一次，见调用处）。
+ */
+internal fun editorBaseline(
+    initialTask: TaskEntity?,
+    selectedCourseIndex: Int,
+    defaultDueMillis: Long
+): EditorBaseline {
+    val existing = initialTask != null && initialTask.id != 0L
+    if (existing) {
+        val task = initialTask!!
+        val hasDue = TaskEntity.hasDue(task)
+        return EditorBaseline(
+            title = task.title,
+            description = task.description,
+            typeKey = task.taskType.orEmpty(),
+            isStarred = TaskStar.isMarked(task.priority),
+            hasDue = hasDue,
+            dueMillis = task.dueDateTimestamp.takeIf { hasDue } ?: defaultDueMillis,
+            courseIndex = selectedCourseIndex
+        )
+    }
+
+    val prefilledDraft = initialTask != null
+    return EditorBaseline(
+        title = "",
+        description = "",
+        typeKey = "",
+        isStarred = false,
+        hasDue = true,
+        dueMillis = defaultDueMillis,
+        // **课程**算不算基准，分两种：
+        // - 空白新建：入口指定的那门课（从课程详情「给这门课加待办」进来）
+        //   是**用户自己挑的**，它算基准 —— 打开弹层时它就在那儿，不算「改动」；
+        // - 预填的新建草稿：课程是 **App 替他找的**（按名字对上的），
+        //   那是替他填的**内容**，所以算改动、算内容，不进基准。
+        courseIndex = if (prefilledDraft) 0 else selectedCourseIndex
+    )
+}
+
+/**
+ * 弹层内容是不是**整体**已经在顶。
+ *
+ * 弹层只有在这个条件成立时才接管内容的下拉手势（把弹层一起往下带）。
+ *
+ * ## 为什么这条规则要单独钉住
+ *
+ * 弹层是在 `onPostScroll` 里接手的，拿到的是「内容没吃掉的剩余位移」。
+ * 那个剩余量在两种情形下**长得一模一样**：
+ *
+ * 1. 内容还能往回滚（滚到头了）；
+ * 2. 内容本来就滚不动（只剩课程滚筒一个滚动容器，且它已经在顶）。
+ *
+ * 分不出来的时候一律拖动弹层，后果不是「多一个手势」而是：
+ * 弹层被整个拽下去，并且一路淡到 20% 不透明度 —— 看着就是「弹层突然变透」。
+ *
+ * ## 为什么要看**两个**容器
+ *
+ * 表单和课程滚筒是**各自独立**的滚动区域：滚筒在顶但表单不在顶时，
+ * 下拉应该滚表单，而不是拖动弹层。只看其中一个都会判错。
+ *
+ * @param formScrollOffset 表单的滚动偏移（0 = 在顶）。
+ * @param wheelFirstVisibleIndex 课程滚筒首个可见项的下标。
+ * @param wheelFirstVisibleOffset 课程滚筒首个可见项已被滚过的像素。
+ */
+internal fun sheetContentAtTop(
+    formScrollOffset: Int,
+    wheelFirstVisibleIndex: Int,
+    wheelFirstVisibleOffset: Int
+): Boolean =
+    formScrollOffset <= 0 &&
+        wheelFirstVisibleIndex == 0 &&
+        wheelFirstVisibleOffset == 0
 
 /**
  * 换课程时补的默认标题。
