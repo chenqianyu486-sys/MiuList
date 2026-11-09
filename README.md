@@ -163,11 +163,21 @@ gradlew.bat testDebugUnitTest --tests "com.example.data.sync.web.WebSyncApiTest"
 Windows 上开发，双击仓库根目录的 **`start-preview.bat`** 就行：构建 → 起模拟器 → 装包 → 启动 App 一条龙，
 并且会先把模拟器屏幕摆正到设计基准（411dp），避免拿别的屏幕比例判断排版。
 
+模拟器**自己的窗口**也会被摆好并提到最前面。它会按上次退出时的坐标重开窗口，而在高 DPI 桌面上那个坐标
+可能整块落在屏幕外（这台机器 3072x1920 @225%，可用区域只有 1365x853；实测窗口回到 990,-240 的
+387x867，240px 在屏幕上方，其余躲在全屏浏览器后面），表现就是"跑完了但什么都看不到"。现在窗口固定从
+左上角出现，只在放不下时才等比缩小；如果拿到的是没有窗口的模拟器（headless，或者 UI 进程已经不在了），
+脚本会先换成带窗口的那一个，而不是沿用后什么都不显示。
+
+每次运行（包括外层 stub）都会在 `preview-launcher.log` 里留一行。双击后如果什么都没发生，先看这个文件：
+没有记录 = cmd 根本没跑到这个 bat（文件关联 / shell 的问题）；有 start 没有 exit = 中途挂了。
+
 ```bash
-start-preview.bat                # 默认
-start-preview.bat -DryRun        # 只打印计划，不动手
-start-preview.bat -SkipBuild     # 跳过 Gradle
-start-preview.bat -Display base  # 换成设计基准 411dp
+start-preview.bat                     # 默认
+start-preview.bat -DryRun             # 只打印计划，不动手
+start-preview.bat -SkipBuild          # 跳过 Gradle
+start-preview.bat -RestartEmulator    # 窗口不见了 / 卡住时，换一个新的模拟器
+start-preview.bat -Display base       # 换成设计基准 411dp
 ```
 
 ### 跑测试
