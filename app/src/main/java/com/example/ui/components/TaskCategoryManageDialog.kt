@@ -1,7 +1,6 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,7 +42,6 @@ import com.example.data.model.CustomTaskType
 import com.example.data.model.TASK_TYPE_NONE
 import com.example.data.model.TaskType
 import com.example.ui.theme.ChipSurfaceNeutral
-import com.example.ui.theme.GlassEdgeBottom
 import com.example.ui.theme.TextSecondary
 
 /**
@@ -171,7 +169,6 @@ fun TaskCategoryManageDialog(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(ChipSurfaceNeutral)
-                                .border(0.5.dp, GlassEdgeBottom, RoundedCornerShape(12.dp))
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -243,7 +240,6 @@ fun TaskCategoryManageDialog(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(ChipSurfaceNeutral)
-                                .border(0.5.dp, GlassEdgeBottom, RoundedCornerShape(12.dp))
                                 .padding(vertical = 18.dp),
                             contentAlignment = Alignment.Center
                         ) {
@@ -261,7 +257,6 @@ fun TaskCategoryManageDialog(
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(12.dp))
                                     .background(ChipSurfaceNeutral)
-                                    .border(0.5.dp, GlassEdgeBottom, RoundedCornerShape(12.dp))
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween

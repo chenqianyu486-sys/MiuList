@@ -2,9 +2,15 @@ package com.example.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,21 +21,32 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathMeasure
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -39,6 +56,7 @@ import com.example.data.model.CustomTaskType
 import com.example.data.model.TaskStar
 import com.example.data.model.TaskTypes
 import com.example.ui.theme.LocalWallpaperIsCustom
+import com.example.ui.theme.LimeGreenOnLight
 import com.example.ui.theme.MiuSurface
 import com.example.ui.theme.MiuType
 import com.example.ui.theme.NestedFaceAlpha
@@ -49,6 +67,7 @@ import com.example.data.calendar.AppZone
 import com.example.ui.theme.glassSurface
 import com.example.ui.theme.readableOn
 import com.example.ui.theme.scaledWithText
+import kotlinx.coroutines.delay
 import java.util.Calendar
 
 /**
@@ -93,6 +112,29 @@ private const val ControlRimAlpha = 0.70f
 
 /** 白色描线的粗细。24dp 的控件上，1dp 才勾得出轮廓。 */
 private val ControlRimWidth = 1.dp
+
+/**
+ * 完成之后，卡面染色保留的比例。
+ *
+ * 完成是「这张纸做完了、退到背景里」——它应该**变浅**，不是变深。
+ * 所以白衬底（决定卡面明度的那层）一点不动，只把课程色退到 42%：
+ * 同一张白纸，颜色退了，比没做完的更淡。
+ *
+ * 降的是 alpha 而不是换一支更浅的色：`cardTint` 是按 0.30 反解出来的那支颜色，
+ * 降强度就是往白里退，色相（哪门课）仍然在；换色则要重新反解一遍，容易偏。
+ */
+private const val CompletedTintScale = 0.42f
+
+/**
+ * 完成态勾选圈的填色不透明度。
+ *
+ * 原来是**实心主题绿**。放在一张淡彩卡上，那一块绿是全卡最重的一笔——
+ * 勾一下反而把卡「压深」了，和「清新淡彩、越走越淡」正好相反。
+ *
+ * 0.32 的绿压在卡面上是一块很浅的抹茶痕：**勾本身**（深抹茶描线）才是信息，
+ * 底色只负责让这颗圈看起来「填上了」。留白比填满更像做了个记号。
+ */
+private const val CheckedFillAlpha = 0.32f
 
 @Composable
 fun TaskItemCard(
@@ -154,6 +196,14 @@ fun TaskItemCard(
     val contentBase = if (customWallpaper) 0.72f else 0.55f
     val tintAlpha = if (customWallpaper) 0.26f else 0.30f
 
+    // 完成态「越来越淡」：白衬底不动，只把课程色退掉。
+    //
+    // 原来用的是 `faceAlphaScale = 0.78`，问题在它同时把**白衬底**也调薄了：
+    // 壁纸从卡面后面透上来，那张卡不是变淡，是变深、变脏——正好和「清新淡彩」相反。
+    // 现在只降染色强度，而且仍然用原来那支反解色（`cardTint` 按 0.30 解出来的）
+    // 去降到 42%，于是完成卡读起来是「同一张白纸，颜色退了」，比没做完的更浅。
+    val tintScale = if (task.isCompleted) CompletedTintScale else 1f
+
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -179,11 +229,11 @@ fun TaskItemCard(
                     // 课程色回到卡面，但只做「哪门课」的暗示；正文对比度
                     // 由底色染色的等重计算和自适应白衬底一起兜住。
                     tint = if (nestedInCourseCard) Color.White else cardTint(courseColor, tintAlpha),
-                    tintAlpha = if (nestedInCourseCard) NestedFaceAlpha else tintAlpha,
+                    // 嵌在课程卡里的那张小待办不跟着退：它的面本来就是一层白，
+                    // 再降就是在课程色上开个洞，反而更深。
+                    tintAlpha = if (nestedInCourseCard) NestedFaceAlpha else tintAlpha * tintScale,
                     baseCoatAlpha = if (nestedInCourseCard) 0f else contentBase,
-                    blurRadius = 0.dp,
-                    // 已完成的待办压扁一点，别跟没做完的抢注意力
-                    faceAlphaScale = if (task.isCompleted) 0.78f else 1f
+                    blurRadius = 0.dp
                 )
                 .padding(
                     horizontal = 13.dp,
@@ -192,68 +242,34 @@ fun TaskItemCard(
                 ),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 勾选圈的填色是这门课的粉彩，**比卡面淡**（不透明度 0.15 < 卡片的 0.30），
+            // 勾选圈的填色是这门课的粉彩，**比卡面淡**（不透明度 0.08 < 卡片的 0.30），
             // 白只留一圈描边——肉眼几乎只剩那一圈白线，就是「只保留白色描线」。
-            // 完成态不变：主题绿实心 + 对勾，那是「做完了」的状态色，不是主题色。
-            val checkboxBg by animateColorAsState(
-                targetValue = if (task.isCompleted) MaterialTheme.colorScheme.primary else circleFill,
-                animationSpec = tween(durationMillis = 200),
-                label = "checkboxBg"
+            // 勾上之后是一层很浅的抹茶 + 深抹茶描线（见 [TaskCheckCircle]），
+            // 不是实心绿：完成态要比没做完的更淡，才不会把整张卡压深。
+            TaskCheckCircle(
+                isCompleted = task.isCompleted,
+                circleFill = circleFill,
+                onClick = onToggleComplete,
+                modifier = Modifier.testTag("task_checkbox_${task.id}")
             )
-            Box(
-                modifier = Modifier
-                    // 勾选圈是**固定盒子**：字放大 1.5 倍、圈不变，圈就小得像个句号。
-                    // 所以圈跟字一起放大（见 [scaledWithText]）。
-                    .size(32.dp.scaledWithText())
-                    .clip(CircleShape)
-                    .clickable { onToggleComplete() }
-                    .testTag("task_checkbox_${task.id}"),
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(24.dp.scaledWithText())
-                        .clip(CircleShape)
-                        .background(checkboxBg)
-                        .border(
-                            ControlRimWidth,
-                            Color.White.copy(alpha = ControlRimAlpha),
-                            CircleShape
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (task.isCompleted) {
-                        Icon(
-                            imageVector = Icons.Default.Check,
-                            contentDescription = "已完成",
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(14.dp.scaledWithText())
-                        )
-                    }
-                }
-            }
 
             Spacer(modifier = Modifier.width(7.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
+                // 划线是**扫**过去的，见 [TaskTitleText]。
+                // 名称**不设行数上限**：长名字折行显示，而不是被省略号截掉。
+                //
+                // 这一行是这条待办唯一能一眼读到名字的地方 —— 项目原则是
+                // 「读不全就不算标题」。原来卡在两行：「【作业】数据结构 第6周作业」
+                // 在窄屏上折两行还差一点，末尾就被省略号吃掉了，读出来的是
+                // 一个不完整的名字（还容易被当成另一个待办的名字）。
+                //
+                // 名字是用户自己写的，长度不可控，所以上限交给内容本身：
+                // 折几行就长几行，卡跟着长。
+                TaskTitleText(
                     text = displayTitle,
                     style = MiuType.CardTitleCompact,
-                    color = if (task.isCompleted) {
-                        TextSecondary
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                    textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None
-                    // 名称**不设行数上限**：长名字折行显示，而不是被省略号截掉。
-                    //
-                    // 这一行是这条待办唯一能一眼读到名字的地方 —— 项目原则是
-                    // 「读不全就不算标题」。原来卡在两行：「【作业】数据结构 第6周作业」
-                    // 在窄屏上折两行还差一点，末尾就被省略号吃掉了，读出来的是
-                    // 一个不完整的名字（还容易被当成另一个待办的名字）。
-                    //
-                    // 名字是用户自己写的，长度不可控，所以上限交给内容本身：
-                    // 折几行就长几行，卡跟着长。
+                    completed = task.isCompleted
                 )
 
                 Spacer(modifier = Modifier.height(4.dp.scaledWithText()))
@@ -309,6 +325,83 @@ fun TaskItemCard(
                 unstarredColor = Color.White.copy(alpha = ControlRimAlpha),
                 unstarredFill = starFill,
                 modifier = Modifier.testTag("task_star_${task.id}")
+            )
+        }
+    }
+}
+
+/**
+ * 卡片标题：完成时那道划线是**扫**过去的。
+ *
+ * ## 为什么不是直接切 `TextDecoration.LineThrough`
+ *
+ * 直接切是「啪」地多出一条线，读起来像渲染出了错；而「划掉」本身是有方向的——
+ * 一条线从左走到右，才像笔划过去的。所以这里把标题画两遍：底下那遍不带装饰，
+ * 上面那遍带 `LineThrough`，再用水平裁剪露出 0→100%。两遍的字形完全重合，
+ * 眼睛看到的只有那条线在长出来。
+ *
+ * 画完（progress = 1）就换回单个带装饰的 `Text`：两遍文本只在动画那两百多毫秒里存在。
+ *
+ * ## 为什么标题墨色也在这里跟着变
+ *
+ * 完成之后标题要压暗成 [TextSecondary]（比正文轻），而且上面那两层必须用**同一个**
+ * 颜色：差一个色阶，扫过去的时候就会看到一条色带。
+ *
+ * 划线的初值跟着状态走：打开「已完成」筛选时这些卡一进来就是已完成，
+ * 不该从 0 再划一遍（同 [TaskCheckCircle] 里那道勾）。
+ */
+@Composable
+private fun TaskTitleText(
+    text: String,
+    style: TextStyle,
+    completed: Boolean
+) {
+    val ink by animateColorAsState(
+        targetValue = if (completed) TextSecondary else MaterialTheme.colorScheme.onSurface,
+        animationSpec = tween(durationMillis = 160),
+        label = "titleInk"
+    )
+
+    val strike = remember { Animatable(if (completed) 1f else 0f) }
+    LaunchedEffect(completed) {
+        if (completed) {
+            strike.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(
+                    durationMillis = TaskCompleteMotion.StrikeDrawMs,
+                    delayMillis = TaskCompleteMotion.StrikeDrawDelayMs,
+                    easing = LinearOutSlowInEasing
+                )
+            )
+        } else {
+            strike.snapTo(0f)
+        }
+    }
+
+    val progress = strike.value
+    when {
+        progress >= 1f -> Text(
+            text = text,
+            style = style,
+            color = ink,
+            textDecoration = TextDecoration.LineThrough
+        )
+        !completed -> Text(text = text, style = style, color = ink)
+        else -> Box {
+            Text(text = text, style = style, color = ink)
+            Text(
+                text = text,
+                style = style,
+                color = ink,
+                textDecoration = TextDecoration.LineThrough,
+                modifier = Modifier
+                    // 上面那遍只是用来把线扫出来的，读屏不该把标题读两遍
+                    .clearAndSetSemantics { }
+                    .drawWithContent {
+                        clipRect(right = size.width * progress.coerceIn(0f, 1f)) {
+                            this@drawWithContent.drawContent()
+                        }
+                    }
             )
         }
     }
@@ -399,5 +492,144 @@ fun getRelativeDueDescription(dueTimestamp: Long): String {
         isTomorrow -> "明天 $hourStr"
         diff < 7 * 86400000L -> "${(diff / 86400000L) + 1}天后"
         else -> "${dueCal.get(Calendar.MONTH) + 1}月${dueCal.get(Calendar.DAY_OF_MONTH)}日"
+    }
+}
+
+
+/**
+ * 待办卡左侧那颗勾选圈。
+ *
+ * 分三层，各自只回答一件事：
+ *
+ * - **按下**：圈缩到 0.90，70ms 到位。这是「手指落在了这颗圈上」的回应。
+ *   不用 Material 的水波纹：卡面是纸和玻璃，压下去该有一点塌，而不是泛一圈光。
+ * - **勾上**：底色 120ms 褪成一层很浅的抹茶（[CheckedFillAlpha]），勾用 160ms
+ *   从无到有**描**出来（节奏见 [TaskCompleteMotion]）。勾比底色晚半步，
+ *   才读成「落在淡绿底上」。勾用深抹茶而不是近黑的 onPrimary——
+ *   这颗圈是淡彩的一部分，笔画的重量已经够了，不需要墨黑一块压在上面。
+ * - **读屏**：整颗圈是一个 Checkbox 角色，动作名是「标记完成 / 取消完成」。
+ *
+ * 勾的初值跟着状态走：打开「已完成」筛选时，那些卡一进来就是已完成，
+ * 不该从 0 再描一遍——否则整屏读起来像刚被勾过一轮。
+ */
+@Composable
+private fun TaskCheckCircle(
+    isCompleted: Boolean,
+    circleFill: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+
+    val pressScale by animateFloatAsState(
+        targetValue = if (pressed) 0.90f else 1f,
+        animationSpec = tween(
+            // 按下要立刻有回应；松开可以慢一点回来。
+            durationMillis = if (pressed) 70 else 140,
+            easing = LinearOutSlowInEasing
+        ),
+        label = "checkPress"
+    )
+
+    val fill by animateColorAsState(
+        // 完成态不再是实心主题绿：那是最重的一笔，会把这张淡彩卡压深。
+        // 改成一层很浅的抹茶痕，信息交给描出来的那道勾。
+        targetValue = if (isCompleted) {
+            MaterialTheme.colorScheme.primary.copy(alpha = CheckedFillAlpha)
+        } else {
+            circleFill
+        },
+        animationSpec = tween(durationMillis = 120),
+        label = "checkboxBg"
+    )
+
+    val tick = remember { Animatable(if (isCompleted) 1f else 0f) }
+    LaunchedEffect(isCompleted) {
+        if (isCompleted) {
+            tick.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(
+                    durationMillis = TaskCompleteMotion.TickDrawMs,
+                    delayMillis = TaskCompleteMotion.TickDrawDelayMs,
+                    easing = LinearOutSlowInEasing
+                )
+            )
+        } else {
+            tick.snapTo(0f)
+        }
+    }
+
+    // 勾画到一半时给一次轻触反馈：手上要有一下，才配得上「完成」这件事。
+    val haptic = LocalHapticFeedback.current
+    LaunchedEffect(isCompleted) {
+        if (!isCompleted) return@LaunchedEffect
+        delay((TaskCompleteMotion.TickDrawDelayMs + TaskCompleteMotion.TickDrawMs / 2).toLong())
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    }
+
+    // 勾是深抹茶，不是 onPrimary（近黑）：一块淡绿底上压一道墨黑，
+    // 那颗圈会立刻变成全卡最重的点，把「淡」全吃掉。
+    val checkColor = LimeGreenOnLight
+
+    Box(
+        modifier = modifier
+            // 勾选圈是**固定盒子**：字放大 1.5 倍、圈不变，圈就小得像个句号。
+            // 所以圈跟字一起放大（见 [scaledWithText]）。
+            .size(32.dp.scaledWithText())
+            .clip(CircleShape)
+            .clickable(
+                interactionSource = interaction,
+                // 水波纹换成「压下去缩一点」：纸和玻璃压下去该塌，不该泛光。
+                indication = null,
+                onClickLabel = if (isCompleted) "取消完成" else "标记完成",
+                role = Role.Checkbox,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(24.dp.scaledWithText())
+                .graphicsLayer {
+                    scaleX = pressScale
+                    scaleY = pressScale
+                }
+                .clip(CircleShape)
+                .background(fill)
+                .border(
+                    ControlRimWidth,
+                    Color.White.copy(alpha = ControlRimAlpha),
+                    CircleShape
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isCompleted) {
+                val progress = tick.value
+                Canvas(modifier = Modifier.size(14.dp.scaledWithText())) {
+                    if (progress <= 0f) return@Canvas
+                    val w = size.width
+                    val h = size.height
+                    // 起笔低、转折靠左、收笔拉长：一个略微「上头」的对勾
+                    val check = Path().apply {
+                        moveTo(w * 0.12f, h * 0.52f)
+                        lineTo(w * 0.40f, h * 0.79f)
+                        lineTo(w * 0.88f, h * 0.22f)
+                    }
+                    val measure = PathMeasure().apply { setPath(check, false) }
+                    val drawn = Path()
+                    measure.getSegment(0f, measure.length * progress, drawn, true)
+                    drawPath(
+                        path = drawn,
+                        color = checkColor,
+                        style = Stroke(
+                            width = 2.dp.toPx(),
+                            cap = StrokeCap.Round,
+                            join = StrokeJoin.Round
+                        )
+                    )
+                }
+            }
+        }
     }
 }

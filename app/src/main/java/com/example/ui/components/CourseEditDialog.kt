@@ -68,6 +68,7 @@ import com.example.data.timetable.PeriodTable
 import com.example.data.timetable.WeekSet
 import com.example.ui.theme.LimeGreenOnLight
 import com.example.ui.theme.LocalEffectiveFontScale
+import com.example.ui.theme.withNoteLineHeight
 
 val DAYS_OF_WEEK = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 
@@ -234,6 +235,8 @@ fun CourseEditDialog(
                     onValueChange = { note = it },
                     label = { Text("课程备注（选填）") },
                     placeholder = { Text("如：期末开卷，教材第3版，作业交到学号邮箱") },
+                    // 备注类文字块一律 1.25 倍行高（见 [withNoteLineHeight]）。
+                    textStyle = MaterialTheme.typography.bodyLarge.withNoteLineHeight(),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("course_note_input"),

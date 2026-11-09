@@ -1,7 +1,6 @@
-﻿package com.example.ui.components
+package com.example.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -62,7 +61,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.LimeGreenOnPrimary
 import com.example.ui.theme.LimeGreenPrimary
-import com.example.ui.theme.GlassEdgeBottom
 import com.example.ui.theme.GlassIslandShape
 import com.example.ui.theme.GlassTintNeutral
 import com.example.ui.theme.LocalEffectiveFontScale
@@ -85,14 +83,26 @@ fun micaChipColors() = FilterChipDefaults.filterChipColors(
     selectedLabelColor = LimeGreenOnPrimary,
 )
 
-/** 未选中的 chip 留一道几乎看不见的发丝边，选中时完全不描边。 */
+/**
+ * chip 的描边：**一律不描**。
+ *
+ * 原来是「未选中留一道几乎看不见的发丝边，选中完全不描」。
+ * 那道边压在同样浅的玻璃面上只会比面更亮，于是读出来就是一圈**白边**；
+ * 换到深色或花纹壁纸，它又变成硬亮的一圈。
+ *
+ * 所以玻璃面上一律不描边：chip 的边界由**底色**自己说
+ * （未选中是中性面 `GlassTintNeutral`，选中是主题绿），不靠一条边去补。
+ *
+ * 保留这个函数是为了不改 5 个调用点的签名（课程编辑的类别/星期/周次、
+ * 课表转移的策略、待办编辑的类型）—— 它们要的只是「统一的那套 chip 外观」。
+ */
 @Composable
 fun micaChipBorder(selected: Boolean) = FilterChipDefaults.filterChipBorder(
     enabled = true,
     selected = selected,
-    borderColor = GlassEdgeBottom,
+    borderColor = Color.Transparent,
     selectedBorderColor = Color.Transparent,
-    borderWidth = 0.5.dp,
+    borderWidth = 0.dp,
     selectedBorderWidth = 0.dp,
 )
 

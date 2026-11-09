@@ -175,8 +175,8 @@ class TaskCategoryManageDialogTest {
         composeTestRule.onNodeWithText("待办分类管理").assertExists()
         composeTestRule.onNodeWithText("4 个自带分类 · 1 个自定义分类").assertDoesNotExist()
 
-        // 点击「管理」按钮
-        composeTestRule.onNodeWithTag("open_task_category_dialog_button").performClick()
+        // 点整张卡（行尾那个「>」只是方向提示，行为只有一个）
+        composeTestRule.onNodeWithTag("open_task_category_dialog_row").performClick()
         assertTrue(openedCategoryManage)
     }
 }

@@ -53,8 +53,6 @@ import androidx.compose.material.icons.outlined.School
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -76,8 +74,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.calendar.EpochDays
 import com.example.data.local.CourseWithSlots
 import com.example.ui.theme.CardBlockGap
-import com.example.ui.theme.LimeGreenOnPrimary
-import com.example.ui.theme.LimeGreenPrimary
+import com.example.ui.theme.LimeGreenTileFaint
 import com.example.ui.theme.PageHInset
 import com.example.ui.theme.TextTertiary
 import com.example.ui.theme.TextSecondary
@@ -594,7 +591,10 @@ private fun DrawerRow(
             modifier = Modifier
                 .size(40.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.primaryContainer),
+                // 与设置页同一颗更浅的方块底（[LimeGreenTileFaint]）：
+                // 这一列方块一屏七八个，底色深一点就连成一片绿，
+                // 把注意力全吃掉了 —— 方块只是「这是一行入口」的分组标记。
+                .background(LimeGreenTileFaint),
             contentAlignment = Alignment.Center
         ) {
             Icon(
@@ -687,7 +687,10 @@ private fun DrawerToggleRow(
             modifier = Modifier
                 .size(40.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.primaryContainer),
+                // 与设置页同一颗更浅的方块底（[LimeGreenTileFaint]）：
+                // 这一列方块一屏七八个，底色深一点就连成一片绿，
+                // 把注意力全吃掉了 —— 方块只是「这是一行入口」的分组标记。
+                .background(LimeGreenTileFaint),
             contentAlignment = Alignment.Center
         ) {
             Icon(
@@ -719,14 +722,9 @@ private fun DrawerToggleRow(
             }
         }
         Spacer(modifier = Modifier.width(8.dp))
-        Switch(
+        CompactSwitch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            // 与「待办生成规则」弹层里那些开关同一套配色（见 TaskRulesDialog）。
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = LimeGreenOnPrimary,
-                checkedTrackColor = LimeGreenPrimary
-            ),
             modifier = Modifier.testTag("${testTag}_switch")
         )
     }

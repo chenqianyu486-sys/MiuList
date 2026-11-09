@@ -28,7 +28,6 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -49,7 +48,6 @@ import com.example.data.generation.TaskCadence
 import com.example.data.local.CourseEntity
 import com.example.data.model.TaskType
 import com.example.ui.theme.ChipSurfaceNeutral
-import com.example.ui.theme.GlassEdgeBottom
 import com.example.ui.theme.LimeGreenOnPrimary
 import com.example.ui.theme.LimeGreenPrimary
 import com.example.ui.theme.TextMuted
@@ -132,11 +130,6 @@ fun TaskRulesDialog(
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(
                                     if (isSelected) LimeGreenPrimary else ChipSurfaceNeutral
-                                )
-                                .border(
-                                    width = if (isSelected) 0.dp else 0.5.dp,
-                                    color = if (isSelected) Color.Transparent else GlassEdgeBottom,
-                                    shape = RoundedCornerShape(10.dp)
                                 )
                                 .clickable { selectedCourseId = c.id }
                                 .padding(horizontal = 8.dp, vertical = 5.dp),
@@ -228,13 +221,9 @@ private fun TaskRuleRow(
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                 color = MaterialTheme.colorScheme.onSurface
             )
-            Switch(
+            CompactSwitch(
                 checked = enabled,
-                onCheckedChange = onToggle,
-                colors = androidx.compose.material3.SwitchDefaults.colors(
-                    checkedThumbColor = LimeGreenOnPrimary,
-                    checkedTrackColor = LimeGreenPrimary
-                )
+                onCheckedChange = onToggle
             )
         }
 
@@ -356,7 +345,6 @@ private fun StepperButton(desc: String, onClick: () -> Unit) {
             .size(26.dp)
             .clip(CircleShape)
             .background(ChipSurfaceNeutral)
-            .border(0.5.dp, GlassEdgeBottom, CircleShape)
             .clickable { onClick() },
         contentAlignment = Alignment.Center
     ) {

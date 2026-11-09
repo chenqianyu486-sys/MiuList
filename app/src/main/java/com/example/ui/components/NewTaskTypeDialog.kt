@@ -38,7 +38,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.TaskTypePalettes
 import com.example.ui.theme.ChipSurfaceNeutral
-import com.example.ui.theme.GlassEdgeBottom
 
 /**
  * 新建一个待办类型。
@@ -93,7 +92,6 @@ fun NewTaskTypeDialog(
                         .fillMaxWidth()
                         .clip(shape)
                         .background(ChipSurfaceNeutral)
-                        .border(0.5.dp, GlassEdgeBottom, shape)
                         .padding(horizontal = 12.dp, vertical = 11.dp)
                         .testTag("new_task_type_label_input"),
                     decorationBox = { inner ->

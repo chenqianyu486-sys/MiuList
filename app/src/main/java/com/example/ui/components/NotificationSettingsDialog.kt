@@ -40,8 +40,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
@@ -373,13 +371,9 @@ private fun MasterToggleRow(
             )
         }
         Spacer(modifier = Modifier.width(8.dp))
-        Switch(
+        CompactSwitch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                checkedTrackColor = MaterialTheme.colorScheme.primary
-            ),
             modifier = Modifier.testTag("notification_master_switch")
         )
     }
@@ -424,13 +418,9 @@ private fun ReminderToggleRow(
                 )
             }
             Spacer(modifier = Modifier.width(8.dp))
-            Switch(
+            CompactSwitch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                    checkedTrackColor = MaterialTheme.colorScheme.primary
-                ),
                 modifier = Modifier.testTag(switchTestTag)
             )
         }

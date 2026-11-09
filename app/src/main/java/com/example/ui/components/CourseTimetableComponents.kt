@@ -46,6 +46,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,7 +82,6 @@ import com.example.ui.theme.CourseCellDeepFaceAlpha
 import com.example.ui.theme.cardTint
 import com.example.ui.theme.NestedFaceAlpha
 import com.example.ui.theme.TeaColor
-import com.example.ui.theme.TeaColorBorder
 import com.example.ui.theme.TeaOnColor
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -94,6 +94,7 @@ import com.example.ui.theme.isLightColor
 import com.example.ui.theme.glassSurface
 import com.example.ui.theme.pushAwayFrom
 import com.example.ui.theme.readableOn
+import com.example.ui.theme.withNoteLineHeight
 
 /**
  * 课程色卡面的那层「晕开 + 高光」。
@@ -180,7 +181,16 @@ fun TaskDotsBadge(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
             .background(bg)
-            .border(0.5.dp, if (isGreen) TeaColorBorder else activeColor.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+            // 绿色系原本挂着一道浅发丝边（TeaColorBorder）：白边压在浅色玻璃面上
+            // 只会比面更亮，读出来就是一圈**白边**。玻璃面一律不描边。
+            // 非绿色系那道课程色的边保留 —— 它是课程身份，不是玻璃边。
+            .then(
+                if (isGreen) {
+                    Modifier
+                } else {
+                    Modifier.border(0.5.dp, activeColor.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                }
+            )
             .padding(horizontal = 3.5.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.5.dp)
@@ -617,7 +627,14 @@ fun CourseLinkageSheet(
     val slots = courseWithSlots.slots
     val courseColor = parseColor(course.colorHex)
 
-    GlassBottomSheetHost(onDismissRequest = onDismiss) {
+    // 内容在顶时，下拉才是「把弹层往下带」（见 [GlassBottomSheetHost] 的 contentAtTop）
+    val contentScrollState = rememberScrollState()
+    val contentAtTop = remember { { contentScrollState.value <= 0 } }
+
+    GlassBottomSheetHost(
+        onDismissRequest = onDismiss,
+        contentAtTop = contentAtTop,
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -632,7 +649,7 @@ fun CourseLinkageSheet(
                 // 顺带说一句：这不是备注引入的 bug —— 加备注之前那 2 个按钮就已经在
                 // 屏幕外了（只差 ~18px），备注只是把差距拉大到 ~165px。
                 // 别的底部弹层（待办详情）一直用 [SheetContent]，它带滚动。
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(contentScrollState)
                 .padding(horizontal = 20.dp)
                 .padding(top = 4.dp, bottom = 12.dp)
         ) {
@@ -665,7 +682,18 @@ fun CourseLinkageSheet(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
                         .background(if (isGreen) TeaColor else courseColor.copy(alpha = 0.15f))
-                        .border(0.5.dp, if (isGreen) TeaColorBorder else courseColor.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                        // 同上：绿色系不描边（白边），非绿色系保留课程色的那道边。
+                        .then(
+                            if (isGreen) {
+                                Modifier
+                            } else {
+                                Modifier.border(
+                                    0.5.dp,
+                                    courseColor.copy(alpha = 0.35f),
+                                    RoundedCornerShape(6.dp)
+                                )
+                            }
+                        )
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(
@@ -862,9 +890,11 @@ fun CourseLinkageSheet(
                                 tint = accentOnCourse(courseColor)
                             )
                             Spacer(modifier = Modifier.width(5.dp))
-                            Text(
+                            // 备注类文字块一律 1.25 倍行高（被动换行）+ 0.7 个字的段间距（回车换行），
+                            // 见 [NoteText]。用户敲的每一个回车都算另起一段。
+                            NoteText(
                                 text = course.note,
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.bodySmall.withNoteLineHeight(),
                                 color = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.weight(1f)
                             )
