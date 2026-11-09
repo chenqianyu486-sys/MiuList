@@ -1,6 +1,11 @@
 package com.example.ui.screens
 
 import android.widget.Toast
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -8,14 +13,19 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
@@ -30,36 +40,50 @@ import androidx.compose.material.icons.outlined.ImportExport
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.SystemUpdateAlt
 import androidx.compose.material.icons.outlined.Wallpaper
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.source.weather.AqiStandard
+import com.example.ui.components.CompactSwitch
 import com.example.ui.components.islandBottomInset
 import com.example.ui.theme.CardBlockGap
+import com.example.ui.theme.LimeGreenTileFaint
 import com.example.ui.theme.PageHInset
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.measureTextHeight
+import com.example.ui.theme.measureTextSize
 import com.example.ui.theme.glassSurface
 
 /**
@@ -80,15 +104,24 @@ import com.example.ui.theme.glassSurface
  * 同一个入口在两个地方都能点，用户会犹豫该点哪个——所以搬走的同时，
  * 这一页里对应的入口**全部删除**，不做「这里也留一个」的重复。
  *
- * **每一项只留标题**（图标 + 标题 + 右侧按钮）：原来每张卡下面还挂着一句副标题
+ * **每一项只留标题**（图标 + 标题 + 行尾一个「>」）：原来每张卡下面还挂着一句副标题
  * （导入导出说「课表、待办、分类与规则一起带走」、分类说「4 个自带分类 · N 个自定义
  * 分类」、壁纸说当前用的是哪一张、引导说「四步走一遍：…」）。那些句子讲的**都是
  * 这一项本身是什么**，而点进去的弹层里本来就写着；门口再说一遍是同一件事说两遍。
- * 标题 + 按钮已经足够点，副标题一律不要。
+ * 标题 + 引导已经足够点，副标题一律不要。
  *
- * **前两项是偏好开关**，排在最前面：待办完成确认是每天都会碰到的决定
+ * **行尾不再摆实心按钮**：原来右边那颗绿按钮（「管理」「更换」「打开」……）一屏七八个，
+ * 视觉重量和标题一样重 —— 用户扫这一页时先看见的是按钮，不是这一行是什么。
+ * 现在换成一个**线性画出来的「>」**：它只说明「这一行点得进去」，是个方向提示，
+ * 不与标题抢注意力。整张卡仍然是唯一的落点（与抽屉里的行同一套约定）。
+ *
+ * **空气质量那一项是行尾的两颗按钮**：原来是一颗开关，标题被迫写成「空气质量用美国 AQI」
+ * —— 开关只说「开 / 关」，用户得靠句子去猜「开」的是哪一套。现在两套标准的名字直接
+ * 写成两颗按钮（左「中国」、右「美国」），当前是哪一颗绿着，一眼看见。
+ *
+ * **前两项是偏好**，排在最前面：待办完成确认是每天都会碰到的决定
  * （勾掉待办要不要多问一句）；空气质量标准决定天气块那一行显示国标还是
- * 美国 AQI —— 两套数都在 weather.json 里，拨开关只换显示，不联网。
+ * 美国 AQI —— 两套数都在 weather.json 里，拨一下只换显示，不联网。
  * 下面那几张都是「不常动、动了要慎重」的数据操作，常用的放最上面。
  */
 @Composable
@@ -140,15 +173,12 @@ fun SettingsScreen(
 
         item {
             // 两套 AQI 的**数值**不一样，不只是标签。天气块两套都用
-            // “空气 + 等级 + 数值”的自然文案，当前标准由这颗开关说明。
-            SettingsToggleCard(
+            // “空气 + 等级 + 数值”的自然文案 —— 哪一套正在用，由行尾那颗绿按钮说出来。
+            SettingsAqiCard(
                 icon = Icons.Outlined.Cloud,
-                title = "空气质量用美国 AQI",
-                checked = aqiStandard == AqiStandard.US,
-                onCheckedChange = { useUs ->
-                    onAqiStandardChange(if (useUs) AqiStandard.US else AqiStandard.CN)
-                },
-                testTag = "settings_us_aqi_switch"
+                title = "空气质量 AQI",
+                standard = aqiStandard,
+                onStandardChange = onAqiStandardChange
             )
         }
 
@@ -158,8 +188,7 @@ fun SettingsScreen(
             SettingsActionCard(
                 icon = Icons.Outlined.Notifications,
                 title = "通知提醒",
-                actionLabel = "设置",
-                actionTestTag = "open_notification_settings_button",
+                actionTestTag = "open_notification_settings_row",
                 onAction = onOpenNotificationDialog
             )
         }
@@ -168,8 +197,7 @@ fun SettingsScreen(
             SettingsActionCard(
                 icon = Icons.Outlined.ImportExport,
                 title = "数据导入 / 导出",
-                actionLabel = "管理",
-                actionTestTag = "open_transfer_button",
+                actionTestTag = "open_transfer_row",
                 onAction = onOpenTransferDialog
             )
         }
@@ -178,8 +206,7 @@ fun SettingsScreen(
             SettingsActionCard(
                 icon = Icons.Outlined.Category,
                 title = "待办分类管理",
-                actionLabel = "管理",
-                actionTestTag = "open_task_category_dialog_button",
+                actionTestTag = "open_task_category_dialog_row",
                 onAction = onOpenCategoryManageDialog
             )
         }
@@ -188,8 +215,7 @@ fun SettingsScreen(
             SettingsActionCard(
                 icon = Icons.Outlined.Wallpaper,
                 title = "自定义壁纸",
-                actionLabel = "更换",
-                actionTestTag = "open_wallpaper_button",
+                actionTestTag = "open_wallpaper_row",
                 onAction = onOpenWallpaperDialog
             )
         }
@@ -202,8 +228,7 @@ fun SettingsScreen(
             SettingsActionCard(
                 icon = Icons.Outlined.Explore,
                 title = "使用引导",
-                actionLabel = "打开",
-                actionTestTag = "open_onboarding_guide_button",
+                actionTestTag = "open_onboarding_guide_row",
                 onAction = onOpenOnboardingGuide
             )
         }
@@ -215,12 +240,15 @@ fun SettingsScreen(
             //
             // **只有手动**：App 不会自己去问有没有新版 —— 每次启动都欠一次网络请求，
             // 而多数时候什么也不会发生。用户想知道的候点一下就好。
+            //
+            // 检查中的那一档，行尾那颗「>」让位给「检查中…」：这一行点不得，
+            // 但用户得知道它**正在**查 —— 按钮没了，状态提示得留下。
             SettingsActionCard(
                 icon = Icons.Outlined.SystemUpdateAlt,
                 title = "检查更新",
-                actionLabel = if (isCheckingAppUpdate) "检查中…" else "检查",
-                actionTestTag = "open_check_update_button",
+                actionTestTag = "open_check_update_row",
                 actionEnabled = !isCheckingAppUpdate,
+                statusText = if (isCheckingAppUpdate) "检查中…" else null,
                 onAction = onCheckAppUpdate
             )
         }
@@ -510,85 +538,381 @@ internal val AcknowledgementsList = listOf(
 )
 
 /**
- * 设置页里「图标 + 标题 + 一个按钮」的一行。
+ * 设置页里「图标 + 标题 + 行尾引导」的一行。
  *
  * 抽出来是因为这类入口出现过好几个（导入导出 / 校历 / 以后的更多），
  * 原先每处都摊开写一遍 50 行卡片结构，加一个入口就得复制一次——
  * 复制出来的那份迟早和别人长得不一样。
  *
- * **没有副标题**：这一页的每一项都只留标题 + 按钮。要说清楚的事在点进去的那一层说，
+ * **没有副标题**：这一页的每一项都只留标题 + 引导。要说清楚的事在点进去的那一层说，
  * 门口这一行只负责「点进去」这件事。
+ *
+ * **行尾是「>」不是按钮**：整张卡是唯一的落点，那个尖括号只负责说
+ * 「点进去会开一层」——它是提示，不是第二颗按钮。
  */
 @Composable
 private fun SettingsActionCard(
     icon: ImageVector,
     title: String,
-    actionLabel: String,
     actionTestTag: String,
     /**
-     * 按钮可不可点。禁用时**整张卡也不可点** —— 否则用户按标题照样触发了动作，
-     * 而按钮看上去是灰的，两边对不上。
+     * 这一行可不可点。禁用时**整张卡也不可点** —— 否则用户按标题照样触发了动作，
+     * 而行尾看上去是淡的，两边对不上。
      */
     actionEnabled: Boolean = true,
+    /**
+     * 行尾的临时状态文字（如「检查中…」）。
+     *
+     * 给了就不画那个「>」：这一行此刻点不得，却得让用户知道它**正在**做什么 ——
+     * 按钮没了，状态提示得留下。
+     */
+    statusText: String? = null,
     onAction: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = Color.Transparent),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        // 整张卡可点，落点和右边那个按钮一致，不存在两个不同的行为
+        // 整张卡可点：行尾那个「>」只是方向提示，行为只有一个。
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = actionEnabled, onClick = onAction)
+            .testTag(actionTestTag)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .glassSurface(shape = RoundedCornerShape(18.dp))
                 .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Row(
                 modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.primaryContainer),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
+                SettingsIconTile(icon)
                 Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             }
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            Button(
-                onClick = onAction,
-                enabled = actionEnabled,
-                shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                modifier = Modifier.testTag(actionTestTag)
-            ) {
-                Text(actionLabel, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
+            if (statusText != null) {
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                SettingsChevron(enabled = actionEnabled)
             }
         }
+    }
+}
+
+/**
+ * 行首那颗 40dp 的圆角图标方块。
+ *
+ * 底色用 [LimeGreenTileFaint] 而不是主题的 primaryContainer：这一列方块一屏七八个，
+ * 底色深一点就连成一片绿，把用户的注意力全吃掉了 —— 方块只是「这是一行入口」的
+ * 分组标记，不是内容本身。
+ */
+@Composable
+private fun SettingsIconTile(icon: ImageVector, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(LimeGreenTileFaint),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.size(22.dp)
+        )
+    }
+}
+
+/**
+ * 行尾的「>」：**线性画出来**的点击引导。
+ *
+ * 为什么不用现成的图标：这个 App 里的记号都是自己画的（待办卡那道勾就是
+ * Canvas + Path 画的），跟着同一套画法走，线宽与圆角才是同一口气。
+ *
+ * 为什么用次级墨色而不是主题绿：绿在这个 App 里是**状态**的颜色
+ * （开关打开、当前选中）。拿它画一个纯装饰的箭头，等于把状态的颜色稀释了。
+ */
+@Composable
+private fun SettingsChevron(enabled: Boolean, modifier: Modifier = Modifier) {
+    val ink = MaterialTheme.colorScheme.onSurfaceVariant
+    Canvas(
+        modifier = modifier
+            .size(10.dp, 15.dp)
+            .alpha(if (enabled) 1f else 0.35f)
+    ) {
+        val w = size.width
+        val h = size.height
+        val path = Path().apply {
+            moveTo(w * 0.28f, h * 0.16f)
+            lineTo(w * 0.66f, h * 0.5f)
+            lineTo(w * 0.28f, h * 0.84f)
+        }
+        drawPath(
+            path = path,
+            color = ink,
+            style = Stroke(
+                width = 1.5.dp.toPx(),
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+            )
+        )
+    }
+}
+
+/**
+ * 空气质量标准那一项：标题 + 行尾**两颗按钮**。
+ *
+ * **为什么不是开关**：一颗开关只说「开 / 关」，用户得靠标题去猜「开」的是哪一套
+ * —— 原来那行标题就被迫写成「空气质量用美国 AQI」，一句要绕的句子。这里把两套标准
+ * 的名字直接写成两颗按钮（左「中国」、右「美国」），当前是哪一颗绿着，一眼看见，
+ * 不用读句子。
+ *
+ * **和别的行一样摆成一行**：图标 + 标题 + 右边一个控件。
+ * 这一页的每一行都是这个骨架，单独给空气质量多摆一段，整页的节奏就断了。
+ */
+@Composable
+private fun SettingsAqiCard(
+    icon: ImageVector,
+    title: String,
+    standard: AqiStandard,
+    onStandardChange: (AqiStandard) -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .glassSurface(shape = RoundedCornerShape(18.dp))
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                SettingsIconTile(icon)
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    // 极端字号下标题可以截断：右边那颗槽是固定宽的，
+                    // 标题让位才是对的 —— 槽一挤，两格里的字就认不出了。
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            AqiStandardButtons(
+                standard = standard,
+                onStandardChange = onStandardChange
+            )
+        }
+    }
+}
+/** 每档的最小宽度。 */
+private val AqiSegmentMinWidth = 48.dp
+
+/** 每档里文字左右的留白。 */
+private val AqiSegmentPadH = 11.dp
+
+/** 外框高度（基准字号下）。 */
+private val AqiFrameHeight = 30.dp
+
+/** 外框内边距，同时也是两档之间的缝：两档挨着，没有额外的间距。 */
+private val AqiFrameInset = 3.dp
+
+/** 外框的圆角。 */
+private val AqiFrameRadius = 10.dp
+
+/** 选中块（绿的那一档）的圆角。 */
+private val AqiSelectedRadius = 8.dp
+
+/**
+ * 选中块滑过去的时长。
+ *
+ * 220ms 与课表页「周课表 ↔ 列表」那个分段控件**用的是同一档**：
+ * 短于 ~150ms 会读成瞬间跳变，长于 ~300ms 就变成需要等的动画了。
+ * 字色走同一条曲线，于是绿块走到哪、字就亮到哪，两者是同一件事。
+ */
+private const val AqiSlideMillis = 220
+
+/**
+ * 两条 AQI 标准的**一个连体分段控件**：左 [AqiStandard.CN]「中国」，
+ * 右 [AqiStandard.US]「美国」，两档**左右联通**，共一个外框。
+ *
+ * **为什么是连体的**：这是**同一个东西的两档** —— 用哪一套 AQI 标准，
+ * 不是两件不同的事，而是同一个开关的两头。课表页的「周课表 ↔ 列表」
+ * 是同一套写法的另一个例子（见 `ScheduleScreen.FlatSegmentedRow`）：
+ * 一个外框、两档并排、当前那档绿着。分成两颗独立的按钮反而会说成
+ * 「两件事」，用户会犹豫该点哪个。
+ *
+ * **为什么不滑**：滑块那种「选中块飞过去」是给**换视图**用的（换页、换视图）；
+ * 这里是**二选一**，点哪档就是哪档，选中块原地换位置就够了 ——
+ * 多一段滑行只是表演，而且滑到一半时那个中间态本身就没有意义。
+ *
+ * **选中态是绿平涂 + 深墨字**（绿是状态色，字必须用深的那支，
+ * 见 Color.kt 的全局约定），没选中那档是外框底色透出来 + 次级墨色。
+ */
+@Composable
+private fun AqiStandardButtons(
+    standard: AqiStandard,
+    onStandardChange: (AqiStandard) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isUs = standard == AqiStandard.US
+    val segmentWidth = aqiSegmentWidth()
+    Box(
+        modifier = modifier
+            .testTag("settings_aqi_buttons")
+            // 外框 = 两档 + 上下左右各一圈内边距。
+            // **两档之间不额外留缝**（课表页那个分段控件中间有 3dp 缝，
+            // 是因为它的选中块要飞过去，得有地方落笔）；
+            // 这里选中块滑过去，两档直接挨着 —— 这才是「左右联通」。
+            .width(segmentWidth * 2 + AqiFrameInset * 2)
+            .height(aqiFrameHeight())
+            .clip(RoundedCornerShape(AqiFrameRadius))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(AqiFrameInset)
+    ) {
+        // 选中块：绿底，滑到当前那一档下面。
+        //
+        // **和课表页那套是同一个动作**（见 ScheduleScreen.FlatSegmentedRow）：
+        // 两档等宽，所以位移 = 段宽 × 序号，不用测宽、不用读布局反推位置。
+        val indicatorOffset by animateDpAsState(
+            targetValue = if (isUs) segmentWidth else 0.dp,
+            animationSpec = tween(AqiSlideMillis, easing = FastOutSlowInEasing),
+            label = "aqi_indicator"
+        )
+        Box(
+            modifier = Modifier
+                .offset(x = indicatorOffset)
+                .width(segmentWidth)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(AqiSelectedRadius))
+                .background(MaterialTheme.colorScheme.primary)
+        )
+
+        // 两档排在选中块之后画：同父级里先画的在下，正好转绿块垫在文字底下。
+        Row(modifier = Modifier.fillMaxSize()) {
+            AqiSegment(
+                text = "中国",
+                selected = !isUs,
+                onClick = { onStandardChange(AqiStandard.CN) },
+                segmentWidth = segmentWidth,
+                testTag = "settings_aqi_cn_label"
+            )
+            AqiSegment(
+                text = "美国",
+                selected = isUs,
+                onClick = { onStandardChange(AqiStandard.US) },
+                segmentWidth = segmentWidth,
+                testTag = "settings_aqi_us_label"
+            )
+        }
+    }
+}
+
+/**
+ * 每档的宽度：最宽那个标签 + 左右留白。
+ *
+ * **两档必须等宽**：连体控件要左右对称，而且等宽才能保证「换档时
+ * 整个控件的宽度不动」。宽度不等的话，选中态一换，两档的宽度就跟着换，
+ * 控件宽度会抖一下。
+ *
+ * **量文字而不是按系数估**：中文回退字体的字宽比拉丁字体大得多，
+ * 拿字号乘系数估会在大字号那一档正好估小。这里直接量一次（见
+ * [measureTextSize]），量多少是多少。
+ */
+@Composable
+private fun aqiSegmentWidth(): Dp {
+    val style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+    val labelWidth = maxOf(
+        measureTextSize("中国", style).width,
+        measureTextSize("美国", style).width
+    )
+    return maxOf(AqiSegmentMinWidth, labelWidth + AqiSegmentPadH * 2)
+}
+
+/**
+ * 外框实际高度：**装得下就是 30dp，装不下就按文字长高**。
+ *
+ * 段里那行中文的行高约 1.5em（比拉丁字体大得多），系统字号 1.5 时就有 27dp，
+ * 而外框里那格只有 30 − 3×2 = 24dp —— 文字下半截会被切掉。
+ * 这里实测文字高度再定外框高（见 [measureTextHeight]），不拿字号乘系数估。
+ */
+@Composable
+private fun aqiFrameHeight(): Dp {
+    val style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+    val labelHeight = measureTextHeight(text = "中国", style = style)
+    return maxOf(AqiFrameHeight, labelHeight + AqiFrameInset * 2)
+}
+
+/**
+ * 连体控件里的一档。
+ *
+ * **不画自己的底**：底由外层那块滑动的绿块统一表示（跟课表页的
+ * `FlatSegment` 同一套写法）。两个独立背景在切换瞬间是「一格消失、
+ * 另一格出现」，读起来像刷新；一块滑过去则是同一个控件换了位置，
+ * 用户能直接看出「这两个是同一个东西的两档」。
+ *
+ * **字色跟着走一段**：绿块要滑 220ms，字色若瞬间换，会出现
+ * 「绿块还在路上、字已经黑了」的一瞬不协调。
+ */
+@Composable
+private fun RowScope.AqiSegment(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    segmentWidth: Dp,
+    testTag: String
+) {
+    val contentColor by animateColorAsState(
+        targetValue = if (selected) {
+            MaterialTheme.colorScheme.onPrimary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        animationSpec = tween(AqiSlideMillis, easing = FastOutSlowInEasing),
+        label = "aqi_segment_color"
+    )
+    Box(
+        modifier = Modifier
+            .width(segmentWidth)
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(AqiSelectedRadius))
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .testTag(testTag),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium.copy(
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+            ),
+            color = contentColor,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -623,27 +947,13 @@ private fun SettingsToggleCard(
                 .fillMaxWidth()
                 .glassSurface(shape = RoundedCornerShape(18.dp))
                 .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Row(
                 modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.primaryContainer),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
+                SettingsIconTile(icon)
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
                     text = title,
@@ -654,13 +964,9 @@ private fun SettingsToggleCard(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            Switch(
+            CompactSwitch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                    checkedTrackColor = MaterialTheme.colorScheme.primary
-                ),
                 modifier = Modifier.testTag(testTag)
             )
         }

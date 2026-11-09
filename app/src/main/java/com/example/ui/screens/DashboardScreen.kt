@@ -52,6 +52,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -78,7 +79,10 @@ import com.example.data.local.CourseWithSlots
 import com.example.data.local.TaskEntity
 import com.example.data.model.ExamEntry
 import com.example.data.source.zju.CoursesTodoItem
+import com.example.data.source.zju.matchCourse
 import com.example.ui.components.islandBottomInset
+import com.example.ui.components.TaskCompleteMotion
+import com.example.ui.components.TaskExitAnimation
 import com.example.ui.components.TaskItemCard
 import com.example.ui.components.WeatherBlock
 import com.example.ui.components.WeatherLayout
@@ -114,7 +118,6 @@ import com.example.ui.theme.accentBarColor
 import com.example.ui.theme.accentOnCourse
 import com.example.ui.theme.cardTint
 import com.example.ui.theme.TeaColor
-import com.example.ui.theme.TeaColorBorder
 import com.example.ui.theme.TeaOnColor
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -428,11 +431,25 @@ fun DashboardScreen(
     onToggleTaskStar: (TaskEntity) -> Unit,
     onInspectTask: (TaskEntity) -> Unit,
     onInspectCourse: (CourseWithSlots) -> Unit,
+    /**
+     * 把「刚勾完」的信号从状态里消费掉。
+     *
+     * 总览页现在也会演「勾上 → 淡出 → 让位」，所以它也要能消费信号；
+     * 否则同一批信号会在两个页面之间重复触发（或者一直留着，切回来又演一遍）。
+     */
+    onConsumeCompletions: (List<Long>) -> Unit = {},
     /** 点考试卡 → 打开考试编辑弹层（本地可改考场 / 座位 / 时刻）。 */
     onEditExam: (ExamEntry) -> Unit = {},
     onOpenWeekPicker: () -> Unit,
     onRefreshCoursesTodo: () -> Unit = {},
     onOpenQuickLoginDialog: () -> Unit = {},
+    /**
+     * 点开一张学在浙大待办小卡 → 打开它的详情弹窗。
+     *
+     * 小卡只有作业名和截止时间，而「这条作业到底要交什么」写在说明和附件里 ——
+     * 那些东西不在列表里，只能点开才拿得到。
+     */
+    onOpenCoursesTodoDetail: (CoursesTodoItem) -> Unit = {},
     /**
      * 「去总览看今日课程」的一次性请求（上课 / 考试通知点进来的）。
      * 每次进来换一个新值，列表据此滚到今日课程那一段；0 = 不滚动。
@@ -586,6 +603,12 @@ fun DashboardScreen(
         state.coursesWithSlots.associateBy { it.course.id }
     }
 
+    // 学在浙大的小卡要按**课程名**去认课（两边的 id 不是一回事）。
+    // 这份列表给 [matchCourse] 用，别在小卡里现算 —— 那是一行一张小卡地算。
+    val zjuMatchableCourses = remember(courseMap) {
+        courseMap.values.map { it.course }
+    }
+
     // 总览那一串待办：未完成的，**标星的在前**（见 [dashboardPendingTodos]）。
     //
     // 整串都摆出来，由页面自己滚：以前这里只显示前 5 条，
@@ -593,6 +616,62 @@ fun DashboardScreen(
     // 而组头写的却是「待办清单 · N」——写的条数与摆出来的条数对不上。
     val pendingTasks = remember(state.tasks) {
         dashboardPendingTodos(state.tasks)
+    }
+
+    // 勾完之后的离场：和清单页是**同一套规矩**——点圈只冻表，离场等信号。
+    //
+    // 为什么冻表也要在这儿做：`dashboardPendingTodos` 也是照数据重排的，
+    // 勾完那一刻这一条就从「待完成」里消失。不冻表，卡片会先凭空少一条，
+    // 再没地方演「淡出」——演的是已经不在屏幕上的东西。
+    //
+    // 和清单页的差别只有一处：这里没有组头，表就是一条待办列表，
+    // 所以冻结/放行按 `TaskEntity.id` 走就够了，不用按行重建。
+    var exitingIds by remember { mutableStateOf(emptySet<Long>()) }
+    var frozenTasks by remember { mutableStateOf<List<TaskEntity>?>(null) }
+    // 屏幕上摆哪一份：冻结优先。离场中的那一条按冻结表的**位置**画，
+    // 但内容必须取**活的那一份**——勾、划线、变浅这些完成态只在活数据里，
+    // 拿冻结时抓到的旧对象画，总览页就会「淡出一张没打勾的卡」（清单页早就这么做了）。
+    val liveTaskById = remember(state.tasks) { state.tasks.associateBy { it.id } }
+    val shownPendingTasks: List<TaskEntity> = run {
+        val frozen = frozenTasks ?: return@run pendingTasks
+        if (exitingIds.isEmpty()) return@run frozen
+        frozen.map { task ->
+            if (task.id in exitingIds) liveTaskById[task.id] ?: task else task
+        }
+    }
+
+    val latestState by rememberUpdatedState(state)
+
+    // 弹窗这条路：开着就先冻上；关掉之后等一拍再判断（信号紧跟着状态更新发出，
+    // 立刻解冻等于把刚冻好的表扔掉）。与清单页同一个理由。
+    LaunchedEffect(state.confirmingTaskComplete) {
+        if (state.confirmingTaskComplete != null) {
+            if (frozenTasks == null) frozenTasks = pendingTasks
+        } else {
+            delay(500)
+            if (exitingIds.isEmpty() && latestState.pendingCompletions.isEmpty()) {
+                frozenTasks = null
+            }
+        }
+    }
+
+    // 离场只由「真的勾上了」的信号起步。只演这张表里真有的那一条——
+    // 否则那个 id 永远等不到演完的回调，冻结表就再也不会放行。
+    LaunchedEffect(state.pendingCompletions) {
+        val pending = state.pendingCompletions
+        if (pending.isEmpty()) return@LaunchedEffect
+        onConsumeCompletions(pending.map { it.taskId })
+        val now = System.currentTimeMillis()
+        val fresh = pending.filter {
+            now - it.atMillis <= TaskCompleteMotion.CompletionSignalTtlMs
+        }
+        if (fresh.isEmpty()) return@LaunchedEffect
+        val table = frozenTasks ?: pendingTasks
+        val present = table.map { it.id }.toSet()
+        val ids = fresh.map { it.taskId }.filter { it in present }.toSet()
+        if (ids.isEmpty()) return@LaunchedEffect
+        if (frozenTasks == null) frozenTasks = table
+        exitingIds = exitingIds + ids
     }
 
 
@@ -954,8 +1033,9 @@ fun DashboardScreen(
                                             // 字放大时徽标要跟着大，否则它缩成一个小点。
                                             .size(HeroTodoLogoSize.scaledWithText())
                                             .clip(CircleShape)
-                                            .background(TeaColor)
-                                            .border(0.5.dp, TeaColorBorder, CircleShape),
+                                            // 玻璃面一律不描边：白边压在浅色面上只会比面更亮，
+                                            // 读出来就是一圈白边。这颗徽标靠底色自己认。
+                                            .background(TeaColor),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
@@ -1150,14 +1230,16 @@ fun DashboardScreen(
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
                                     items(state.coursesTodoList, key = { it.id }) { item ->
+                                        // 匹配结果记一下：这张小卡每次重组都要重画，
+                                        // 而模糊匹配（归一化 + 二元组）比原来那两条规则贵。
+                                        val matchingCourse = remember(item.courseName, zjuMatchableCourses) {
+                                            matchCourse(item.courseName, zjuMatchableCourses)?.course
+                                        }
                                         CoursesMiniCard(
                                             item = item,
                                             cardHeight = heroMiniCardHeight,
-                                            matchingCourse = courseMap.values.find {
-                                                it.course.name.trim() == item.courseName.trim() ||
-                                                    it.course.name.contains(item.courseName) ||
-                                                    item.courseName.contains(it.course.name)
-                                            }?.course
+                                            matchingCourse = matchingCourse,
+                                            onClick = { onOpenCoursesTodoDetail(item) }
                                         )
                                     }
                                 }
@@ -1429,7 +1511,9 @@ fun DashboardScreen(
         // Section: Urgent / Today's Pending Tasks
         item(key = "dashboard_header_tasks") {
             DashboardSectionHeader(
-                title = "待办清单 · ${pendingTasks.size}",
+                // 数的是**摆在屏幕上的**那串：离场中的那一条还没走完，
+                // 条数先跳少一个会跟画面里剩下的卡片对不上。
+                title = "待办清单 · ${shownPendingTasks.size}",
                 titleSize = 16.sp,
                 // 组头跟组内的卡片一起浮现
                 modifier = Modifier.scrollRevealAt(
@@ -1440,7 +1524,7 @@ fun DashboardScreen(
             )
         }
 
-        if (pendingTasks.isEmpty()) {
+        if (shownPendingTasks.isEmpty()) {
             item {
                 Card(
                     shape = MiuSurface.CardShape,
@@ -1476,16 +1560,25 @@ fun DashboardScreen(
         } else {
             // 全部未完成的待办都摆出来，页面自己滚。
             itemsIndexed(
-                pendingTasks,
+                shownPendingTasks,
                 key = { _, task -> "task_${task.id}" }
             ) { taskIndex, task ->
-                TaskItemCard(
-                    task = task,
-                    customTypes = state.customTaskTypes,
-                    onToggleComplete = { onToggleTaskComplete(task) },
-                    onToggleStar = { onToggleTaskStar(task) },
-                    onOpenDetail = { onInspectTask(task) },
+                // 离场和清单页是同一段动效（[TaskExitAnimation]），位置交给列表的位移。
+                // 淡入淡出照旧关着：切页时整批 key 会一起换掉，fadeOut 会留下半透明残影。
+                TaskExitAnimation(
+                    playing = task.id in exitingIds,
+                    onFinished = {
+                        exitingIds = exitingIds - task.id
+                        frozenTasks = frozenTasks?.filterNot { it.id == task.id }
+                        // 最后一个演完才放行：列表回到按数据重建的那一份
+                        if (exitingIds.isEmpty()) frozenTasks = null
+                    },
                     modifier = Modifier
+                        .animateItem(
+                            placementSpec = TaskCompleteMotion.RiseSpec,
+                            fadeInSpec = null,
+                            fadeOutSpec = null
+                        )
                         .cardRevealAt(
                             cardRevealProgress,
                             taskOrderBase + taskIndex
@@ -1496,7 +1589,21 @@ fun DashboardScreen(
                             "task_${task.id}",
                             scrollRevealEnabled
                         )
-                )
+                ) {
+                    TaskItemCard(
+                        task = task,
+                        customTypes = state.customTaskTypes,
+                        onToggleComplete = {
+                            // 点下去先冻表（离场等信号来了才演，见上面的说明）
+                            if (!task.isCompleted && frozenTasks == null) {
+                                frozenTasks = pendingTasks
+                            }
+                            onToggleTaskComplete(task)
+                        },
+                        onToggleStar = { onToggleTaskStar(task) },
+                        onOpenDetail = { onInspectTask(task) }
+                    )
+                }
             }
         }
 
@@ -1925,6 +2032,8 @@ private fun CoursesMiniCard(
     matchingCourse: CourseEntity?,
     /** 统一的小卡高度（[heroTodoMiniCardHeight] 量出来的那一个）。 */
     cardHeight: Dp,
+    /** 点开这张小卡 → 看作业详情。 */
+    onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val courseColor = remember(matchingCourse) {
@@ -1932,8 +2041,14 @@ private fun CoursesMiniCard(
     }
     val contentBase = if (LocalWallpaperIsCustom.current) 0.80f else 0.55f
 
+    // 小卡的圆角只有这一个来源：卡面、玻璃面和按下反馈共用同一个形状。
+    // 按下反馈（点开详情那层 clickable 的水波纹）是**按节点矩形铺开**的，
+    // 四个圆角外侧那几像素也在它的范围里 —— 不共用形状的话，
+    // 按住左右滑动时圆角卡外面会浮出一圈方形暗影，像贴了张灰纸片。
+    val cardShape = RoundedCornerShape(14.dp)
+
     Card(
-        shape = RoundedCornerShape(14.dp),
+        shape = cardShape,
         colors = CardDefaults.cardColors(containerColor = Color.Transparent),
         elevation = CardDefaults.cardElevation(0.dp),
         modifier = modifier
@@ -1946,6 +2061,13 @@ private fun CoursesMiniCard(
             // 所以宽度与高度都按文字放大倍数走（见 [scaledWithText]）——
             // 它在 LazyRow 里，卡变宽了用户横向滚就是了。
             .width(HeroTodoMiniCardWidth.scaledWithText())
+            // 先把这一层裁成圆角，再挂 clickable：clip 必须在 clickable
+            // **外面**，水波纹是 clickable 自己画的，裁剪层在它外面才管得住它。
+            // 顺序反过来（clickable 在外）等于没裁。
+            .clip(cardShape)
+            // 点开看详情。涟漪画在卡**外面**这一层（不是里面那层玻璃面）：
+            // 玻璃面自己吃掉点击，放它上面就点不动了。
+            .clickable(onClick = onClick)
     ) {
         Row(
             modifier = Modifier
@@ -1960,7 +2082,7 @@ private fun CoursesMiniCard(
                 // 的可用高度把每张小卡拉满（而不是 64dp）。
                 .height(cardHeight)
                 .glassSurface(
-                    shape = RoundedCornerShape(14.dp),
+                    shape = cardShape,
                     tint = cardTint(courseColor, 0.08f),
                     tintAlpha = 0.08f,
                     baseCoatAlpha = contentBase

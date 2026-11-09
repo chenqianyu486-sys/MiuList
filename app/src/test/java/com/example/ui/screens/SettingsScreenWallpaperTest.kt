@@ -41,8 +41,8 @@ class SettingsScreenWallpaperTest {
         composeTestRule.onNodeWithText("自定义壁纸").assertIsDisplayed()
         composeTestRule.onNodeWithText("默认壁纸 · Cloudy Knoxville").assertDoesNotExist()
 
-        // 点击「更换」按钮
-        composeTestRule.onNodeWithTag("open_wallpaper_button").performClick()
+        // 点整张卡（行尾那个「>」只是方向提示，行为只有一个）
+        composeTestRule.onNodeWithTag("open_wallpaper_row").performClick()
         assertTrue(openedWallpaper)
     }
 

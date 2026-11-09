@@ -31,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +54,9 @@ import com.example.data.model.TaskStar
 import com.example.data.model.TaskTypes
 import com.example.ui.components.islandBottomInset
 import com.example.ui.components.NO_DUE_TEXT
+import com.example.ui.components.TaskCompleteMotion
+import com.example.ui.components.TaskExitAnimation
+import com.example.ui.components.TaskRowFadeOut
 import com.example.ui.components.TaskItemCard
 import com.example.ui.components.parseColor
 import com.example.ui.theme.ChipSurfaceNeutral
@@ -454,6 +458,13 @@ fun ChecklistScreen(
     onToggleTaskStar: (TaskEntity) -> Unit,
     onInspectTask: (TaskEntity) -> Unit,
     /**
+     * 把「刚勾完」的信号从状态里消费掉。
+     *
+     * 离场只演一次：这一行离场之后信号必须消失，
+     * 否则切走再切回来（或换一次筛选）时这一行会再演一遍。
+     */
+    onConsumeCompletions: (List<Long>) -> Unit,
+    /**
      * 从待办截止通知点进来时要定位的那一条，以及这一次定位的令牌。
      *
      * 令牌每点一次通知就换一个新值：同一条待办改了截止时间后会被提醒第二次，
@@ -548,6 +559,101 @@ fun ChecklistScreen(
             errorInk = errorInk
         )
     }
+
+    // 正在演离场的行，以及**离场期间冻结的整张表**。
+    //
+    // 为什么要冻结：勾完那一刻数据那边已经把它判成「已完成」，而 DAO 的排序会把已完成
+    // 排到末尾——照数据重建这张表，卡片会在离场之前先跳到列表底部（实测日志：信号到达后
+    // 7ms，这一条就从第 5 位跑到了最后一位）。所以冻结点哪儿就冻哪儿：点下去（或确认弹窗
+    // 一开）时把当时的行表留住，离场这一行按**冻结表的位置**画、按**活的那份数据**上色
+    // （绿圈、勾、划线都来自数据），演完再从冻结表里摘掉，然后放行。
+    var exitingIds by remember { mutableStateOf(emptySet<Long>()) }
+    var frozenRows by remember { mutableStateOf<List<ChecklistRow>?>(null) }
+    // 正在淡出的**组头**。一个组的待办全部离场之后，组头跟着退场（见离场回调里的判断）。
+    // 它和 [exitingIds] 分开记：组头不是待办，演的是另一支动画（纯淡出）。
+    var exitingHeaderKeys by remember { mutableStateOf(emptySet<String>()) }
+
+    // 点一颗圈：先冻表，**但不在这里演离场**。
+    //
+    // 冻表要抢在写库之前：数据一落地，这条待办就会被排到末尾（DAO 按 isCompleted 排），
+    // 晚一帧冻表，抓到手的就已经是那张排过序的表了。
+    //
+    // 演离场却不能在点下去的这一拍。确认弹窗默认是开的，这一刻用户还没点「完成」，
+    // 这一条到底算不算做完还不知道。早演一遍有两个后果：弹窗还挡在中间，卡片已经在后面
+    // 淡走了；而且演完这一行就从冻结表里摘掉了，等用户真的按了「完成」，数据里它已经
+    // 变成「已完成」被筛出去，表里也找不到它——那个 id 就永远留在「正在离场」的名单里，
+    // 冻结表再也放不开，分类的展开/收起会整个失效。
+    //
+    // 所以离场只由「真的勾上了」的信号（`pendingCompletions`）起步：
+    // 直接点圈那条在写库之前就发出信号，确认弹窗那条要等用户按了「完成」。
+    val freezeTable: () -> Unit = {
+        // 「已完成」也在筛选里时，勾完这一条并不会离开列表——它只是换个样子留在原地。
+        // 那种情况不冻表：不会有人来演，冻了反而多一道放行要管。
+        if (TaskStatusFilter.COMPLETED !in state.statusFilters && frozenRows == null) {
+            frozenRows = rows
+        }
+    }
+
+    // 确认弹窗这条路：弹窗一开也冻一次（点圈时通常已经冻过，这里是兜底——比如弹窗是
+    // 从别的入口打开的）。弹窗关掉之后不能立刻放行：确认那条路的「勾完信号」紧跟着
+    // 这次状态更新发出，中间隔着一次重组。现在就解冻，等于把刚冻好的表扔掉，卡片又会按
+    // 「已完成排在末尾」重建。等一拍再判断，取消确认的情况也不过多冻半秒。
+    val latestState by rememberUpdatedState(state)
+    // 这两个要在 delay 之后读**当时**的值：500ms 里卡片可能刚演完、组头刚开始淡出，
+    // 拿启动这个 effect 时捕获的旧值判断，就会在组头淡到一半时把冻结表撤掉。
+    val latestExitingIds by rememberUpdatedState(exitingIds)
+    val latestExitingHeaders by rememberUpdatedState(exitingHeaderKeys)
+    LaunchedEffect(state.confirmingTaskComplete) {
+        if (state.confirmingTaskComplete != null) {
+            if (frozenRows == null) frozenRows = rows
+        } else {
+            delay(500)
+            if (latestExitingIds.isEmpty() &&
+                latestExitingHeaders.isEmpty() &&
+                latestState.pendingCompletions.isEmpty()
+            ) {
+                frozenRows = null
+            }
+        }
+    }
+
+    // 勾完的信号从 ViewModel 来，**离场只在这里起步**（理由见 [freezeTable]）。
+    LaunchedEffect(state.pendingCompletions) {
+        val pending = state.pendingCompletions
+        if (pending.isEmpty()) return@LaunchedEffect
+        onConsumeCompletions(pending.map { it.taskId })
+        val now = System.currentTimeMillis()
+        val fresh = pending.filter {
+            now - it.atMillis <= TaskCompleteMotion.CompletionSignalTtlMs
+        }
+        if (fresh.isEmpty()) return@LaunchedEffect
+        // 同上：已完成也在这份筛选里时，卡片不会离开列表，不演离场
+        if (TaskStatusFilter.COMPLETED in state.statusFilters) return@LaunchedEffect
+        // 只演「这张表里真的有那一行」的离场。没有这一道，信号可能指向一条已经不在表里的
+        // 待办（在总览页勾掉的、或者数据比信号先一步回流），那一行永远等不到演完的回调，
+        // 冻结表就一直放不开。
+        val table = frozenRows ?: rows
+        val present = table.filterIsInstance<ChecklistRow.Item>().map { it.task.id }.toSet()
+        val ids = fresh.map { it.taskId }.filter { it in present }.toSet()
+        if (ids.isEmpty()) return@LaunchedEffect
+        if (frozenRows == null) frozenRows = table
+        exitingIds = exitingIds + ids
+    }
+
+    // 离场中的行：位置取冻结表，内容取数据里活的那一份。
+    val liveById = state.tasks.associateBy { it.id }
+    val shownRows: List<ChecklistRow> = run {
+        val frozen = frozenRows ?: return@run rows
+        if (exitingIds.isEmpty()) return@run frozen
+        frozen.map { row ->
+            if (row is ChecklistRow.Item && row.task.id in exitingIds) {
+                liveById[row.task.id]?.let { ChecklistRow.Item(it) } ?: row
+            } else {
+                row
+            }
+        }
+    }
+
 
     // 行数组是定位的唯一依据：组头 / 折叠状态 / 排序都可能改变目标的下标，
     // 在 effects 里重新算一遍 indexOfFirst，而不是从通知里带一个下标过来。
@@ -684,7 +790,7 @@ fun ChecklistScreen(
         Spacer(modifier = Modifier.height(CardBlockGap))
 
         // Task List with Grouping
-        if (filteredTasks.isEmpty()) {
+        if (shownRows.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -718,45 +824,101 @@ fun ChecklistScreen(
                 contentPadding = PaddingValues(bottom = islandBottomInset())
             ) {
                 // 逐行一个 item：视口外的卡片不会被 compose，这才是真正的懒加载。
-                // animateItem 只取位移这一半：折叠时下方已有卡平滑让位、收起时反向收走，
-                // 少了它，折叠就是瞬时的插入/删除，视觉上是「跳」而不是「动」。
+                // animateItem 只取位移这一半：折叠时下方已有卡平滑让位；
+                // 勾掉一条时它是**第二拍**——卡片原地淡出之后，下面的卡片滚上来补位。
+                // 少了它，插入/删除都是瞬时的，视觉上是「跳」而不是「动」。
                 //
                 // 淡入淡出必须显式关掉：默认两个 spec 都是 spring，fadeOut 会在 item
                 // 离开 composition 时继续画半透明的旧卡片。而切换分组模式/筛选会一次性
                 // 把整批 key 全换掉、旧 item 同时 dispose，于是整屏旧卡片半透明地叠在
                 // 新内容上（连组头文字都留着残影）。位移动画没有这个问题——key 对不上的
                 // item 直接 dispose，位移无从谈起。
-                items(rows, key = { it.key }) { row ->
+                items(shownRows, key = { it.key }) { row ->
                     when (row) {
-                        is ChecklistRow.Header -> TaskGroupHeader(
-                            group = row.group,
-                            isCollapsed = row.isCollapsed,
-                            onToggle = {
-                                collapsedGroups = if (row.isCollapsed) {
-                                    collapsedGroups - row.group.id
-                                } else {
-                                    collapsedGroups + row.group.id
+                        is ChecklistRow.Header -> TaskRowFadeOut(
+                            playing = row.key in exitingHeaderKeys,
+                            onFinished = {
+                                exitingHeaderKeys = exitingHeaderKeys - row.key
+                                frozenRows = frozenRows?.filterNot { it.key == row.key }
+                                if (exitingIds.isEmpty() && exitingHeaderKeys.isEmpty()) {
+                                    frozenRows = null
                                 }
                             },
                             modifier = Modifier
                                 .animateItem(
+                                    // 组头也跟着用清单页统一的那条位移：折叠时下方卡片
+                                    // 让位、勾掉一条之后补位，都是同一次「重力」，不该两种手感。
+                                    placementSpec = TaskCompleteMotion.RiseSpec,
                                     fadeInSpec = null,
                                     fadeOutSpec = null
                                 )
                                 // 组头跟组内的卡片一起浮现：组头「啪」地出现、
                                 // 底下的卡却还在淡入，读起来是两种动画在打架。
                                 .scrollRevealAt(listState, row.key, scrollRevealEnabled)
-                        )
+                        ) {
+                            TaskGroupHeader(
+                                group = row.group,
+                                isCollapsed = row.isCollapsed,
+                                onToggle = {
+                                    collapsedGroups = if (row.isCollapsed) {
+                                        collapsedGroups - row.group.id
+                                    } else {
+                                        collapsedGroups + row.group.id
+                                    }
+                                }
+                            )
+                        }
 
-                        is ChecklistRow.Item -> TaskItemCard(
-                            task = row.task,
-                            customTypes = state.customTaskTypes,
-                            onToggleComplete = { onToggleTaskComplete(row.task) },
-                            onToggleStar = { onToggleTaskStar(row.task) },
-                            onOpenDetail = { onInspectTask(row.task) },
-                            highlighted = activeHighlightTaskId == row.task.id,
+                        is ChecklistRow.Item -> TaskExitAnimation(
+                            playing = row.task.id in exitingIds,
+                            onFinished = {
+                                // 这一条走了之后，它这一组还剩几行？
+                                // 组头挂在「它上面最近的那一个 Header」之下，所以先定位这个 Header，
+                                // 再数到下一个 Header 之前还有没有别的待办——正在演的那几条
+                                // 也还在表里，所以「还剩几行」= 真实还看得见的行数。
+                                val snapshot = frozenRows ?: emptyList()
+                                val index = snapshot.indexOfFirst {
+                                    it is ChecklistRow.Item && it.task.id == row.task.id
+                                }
+                                val headerKey = if (index >= 0) {
+                                    snapshot.subList(0, index)
+                                        .lastOrNull { it is ChecklistRow.Header }
+                                        ?.key
+                                } else {
+                                    null
+                                }
+                                val rowsLeftInGroup = if (index >= 0) {
+                                    snapshot.drop(index + 1)
+                                        .takeWhile { it !is ChecklistRow.Header }
+                                        .count { it is ChecklistRow.Item }
+                                } else {
+                                    1
+                                }
+
+                                exitingIds = exitingIds - row.task.id
+                                frozenRows = snapshot.filterNot {
+                                    it is ChecklistRow.Item && it.task.id == row.task.id
+                                }
+                                if (headerKey != null && rowsLeftInGroup == 0) {
+                                    // 整组都走完了：组头跟着淡出（卡先淡完，它再退），
+                                    // 淡完才把它从表里摘掉，然后下面的组滚上来。
+                                    exitingHeaderKeys = exitingHeaderKeys + headerKey
+                                } else if (exitingIds.isEmpty() && exitingHeaderKeys.isEmpty()) {
+                                    // 最后一个演完才放行：列表回到按数据重建的那一份
+                                    frozenRows = null
+                                }
+                            },
+                            // 位移挂在**这一行的根**上：卡片淡出之后才用得上，
+                            // 由它把下面的卡片**滚上来**补位——节奏见
+                            // [TaskCompleteMotion.RiseSpec]（比淡出慢一截，
+                            // 让「让位」成为一眼看得见的第二拍）。
+                            // 淡入淡出依旧关着，见上面的理由。
                             modifier = Modifier
-                                .animateItem(fadeInSpec = null, fadeOutSpec = null)
+                                .animateItem(
+                                    placementSpec = TaskCompleteMotion.RiseSpec,
+                                    fadeInSpec = null,
+                                    fadeOutSpec = null
+                                )
                                 .cardRevealAt(
                                     cardRevealProgress,
                                     revealOrderByRowKey[row.key] ?: 0
@@ -765,7 +927,21 @@ fun ChecklistScreen(
                                 .scrollRevealAt(listState, row.key, scrollRevealEnabled)
                                 // 卡片与页面左边距对齐，不再比组头缩进
                                 .padding(start = GROUP_CONTENT_INSET)
-                        )
+                        ) {
+                            TaskItemCard(
+                                task = row.task,
+                                customTypes = state.customTaskTypes,
+                                onToggleComplete = {
+                                    // 点下去就先冻表：晚一帧，这张表里它已经被排到末尾了。
+                                    // 离场等信号来了才演，见上面的 [freezeTable]。
+                                    if (!row.task.isCompleted) freezeTable()
+                                    onToggleTaskComplete(row.task)
+                                },
+                                onToggleStar = { onToggleTaskStar(row.task) },
+                                onOpenDetail = { onInspectTask(row.task) },
+                                highlighted = activeHighlightTaskId == row.task.id
+                            )
+                        }
                     }
                 }
 

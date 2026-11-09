@@ -23,8 +23,8 @@ import org.robolectric.annotation.Config
  * 三条：
  *
  * - **它在设置页里**，用户自己决定什么时候去问；
- * - **点了就触发检查**（只有一个落点：按钮与整张卡是同一个动作）；
- * - **检查中按钮禁用**：不然连点两下会发两次请求，
+ * - **点了就触发检查**（只有一个落点：整张卡就是那个落点）；
+ * - **检查中这一行禁用**：不然连点两下会发两次请求，
  *   而先回来的那次未必是新的那次。
  *
  * **先滚过去再断言**：这一项排在设置页中段，而设置页是一个 LazyColumn ——
@@ -54,7 +54,7 @@ class SettingsScreenUpdateCheckTest {
 
         scrollToUpdateCard()
         composeTestRule.onNodeWithText("检查更新").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("open_check_update_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("open_check_update_row").assertIsDisplayed()
     }
 
     @Test
@@ -70,13 +70,13 @@ class SettingsScreenUpdateCheckTest {
         }
 
         scrollToUpdateCard()
-        composeTestRule.onNodeWithTag("open_check_update_button").performClick()
+        composeTestRule.onNodeWithTag("open_check_update_row").performClick()
 
         assertEquals(1, checked)
     }
 
     @Test
-    fun `检查中按钮禁用`() {
+    fun `检查中这一行禁用`() {
         composeTestRule.setContent {
             SettingsScreen(
                 onOpenTransferDialog = {},
@@ -86,11 +86,11 @@ class SettingsScreenUpdateCheckTest {
         }
 
         scrollToUpdateCard()
-        composeTestRule.onNodeWithTag("open_check_update_button").assertIsNotEnabled()
+        composeTestRule.onNodeWithTag("open_check_update_row").assertIsNotEnabled()
     }
 
     @Test
-    fun `没在检查时按钮可点`() {
+    fun `没在检查时这一行可点`() {
         composeTestRule.setContent {
             SettingsScreen(
                 onOpenTransferDialog = {},
@@ -99,6 +99,6 @@ class SettingsScreenUpdateCheckTest {
         }
 
         scrollToUpdateCard()
-        composeTestRule.onNodeWithTag("open_check_update_button").assertIsEnabled()
+        composeTestRule.onNodeWithTag("open_check_update_row").assertIsEnabled()
     }
 }

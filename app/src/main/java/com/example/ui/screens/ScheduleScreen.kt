@@ -109,7 +109,6 @@ import com.example.ui.theme.LocalGlassHazeState
 import com.example.ui.theme.LocalEffectiveFontScale
 import com.example.ui.theme.MiuType
 import com.example.ui.theme.TeaColor
-import com.example.ui.theme.TeaColorBorder
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.isGreenishColor
 import com.example.ui.theme.glassSurface
@@ -1686,7 +1685,19 @@ private fun ScheduleCourseCard(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
                         .background(if (isGreen) TeaColor else courseColor.copy(alpha = 0.15f))
-                        .border(0.5.dp, if (isGreen) TeaColorBorder else courseColor.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                        // 绿色系不描边：白边压在浅色玻璃面上只会比面更亮。
+                        // 非绿色系保留课程色的那道边（那是课程身份，不是玻璃边）。
+                        .then(
+                            if (isGreen) {
+                                Modifier
+                            } else {
+                                Modifier.border(
+                                    0.5.dp,
+                                    courseColor.copy(alpha = 0.4f),
+                                    RoundedCornerShape(6.dp)
+                                )
+                            }
+                        )
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                 ) {
                     Text(
