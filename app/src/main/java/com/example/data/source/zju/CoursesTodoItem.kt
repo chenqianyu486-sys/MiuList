@@ -74,7 +74,7 @@ data class CoursesTodoItem(
         }
 
         /** 解析学在浙大返回的 ISO-8601 字符串 (如 "2026-10-25T23:59:59+08:00" 或 "2026-10-25T15:59:59Z") */
-        private fun parseIsoTimestamp(raw: String?): Long? {
+        internal fun parseIsoTimestamp(raw: String?): Long? {
             if (raw.isNullOrBlank()) return null
             return runCatching {
                 Instant.parse(raw).toEpochMilli()

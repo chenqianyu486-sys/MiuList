@@ -8,6 +8,7 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -58,6 +59,23 @@ open class ZjuCoursesClient(
     private val baseClient: OkHttpClient = defaultOkHttpClient()
 ) {
     /**
+     * 登录成功之后**留着**的那次会话。
+     *
+     * 为什么留着：详情接口（作业说明、附件）要用同一个业务会话，
+     * 而重新建一次会话要走完整条 SSO 链 —— 一次详情请求付出一次登录的代价，
+     * 用户点开一张小卡就要等一次认证跳转，那是不该有的。
+     *
+     * 所以 [fetchTodos] 建立好的会话会留在这里，[fetchTodoDetail] 直接复用。
+     * 会话没了（过期、被顶掉）时抛 [ZjuFailureKind.SESSION]，
+     * 由上层拿着已保存的凭据重建 —— 不用用户重新输密码。
+     */
+    @Volatile
+    private var liveClient: OkHttpClient? = null
+
+    @Volatile
+    private var liveJar: CoursesInMemoryCookieJar? = null
+
+    /**
      * 拉取当前学生的学在浙大未交作业列表。
      * 抛出的异常均为带有中文提示的 [ZjuException]。
      */
@@ -70,34 +88,104 @@ open class ZjuCoursesClient(
         }
 
         try {
-            val jar = CoursesInMemoryCookieJar()
-            val client = baseClient.newBuilder()
-                .cookieJar(jar)
-                // 全部跳转手动跟：既要区分「哪一跳」也要区分「这是中间跳还是终态」，
-                // 交给 OkHttp 自动跟就全看不清了。
-                .followRedirects(false)
-                .followSslRedirects(false)
-                .build()
+            val (client, jar) = newAuthenticatedSession(studentId, password)
 
-            // 密码只登这一次，下面两次业务会话重建都复用这个 TGC。
-            jar.addCookie(ZjuSsoLogin(client).login(studentId, password))
-
-            try {
-                establishCoursesSession(client, jar)
-                fetchTodoListFromApi(client)
-            } catch (first: ZjuException) {
-                // 只有「会话没了」才值得原样重试一次；网络/服务端错误重试没有意义。
-                if (first.kind != ZjuFailureKind.SESSION) throw first
-                jar.clearCoursesBusinessSession()
-                establishCoursesSession(client, jar)
-                fetchTodoListFromApi(client)
-            }
+            val todos = loginAndFetchTodos(client, jar)
+            // 会话留着给详情接口用。
+            liveClient = client
+            liveJar = jar
+            todos
         } catch (e: ZjuException) {
             throw e
         } catch (e: Exception) {
             throw ZjuException("连接学在浙大失败：${e.message ?: "网络超时"}", ZjuFailureKind.NETWORK)
         }
     }
+
+    /**
+     * 只重建业务会话，不取列表。
+     *
+     * 详情接口用：会话被顶掉时用已保存的凭据重新建一次 ——
+     * 不用用户再输一次密码，也不用把整个列表重新拉一遍。
+     */
+    open suspend fun login(studentId: String, password: String) = withContext(Dispatchers.IO) {
+        if (studentId.isBlank() || password.isBlank()) {
+            throw ZjuException("学号与密码不能为空", ZjuFailureKind.CREDENTIAL)
+        }
+        try {
+            val (client, jar) = newAuthenticatedSession(studentId, password)
+            establishCoursesSession(client, jar)
+            liveClient = client
+            liveJar = jar
+        } catch (e: ZjuException) {
+            throw e
+        } catch (e: Exception) {
+            throw ZjuException("连接学在浙大失败：${e.message ?: "网络超时"}", ZjuFailureKind.NETWORK)
+        }
+    }
+
+    /**
+     * 新建一次认证会话：拿 TGC（密码只登这一次）+ 手动跟跳转的客户端。
+     */
+    private suspend fun newAuthenticatedSession(
+        studentId: String,
+        password: String
+    ): Pair<OkHttpClient, CoursesInMemoryCookieJar> {
+        val jar = CoursesInMemoryCookieJar()
+        val client = newSessionClient(jar)
+        jar.addCookie(ZjuSsoLogin(client).login(studentId, password))
+        return client to jar
+    }
+
+    /**
+     * 拉取一条待办的详情（作业说明、附件）。
+     *
+     * 复用 [fetchTodos] 建立的那次会话；没有可用会话时抛
+     * [ZjuFailureKind.SESSION] —— 上层应当拿已保存的凭据重建会话后重试，
+     * 而不是让用户重新输密码。
+     */
+    open suspend fun fetchTodoDetail(activityId: String): CoursesTodoDetail = withContext(Dispatchers.IO) {
+        if (activityId.isBlank()) {
+            throw ZjuException("作业 id 为空", ZjuFailureKind.DATA_INVALID)
+        }
+        val client = liveClient
+            ?: throw ZjuException("学在浙大会话已失效，请刷新待办", ZjuFailureKind.SESSION)
+        // 业务会话 cookie 没了就别白跑一趟网络：直接告诉上层「要重建会话」。
+        val sessionAlive = liveJar?.findCookie(COURSES_SESSION_COOKIE) != null
+        if (!sessionAlive) {
+            throw ZjuException("学在浙大会话已失效，请刷新待办", ZjuFailureKind.SESSION)
+        }
+        fetchActivityDetail(client, activityId)
+    }
+
+    /**
+     * 建立业务会话并取列表。会话失效时**原样重试一次**（不重新输密码）。
+     */
+    private fun loginAndFetchTodos(
+        client: OkHttpClient,
+        jar: CoursesInMemoryCookieJar
+    ): List<CoursesTodoItem> {
+        try {
+            establishCoursesSession(client, jar)
+            return fetchTodoListFromApi(client)
+        } catch (first: ZjuException) {
+            // 只有「会话没了」才值得原样重试一次；网络/服务端错误重试没有意义。
+            if (first.kind != ZjuFailureKind.SESSION) throw first
+            jar.clearCoursesBusinessSession()
+            establishCoursesSession(client, jar)
+            return fetchTodoListFromApi(client)
+        }
+    }
+
+    /** 建一个**手动跟跳转**的客户端：既要区分「哪一跳」也要区分「这是中间跳还是终态」。 */
+    private fun newSessionClient(jar: CoursesInMemoryCookieJar): OkHttpClient =
+        baseClient.newBuilder()
+            .cookieJar(jar)
+            // 全部跳转手动跟：既要区分「哪一跳」也要区分「这是中间跳还是终态」，
+            // 交给 OkHttp 自动跟就全看不清了。
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
 
     /**
      * 拿着 TGC 跟完整条 SSO 链，直到拿到学在浙大自己的业务会话。
@@ -256,6 +344,103 @@ open class ZjuCoursesClient(
     }
 
     /**
+     * 拉一条活动的详情（作业说明 + 附件）。
+     *
+     * 判定顺序与 [fetchTodoListFromApi] 一致：**先认会话没了，再认数据不对**。
+     * 反过来的话，HTTP 200 的登录页会被当成「JSON 解析失败」，
+     * 用户看到的是格式错误，而真实原因是登录态没了。
+     */
+    private fun fetchActivityDetail(
+        client: OkHttpClient,
+        activityId: String
+    ): CoursesTodoDetail {
+        val request = Request.Builder()
+            .url("$COURSES_ACTIVITIES_URL/$activityId".toHttpUrl())
+            .get()
+            .header("User-Agent", ZjuSsoLogin.USER_AGENT)
+            .header("Accept", "application/json, text/plain, */*")
+            .build()
+
+        val response = client.newCall(request).execute()
+        val text = response.use { it.body?.string().orEmpty() }
+        val status = response.code
+
+        if (status == 401 || status == 403 || status == 901) {
+            throw ZjuException("学在浙大会话已失效，请重新登录", ZjuFailureKind.SESSION)
+        }
+        if (status == 404) {
+            throw ZjuException("学在浙大找不到这条作业的详情", ZjuFailureKind.DATA_INVALID)
+        }
+        if (!response.isSuccessful) {
+            throw ZjuException("获取作业详情失败（HTTP $status）", ZjuFailureKind.SERVER)
+        }
+        if (CoursesAuthGuard.bodyIsLoginPage(text)) {
+            throw ZjuException("学在浙大会话已失效，请重新登录", ZjuFailureKind.SESSION)
+        }
+
+        return parseActivityDetail(text, activityId)
+    }
+
+    /**
+     * 把详情接口的 JSON 解析成 [CoursesTodoDetail]。
+     *
+     * 抽成纯函数是为了能**离线**单测：它是整条链上唯一按上游字段口径做取舍的地方
+     * （说明在哪、附件在哪、时间怎么算），而输入是一段固定结构的 JSON，
+     * 完全没有理由非要联网才验证得了。
+     */
+    internal fun parseActivityDetail(text: String, activityId: String): CoursesTodoDetail {
+        val json = runCatching { JSONObject(text) }.getOrNull()
+            ?: throw ZjuException(
+                "学在浙大返回的作业详情无法解析，请稍后再试",
+                ZjuFailureKind.DATA_INVALID
+            )
+
+        if (CoursesAuthGuard.jsonIndicatesAuthFailure(json)) {
+            throw ZjuException("学在浙大会话已失效，请重新登录", ZjuFailureKind.SESSION)
+        }
+
+        // 上游把活动本体放在 "activity" 下；偶尔直接返回本体，两种都认。
+        val activity = json.optJSONObject("activity") ?: json
+        val data = activity.optJSONObject("data")
+
+        // 说明可能在 data 里，也可能在活动本体上：作业类活动放在 data 里。
+        val descriptionHtml = data?.optString("description")?.takeIf { it.isNotBlank() }
+            ?: activity.optString("description")
+        val criterion = activity.optString("completion_criterion")
+            .ifBlank { data?.optString("completion_criterion").orEmpty() }
+
+        val attachments = ArrayList<Attachment>()
+        // 附件也可能挂在 data 下（作业类的附件走的是另一组字段）。
+        readAttachments(activity.optJSONArray("uploads"))?.let { attachments.addAll(it) }
+        if (attachments.isEmpty()) {
+            readAttachments(data?.optJSONArray("uploads"))?.let { attachments.addAll(it) }
+        }
+
+        val endTime = activity.optString("end_time").takeIf { it.isNotBlank() }
+
+        return CoursesTodoDetail(
+            activityId = activityId,
+            title = activity.optString("title"),
+            description = htmlToPlainText(descriptionHtml),
+            completionCriterion = criterion.trim(),
+            attachments = attachments,
+            dueTimestamp = CoursesTodoItem.parseIsoTimestamp(endTime)
+        )
+    }
+
+    /** 读附件数组。只有文件名是这里需要的：附件本体要走单独的上传通道。 */
+    private fun readAttachments(uploads: JSONArray?): List<Attachment>? {
+        if (uploads == null) return null
+        val list = ArrayList<Attachment>(uploads.length())
+        for (i in 0 until uploads.length()) {
+            val obj = uploads.optJSONObject(i) ?: continue
+            val name = obj.optString("name").ifBlank { obj.optString("filename") }
+            if (name.isNotBlank()) list.add(Attachment(name))
+        }
+        return list
+    }
+
+    /**
      * 把待办接口的 JSON 解析成列表。
      *
      * 抽出来是为了能**离线**单测：这段是整条链上唯一按上游字段口径做取舍的地方
@@ -346,6 +531,12 @@ open class ZjuCoursesClient(
 
         const val COURSES_ENTRY_URL = "https://courses.zju.edu.cn/user/index"
         const val COURSES_TODOS_URL = "https://courses.zju.edu.cn/api/todos"
+
+        /**
+         * 单个活动的详情。列表里那条待办的 id 就是活动 id，
+         * 所以点开一张小卡可以直接用同一个 id 换到说明与附件。
+         */
+        const val COURSES_ACTIVITIES_URL = "https://courses.zju.edu.cn/api/activities"
 
         /**
          * 15 跳够用，但要留余量：实测未认证链路就已经要 4 跳，
