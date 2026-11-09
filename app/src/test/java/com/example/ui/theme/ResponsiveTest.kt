@@ -156,7 +156,7 @@ class ResponsiveTest {
 
     @Test
     fun `基准屏保持 22sp 定稿`() {
-        // 411dp、字号 1.0：排版宽 411 → 日期列 243dp，22sp 的实测宽 232.8dp，放得下。
+        // 411dp、字号 1.0：排版宽 411 → 日期列 239dp，22sp 的实测宽 232.8dp，放得下。
         assertEquals(22f, dateSizeOf(411), 0.01f)
     }
 
@@ -173,9 +173,9 @@ class ResponsiveTest {
 
     @Test
     fun `日期在左列里的占比与设计稿一致`() {
-        // 设计：232.8 / 243 = 95.8%。
+        // 设计：232.8 / 239 = 97.4%。
         // 基准区间（物理宽 ∈ [337, 411]）排版宽恒为 411 → 比例必须一分不差。
-        val designRatio = dateWidthAt22Sp / 243f
+        val designRatio = dateWidthAt22Sp / 239f
         for (width in intArrayOf(337, 360, 375, 390, 411)) {
             val layout = layoutOf(width)
             val fontScale = effectiveFontScaleFor(width, 1.0f)
@@ -197,7 +197,7 @@ class ResponsiveTest {
         for (width in intArrayOf(332, 360, 375, 390, 411)) {
             assertEquals("${width}dp 的日期应保持 22sp", 22f, dateSizeOf(width), 0.01f)
         }
-        // 320dp：排版宽 390 → 日期列 222dp → 22.sp 的 232.8dp 放不下 → 降一档。
+        // 320dp：排版宽 390 → 日期列 218dp → 22.sp 的 232.8dp 放不下 → 降一档。
         assertEquals("320dp 的日期应降到 20sp", 20f, dateSizeOf(320), 0.01f)
     }
 
@@ -228,7 +228,7 @@ class ResponsiveTest {
 
     @Test
     fun `缩字救不了时才改版式`() {
-        // 411dp + 系统字号 2.0：版式是 411dp 的原样（基准宽不缩），日期列 243dp。
+        // 411dp + 系统字号 2.0：版式是 411dp 的原样（基准宽不缩），日期列 239dp。
         // 而字号是用户的 2.0 倍，日期缩到最小档也要 296dp —— 缩字救不了，改版式。
         assertTrue("411dp + 2.0 字号应改版式", layoutOf(411, 2.0f).stacked)
         // 窄屏 + 大字号同理。
@@ -238,9 +238,9 @@ class ResponsiveTest {
         // 411dp + 1.5 现在**会**改版式（早先是不会的）。
         //
         // 起因是天气块改为跟着有效字号缩放：字号 1.5 时块宽 108 → 162dp，
-        // 并排的日期列只剩 201dp，装不下最小档（222dp），于是改为上下两段。
+        // 并排的日期列只剩 185dp，装不下最小档（222dp），于是改为上下两段。
         //
-        // 这是**更好的**取舍：改版式后日期拿整行 363dp，22.sp 正好放得下；
+        // 这是**更好的**取舍：改版式后日期拿整行 359dp，22.sp 正好放得下；
         // 而若强行并排，日期会被压到 14.sp（最小档），同时那块天气里的
         // 空气指数还会被 Ellipsis 截掉。两头都坏，不如换排法。
         assertTrue("411dp + 1.5 字号应改版式（日期拿整行，不被压到 14.sp）", layoutOf(411, 1.5f).stacked)
@@ -274,7 +274,7 @@ class ResponsiveTest {
         // 上下两段时日期列 = 整行，不是并排时的「整行 − 间隔 − 天气块」。
         val layout = layoutOf(411, 2.0f)
         assertTrue("411dp + 2.0 应改版式", layout.stacked)
-        assertEquals(363f, layout.dateColumnWidth.value, 0.01f)
+        assertEquals(359f, layout.dateColumnWidth.value, 0.01f)
         val fontScale = effectiveFontScaleFor(411, 2.0f)
         val size = dateSizeOf(411, 2.0f)
         assertTrue(
@@ -298,7 +298,7 @@ class ResponsiveTest {
     fun `系统字号放大时降档而不是截断`() {
         // 411dp、系统字号 2.0：22.sp 会渲染成 465dp，远超日期列 —— 必须降档。
         // （1.5 这一档现在会改版式：天气块按字号放大到 162dp，日期列被挤到放不下
-        //   22.sp，于是改成上下两段、日期拿整行 363dp，22.sp 正好放得下。）
+        //   22.sp，于是改成上下两段、日期拿整行 359dp，22.sp 正好放得下。）
         val layout = layoutOf(411, 2.0f)
         val fontScale = effectiveFontScaleFor(411, 2.0f)
         val size = heroDateFontSize(layout.dateColumnWidth, fontScale)
@@ -333,10 +333,10 @@ class ResponsiveTest {
 
     @Test
     fun `宽屏走两栏而不是并排`() {
-        // 800dp 窗口 → 内容列 656dp → 卡内容宽 608dp ≥ 600dp → 两栏。
+        // 800dp 窗口 → 内容列 656dp → 卡内容宽 604dp ≥ 600dp → 两栏。
         assertTrue("800dp 应走两栏", layoutOf(800).wide)
         assertFalse("411dp 不走两栏", layoutOf(411).wide)
-        // 600dp 窗口：内容列 492dp → 卡内容宽 444dp < 600dp → 仍是并排。
+        // 600dp 窗口：内容列 492dp → 卡内容宽 440dp < 600dp → 仍是并排。
         assertFalse("600dp 不走两栏", layoutOf(600).wide)
     }
 

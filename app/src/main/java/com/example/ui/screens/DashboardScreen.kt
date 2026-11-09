@@ -1760,8 +1760,8 @@ internal fun heroInnerWidthOf(layoutWidthDp: Int): Dp =
         .coerceAtLeast(120f)
         .dp
 
-/** 页面留白 6×2 + 卡内留白 18×2 = 48dp：从窗口宽到卡内容宽要吃掉的两层。 */
-internal const val HeroChromeWidth = 48f
+/** 页面留白 8×2 + 卡内留白 18×2 = 52dp：从窗口宽到卡内容宽要吃掉的两层。随 [PageHInset] 同步。 */
+internal const val HeroChromeWidth = 52f
 
 /**
  * 主卡需要多高：把正面那几行字的**实际排版高度**量出来，再补上内边距与间距。
