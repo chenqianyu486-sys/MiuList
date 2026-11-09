@@ -15,6 +15,7 @@ import com.example.data.model.ExamEntry
 import com.example.data.model.ExamKind
 import com.example.data.model.TaskType
 import com.example.data.model.WallpaperConfig
+import com.example.data.source.zju.CoursesTodoDetail
 import com.example.data.source.zju.CoursesTodoItem
 import com.example.data.source.zju.ZjuFailureKind
 import com.example.data.source.weather.AqiStandard
@@ -65,6 +66,17 @@ enum class TaskStatusFilter(val label: String) {
 }
 
 /**
+ * 一次「勾成已完成」的信号：哪一条、什么时候。
+ *
+ * 带时间戳是因为观察者可能晚到：勾选发生在总览页时清单页并不在组合里，
+ * 等用户切回来，这批信号已经过期，不该再演一遍离场。
+ */
+data class PendingCompletion(
+    val taskId: Long,
+    val atMillis: Long = System.currentTimeMillis()
+)
+
+/**
  * 浙大校历里的一个**学年学期**（秋冬 / 春夏，16 周）。
  *
  * [term] 是教务网查询用的那一半（秋冬 → 0 秋，春夏 → 4 春），
@@ -94,10 +106,23 @@ private object ZjuTermLabels {
  * 就是从这条待办读出来初始化的，用 id 反而要再查一次库、多一份可能对不上的副本。
  */
 data class TaskEditorTarget(
-    /** 要编辑的待办；null = 新建。 */
+    /**
+     * 要编辑的待办。
+     *
+     * null = 空白新建；**id == 0 的实体 = 带预填的新建草稿**
+     * （例如从学在浙大搬一条作业过来：名称、截止、备注、关联课程都先填好，
+     * 用户在弹层里过一眼、改一改再存）。
+     */
     val task: TaskEntity?,
     /** 新建时预选的课程（从课程详情弹层「给这门课加待办」进来时带上）。 */
-    val preselectedCourseId: Long? = null
+    val preselectedCourseId: Long? = null,
+    /**
+     * 这条待办是从哪条学在浙大作业搬过来的（作业 id）。
+     *
+     * 存好之后记一笔「这条已经加过了」，弹层里的按钮就变成「已添加」——
+     * 免得用户回学在浙大那边再点一次、加出两条一模一样的。
+     */
+    val sourceCoursesTodoId: String? = null
 )
 
 data class MainUiState(
@@ -199,6 +224,14 @@ data class MainUiState(
      * 去掉「全部」入口；「已完成」「待完成」同时选中语义等同「全部」。
      */
     val statusFilters: Set<TaskStatusFilter> = setOf(TaskStatusFilter.PENDING),
+    /**
+     * 「刚被勾成已完成」的信号队列，只给清单页演离场动画用。
+     *
+     * 两条路都会记一笔：直接点圈、确认弹窗点「完成」。它们最后都落到同一个
+     * `applyToggleTaskComplete`，所以信号记在那一层，而不是某个入口的回调里。
+     * 队列而不是单个值：连勾两条时前一条不该被后一条顶掉。
+     */
+    val pendingCompletions: List<PendingCompletion> = emptyList(),
     val scheduleViewMode: ScheduleViewMode = ScheduleViewMode.WEEK_GRID,
 
     // Dialog & Sheet states
@@ -463,6 +496,27 @@ data class MainUiState(
     val coursesTodoLastUpdated: Long = 0L,
     val coursesTodoError: String? = null,
     val isQuickZjuLoginDialogOpen: Boolean = false,
+
+    /**
+     * 正在看详情的那条学在浙大待办。null = 详情弹层没开。
+     *
+     * 存**快照**而不是 id：弹层里要显示的标题、课程、截止时间都在这条上，
+     * 拿 id 反而要再查一次列表、多一份可能对不上的副本。
+     */
+    val inspectingCoursesTodo: CoursesTodoItem? = null,
+    /** 已经拉下来的详情（说明 + 附件）。null = 还没拉到。 */
+    val coursesTodoDetail: CoursesTodoDetail? = null,
+    /** 详情正在拉。 */
+    val isCoursesTodoDetailLoading: Boolean = false,
+    /** 详情拉取失败的提示。null = 没有错误。 */
+    val coursesTodoDetailError: String? = null,
+    /**
+     * 已经加进 MiuList 的学在浙大待办 id。
+     *
+     * 用来挡住「同一条作业加两遍」：弹层里的按钮会变成「已添加」。
+     * 只在本次运行内有效 —— 重启之后允许再加一次，因为用户可能确实想再记一条。
+     */
+    val coursesTodoAddedIds: Set<String> = emptySet(),
 
     val userMessage: String? = null
 ) {

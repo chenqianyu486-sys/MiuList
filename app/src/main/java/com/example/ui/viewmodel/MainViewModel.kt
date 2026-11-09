@@ -1,4 +1,4 @@
-package com.example.ui.viewmodel
+﻿package com.example.ui.viewmodel
 
 import android.content.ContentResolver
 import android.net.Uri
@@ -30,7 +30,12 @@ import com.example.data.model.TaskStar
 import com.example.data.model.TaskType
 import com.example.data.repository.AcademicCalendarRepository
 import com.example.data.source.zju.CalendarUpdateService
+import com.example.data.source.zju.CoursesTodoDetail
+import com.example.data.source.zju.CoursesTodoItem
+import com.example.data.source.zju.ZjuException
+import com.example.data.source.zju.ZjuFailureKind
 import com.example.data.source.zju.ZjuImportService
+import com.example.data.source.zju.buildCoursesTodoDraft
 import com.example.data.source.weather.AqiStandard
 import com.example.data.source.weather.WeatherService
 import com.example.data.sync.SyncFailure
@@ -596,8 +601,35 @@ private val ruleFlow = combine(
     }
 
     /** 真的去改那条待办的完成状态（确认之后，或不需要确认时）。 */
-    private fun applyToggleTaskComplete(task: TaskEntity) = viewModelScope.launch {
-        taskRepo.toggleTaskComplete(task.id, task.isCompleted)
+    private fun applyToggleTaskComplete(task: TaskEntity) {
+        // 只有「勾上」才留信号：取消完成是把待办放回清单，没有东西要离开。
+        //
+        // 而且必须记在写库**之前**：清单页要先把这一行留在原位演完，
+        // 等数据库那边「已完成」回流时，它才不会先消失一下、再冒出来演一遍。
+        if (!task.isCompleted) {
+            _uiState.update { state ->
+                state.copy(pendingCompletions = state.pendingCompletions + PendingCompletion(task.id))
+            }
+        }
+        viewModelScope.launch {
+            taskRepo.toggleTaskComplete(task.id, task.isCompleted)
+        }
+    }
+
+    /**
+     * 清单页演完（或判断这批信号已经过期）之后把信号消费掉。
+     *
+     * 不消费的后果不只是多演一次：切页再回来、换一次筛选都会重播，
+     * 而那些待办其实早就完成了。
+     */
+    fun consumeCompletions(taskIds: List<Long>) = _uiState.update { state ->
+        if (state.pendingCompletions.isEmpty() || taskIds.isEmpty()) {
+            state
+        } else {
+            state.copy(
+                pendingCompletions = state.pendingCompletions.filterNot { it.taskId in taskIds }
+            )
+        }
     }
 
     /**
@@ -691,6 +723,10 @@ private val ruleFlow = combine(
         } else {
             taskRepo.updateTask(task)
             _uiState.update { it.copy(userMessage = "待办已更新") }
+        }
+        // 从学在浙大搬过来的待办：存好之后记一笔「这条已经加过了」。
+        _uiState.value.taskEditor?.sourceCoursesTodoId?.let { zjuId ->
+            _uiState.update { it.copy(coursesTodoAddedIds = it.coursesTodoAddedIds + zjuId) }
         }
         closeTaskEditor()
     }
@@ -2175,6 +2211,111 @@ private val ruleFlow = combine(
 
     fun setQuickZjuLoginDialogOpen(isOpen: Boolean) {
         _uiState.update { it.copy(isQuickZjuLoginDialogOpen = isOpen) }
+    }
+
+    // ------------------------------------------------ 学在浙大待办详情
+
+    /**
+     * 点开一张学在浙大待办小卡：打开详情弹层，同时去拉那条作业的说明与附件。
+     *
+     * 说明与附件**不在列表里**：列表那份是离线缓存的（只有标题、课程、截止），
+     * 而正文每次刷新都可能变，缓存一份陈旧的正文比不缓存更糟。
+     */
+    fun inspectCoursesTodo(item: CoursesTodoItem) {
+        _uiState.update {
+            it.copy(
+                inspectingCoursesTodo = item,
+                coursesTodoDetail = null,
+                coursesTodoDetailError = null,
+                isCoursesTodoDetailLoading = true
+            )
+        }
+        viewModelScope.launch {
+            try {
+                val detail = loadCoursesTodoDetail(item)
+                _uiState.update {
+                    it.copy(coursesTodoDetail = detail, isCoursesTodoDetailLoading = false)
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isCoursesTodoDetailLoading = false,
+                        coursesTodoDetailError = e.message ?: "获取作业详情失败"
+                    )
+                }
+            }
+        }
+    }
+
+    fun closeCoursesTodoDetail() = _uiState.update {
+        it.copy(
+            inspectingCoursesTodo = null,
+            coursesTodoDetail = null,
+            coursesTodoDetailError = null,
+            isCoursesTodoDetailLoading = false
+        )
+    }
+
+    /**
+     * 把这条学在浙大作业加进 MiuList：生成草稿并打开待办编辑弹层。
+     *
+     * 走编辑弹层而不是直接存：名称、截止、备注、关联课程都是**搬过来的**，
+     * 用户多半还要改一改（比如把截止提前一天）。直接存的话这些改动就没处改了。
+     */
+    fun addCoursesTodoToMiuList(item: CoursesTodoItem) {
+        // 课程表读 [uiState]，**不读 [_uiState]**。
+        //
+        // `_uiState` 只是「一次性动作」的载体（弹层开关、userMessage），
+        // **数据库派生的字段一个都不写它** —— `courses` 只存在于 `uiState`
+        // 这条 combine 的结果里（见上面 `uiState` 的定义）。
+        // 于是读 `_uiState.value.courses` 拿到的是**恒为空的默认表**：
+        // `matchCourse` 拿空表去比，必然对不上，搬过来的待办就一直是「未关联」。
+        //
+        // 这个坑特别难自己发现，因为**同一个弹窗上方的课程色圆点是对的** ——
+        // 那边读的是界面的 state（combine 的结果），于是看起来「明明匹配上了」，
+        // 点进去却没挂上课程。同一门课，两处读的是两份状态。
+        //
+        // 作业说明仍然读 `_uiState`：它是「一次性动作」带出来的（见 `inspectCoursesTodo`），
+        // 不经数据库那条流，两边读的是同一份值。
+        val draft = buildCoursesTodoDraft(
+            item = item,
+            detail = _uiState.value.coursesTodoDetail,
+            courses = uiState.value.courses
+        )
+        _uiState.update {
+            it.copy(
+                inspectingCoursesTodo = null,
+                coursesTodoDetail = null,
+                coursesTodoDetailError = null,
+                isCoursesTodoDetailLoading = false,
+                taskEditor = TaskEditorTarget(
+                    task = draft,
+                    preselectedCourseId = draft.courseId.takeIf { id -> id != TaskEntity.UNLINKED_COURSE_ID },
+                    // 存好之后记一笔「这条已经加过了」，挡住重复添加。
+                    sourceCoursesTodoId = item.id
+                )
+            )
+        }
+    }
+
+    /**
+     * 拉一条作业详情。
+     *
+     * 会话没了就用已保存的凭据重建一次再试 —— 用户不该为了看一条作业
+     * 再输一次密码。
+     */
+    private suspend fun loadCoursesTodoDetail(item: CoursesTodoItem): CoursesTodoDetail {
+        val activityId = item.id
+        return try {
+            zjuCoursesClient.fetchTodoDetail(activityId)
+        } catch (e: ZjuException) {
+            if (e.kind != ZjuFailureKind.SESSION) throw e
+            val studentId = secureStorage.getStudentId()
+            val password = secureStorage.getPassword()
+            if (studentId.isNullOrBlank() || password.isNullOrBlank()) throw e
+            zjuCoursesClient.login(studentId, password)
+            zjuCoursesClient.fetchTodoDetail(activityId)
+        }
     }
 
     fun saveZjuCredentialsAndSyncTodos(studentId: String, password: String) {
