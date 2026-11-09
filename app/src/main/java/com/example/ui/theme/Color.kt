@@ -28,6 +28,24 @@ val LinenGreenDark = LimeGreenDark
 val LinenGreenContainer = LimeGreenContainer
 val LinenGreenOnContainer = LimeGreenOnContainer
 
+/**
+ * **图标方块底**：设置页、抽屉那一列 40dp 圆角方块用的底色。
+ *
+ * 比主题的 primaryContainer（#EAF6D8）**再浅一档**。
+ *
+ * 为什么单独一支而不直接调 primaryContainer：那一列图标方块一屏七八个，
+ * 底色稍深一点就连成一片绿 —— 用户的注意力全被它们吃掉了，而它们只是
+ * 「这是一行入口」的分组标记，不是内容本身。浅到这一档之后，方块还认得出，
+ * 但已经不抢眼了。
+ *
+ * 前景不受影响：图标仍用 onPrimaryContainer（#4A6B2A 深抹茶绿），
+ * 底越浅对比度越高（对白卡约 5.7:1，比原来还高一点）。
+ *
+ * **别拿它去当「选中态」的底**：CourseCategoryDialog 那几处用 primaryContainer
+ * 表示「当前选中」，那是有语义的颜色，浅了会读不出选中。
+ */
+val LimeGreenTileFaint = Color(0xFFF2F9E9)
+
 // 2. 点缀色：湖蓝 (Lake Blue - Tranquil, Serene Alpine Water)
 val LakeBlueAccent = Color(0xFF387B9B)               // 湖蓝点缀色 (#387B9B)
 val LakeBlueContainer = Color(0xFFE8F2F7)            // 浅湖蓝微容器色 (#E8F2F7)
@@ -63,7 +81,18 @@ val TeaColorBase = Color(0xFFFFFFFF)                  // 基色（不透明，�
 val TeaColor = Color.White.copy(alpha = 0.52f)        // 冷白玻璃底（52% 不透明）
 val TeaColorLight = Color(0xFFEAF1EE)                 // 极浅冷调底 (#EAF1EE)
 val TeaColorDark = Color(0xFFBFCBC5)                  // 沉一档的冷灰绿
-val TeaColorBorder = Color(0xFFD3DEDA).copy(alpha = 0.65f) // 发丝边：底色很淡时靠它保证轮廓
+/**
+ * 冷调发丝边。**玻璃面一律不用**（2026-11-08 起全 App 清干净）。
+ *
+ * 它原本只出现在「绿色系课程」的那几枚徽标上（课表时段、课程类别、待办课程名、
+ * 总览页学在浙大徽标）：白边压在同样浅的玻璃面上只会比面更亮，读出来就是一圈**白边**，
+ * 换到深色壁纸又变成硬亮的一圈。这些地方现在都不描边了 ——
+ * 徽标靠自己的底色认边界，绿色系那几枚改由深抹茶前景（[TeaOnColor]）说话。
+ *
+ * 留着常量是为了不破坏 [com.example.ui.theme.Mica.kt] 里那套命名，
+ * 也留着给将来真正需要「冷调发丝边」的场合（比如深色底上的分隔线）。
+ */
+val TeaColorBorder = Color(0xFFD3DEDA).copy(alpha = 0.65f)
 val TeaOnColor = Color(0xFF3F6B1C)                    // 深抹茶绿前景 (#3F6B1C)，在白玻璃上约 7.4:1
 
 // Helper: 识别颜色是否属于亮色/高明度颜色
