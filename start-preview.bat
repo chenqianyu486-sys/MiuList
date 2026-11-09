@@ -33,6 +33,30 @@ REM        -Display base             设计基准 1080x2400 @420dpi, font 1.0
 REM        -Display keep             do not touch the display at all
 REM      A real phone is never touched - its own ratio and font are
 REM      the normal ones.
+REM    * the emulator's own window is placed inside the desktop and
+REM      brought to the front. The emulator reopens it at the
+REM      geometry saved by the previous run, and on a high-DPI
+REM      screen that can be off-screen entirely: the window was
+REM      coming back at 990,-240 / 387x867 on this machine's
+REM      1365x853 desktop, i.e. above the top edge and behind a
+REM      maximised browser, which looks exactly like "the preview
+REM      did not work". The phone now opens at the top-left corner,
+REM      shrunk only as far as it must be to fit.
+REM
+REM  What it does about the animation speed:
+REM    * every run puts the emulator's three animation scales back to 1x
+REM      (animator / window / transition). A slow-motion capture run
+REM      (10x, for frame-by-frame screenshots) leaves them at 10, and the
+REM      next preview then plays every animation as a slideshow - which
+REM      reads as "the motion is broken", not as "a setting was left".
+REM    * a real device is never touched: those are your own settings.
+REM    * the line it prints is one of
+REM        motion: animation speed restored to 1x (animator_duration_scale 10->1)
+REM        motion: animation speed already 1x
+REM
+REM  Every run is also logged to preview-launcher.log: if a
+REM  double-click ever does nothing again, that file says whether the
+REM  batch was started at all.
 REM
 REM  What it does about an app that is already on the device:
 REM    * same signature  -> installed over it, data kept;
@@ -56,6 +80,19 @@ REM ============================================================
 
 setlocal
 
+REM ------------------------------------------------------------
+REM  Every run leaves a line in preview-launcher.log next to this
+REM  file. When a double-click looks like it did nothing, that file
+REM  answers the first question - did this batch run at all?
+REM    no line at all  -> cmd never started it (shell / file
+REM                       association problem, not this script)
+REM    "start" without
+REM    "exit"          -> it died before the pause at the bottom
+REM    both lines      -> it ran; the message above says what it did
+REM ------------------------------------------------------------
+set "RUNLOG=%~dp0preview-launcher.log"
+>>"%RUNLOG%" echo [%DATE% %TIME%] start args=[%*] cwd=[%CD%] wt=[%WT_SESSION%]
+
 set "SCRIPT_DIR=%~dp0"
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 
@@ -66,6 +103,7 @@ if defined WT_SESSION if not defined MIULIST_PREVIEW_NEW_WINDOW (
     where wt.exe >nul 2>&1
     if not errorlevel 1 (
         set "MIULIST_PREVIEW_NEW_WINDOW=1"
+        >>"%RUNLOG%" echo [%DATE% %TIME%] relaunch into a new Windows Terminal window
         start "" wt.exe -w -1 cmd /c ""%~f0" %*
         exit /b
     )
@@ -103,7 +141,10 @@ if not "%RC%"=="0" (
     echo Re-run with -ColdBoot if the emulator never finishes booting, -SkipBuild to skip Gradle,
     echo or -DryRun to print the resolved plan.
 ) else (
+    echo The phone window is the preview - it is brought to the front when the
+    echo app is up. If you cannot see it, run:  start-preview.bat -RestartEmulator
     echo Close this window when you are done - the emulator keeps running.
 )
+>>"%RUNLOG%" echo [%DATE% %TIME%] exit rc=%RC%
 pause
 exit /b %RC%

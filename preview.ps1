@@ -462,6 +462,213 @@ function Test-HeadlessEmulatorRunning {
     return $false
 }
 
+# --------------------------------------------------------------------------
+# The emulator's own window is the only part of a preview anybody looks at,
+# and the emulator reopens it at the geometry it saved last time - measured
+# against whatever monitor layout existed then. On this machine (3072x1920 at
+# 225%, i.e. a 1365x853 desktop) it comes back at 990,-240 with a 387x867
+# frame: 240 px above the top edge, the rest behind a maximised browser.
+#
+# A run in that state installs, launches, prints DONE - and shows nothing.
+# That is the worst possible outcome for a previewer, and it looks exactly
+# like "double-clicking the .bat does nothing". clamp-window.ps1 can only push
+# such a window back *inside the screen*; a preview needs it deliberately
+# placed and in front, so both are used: this places it once the window
+# exists, the watcher keeps watching in case the emulator re-lays itself out
+# while booting.
+$script:PreviewWinSource = @'
+using System;
+using System.Text;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+public class PreviewWin
+{
+    public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT { public int Left, Top, Right, Bottom; }
+
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr hWnd, StringBuilder text, int max);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint procId);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int cmd);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+
+    public const uint SWP_NOZORDER   = 0x0004;
+    public const uint SWP_NOACTIVATE = 0x0010;
+    public const uint SWP_SHOWWINDOW = 0x0040;
+    public const int  SW_RESTORE     = 9;
+
+    public static List<IntPtr> VisibleWindows()
+    {
+        List<IntPtr> list = new List<IntPtr>();
+        EnumWindows(delegate(IntPtr h, IntPtr l)
+        {
+            if (IsWindowVisible(h)) { list.Add(h); }
+            return true;
+        }, IntPtr.Zero);
+        return list;
+    }
+
+    public static string TitleOf(IntPtr h)
+    {
+        StringBuilder sb = new StringBuilder(512);
+        GetWindowTextW(h, sb, sb.Capacity);
+        return sb.ToString();
+    }
+}
+'@
+
+function Initialize-PreviewWinType {
+    if (-not ('PreviewWin' -as [type])) {
+        Add-Type -TypeDefinition $script:PreviewWinSource
+        Add-Type -AssemblyName System.Windows.Forms
+    }
+}
+
+# The emulator's window is owned by emulator.exe, but 37.x can put the Qt UI in
+# qsn.exe, so the owner is matched by name *and* the title is matched against
+# the AVD name - the title is "Android Emulator - <avd>:5554".
+function Get-EmulatorWindowHandle {
+    param([string] $Avd = 'MiuList_Preview')
+
+    Initialize-PreviewWinType
+    $names = @('emulator', 'qsn', 'qemu-system-x86_64', 'qemu-system-x86_64-headless')
+    $best = [IntPtr]::Zero
+    $bestArea = 0
+
+    foreach ($handle in [PreviewWin]::VisibleWindows()) {
+        $title = [PreviewWin]::TitleOf($handle)
+        if (-not $title) { continue }
+
+        $ownerId = 0
+        [void][PreviewWin]::GetWindowThreadProcessId($handle, [ref]$ownerId)
+        $ownerName = ''
+        if ($ownerId -gt 0) {
+            try { $ownerName = (Get-Process -Id $ownerId -ErrorAction Stop).ProcessName } catch { $ownerName = '' }
+        }
+
+        $hit = ($ownerName -and ($names -contains $ownerName)) -or
+               ($Avd -and $title.IndexOf($Avd, [StringComparison]::OrdinalIgnoreCase) -ge 0)
+        if (-not $hit) { continue }
+
+        $rect = New-Object PreviewWin+RECT
+        if (-not [PreviewWin]::GetWindowRect($handle, [ref]$rect)) { continue }
+        $area = ($rect.Right - $rect.Left) * ($rect.Bottom - $rect.Top)
+        if ($area -gt $bestArea) { $bestArea = $area; $best = $handle }
+    }
+
+    return $best
+}
+
+# An emulator without a window is indistinguishable from -no-window for the
+# person looking at the screen: the app is up, the phone is not. `-no-window`
+# can be read from the command line, but a window that was closed or whose UI
+# process got reaped cannot, so the window itself is what is checked here.
+function Test-EmulatorWindowVisible {
+    param([string] $Avd = 'MiuList_Preview')
+    return ((Get-EmulatorWindowHandle -Avd $Avd) -ne [IntPtr]::Zero)
+}
+
+function Show-PreviewWindow {
+    param(
+        [string] $Avd = 'MiuList_Preview',
+        [switch] $Wait,
+        [int]    $WaitSeconds = 20
+    )
+
+    Initialize-PreviewWinType
+
+    $handle = [IntPtr]::Zero
+    $deadline = (Get-Date).AddSeconds([Math]::Max(1, $WaitSeconds))
+    while ($true) {
+        $handle = Get-EmulatorWindowHandle -Avd $Avd
+        if ($handle -ne [IntPtr]::Zero) { break }
+        if (-not $Wait -or (Get-Date) -ge $deadline) {
+            Write-Warn "the emulator window for AVD '$Avd' was not found"
+            return $false
+        }
+        Start-Sleep -Milliseconds 400
+    }
+
+    if ([PreviewWin]::IsIconic($handle)) {
+        [void][PreviewWin]::ShowWindow($handle, [PreviewWin]::SW_RESTORE)
+    }
+
+    $rect = New-Object PreviewWin+RECT
+    if (-not [PreviewWin]::GetWindowRect($handle, [ref]$rect)) {
+        Write-Warn 'could not read the emulator window position'
+        return $false
+    }
+    $width  = $rect.Right - $rect.Left
+    $height = $rect.Bottom - $rect.Top
+    if ($width -le 0 -or $height -le 0) {
+        Write-Warn 'the emulator window has no usable size'
+        return $false
+    }
+
+    $areaBox = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $margin  = 8
+    $maxWidth  = [Math]::Max(320, $areaBox.Width  - 2 * $margin)
+    $maxHeight = [Math]::Max(480, $areaBox.Height - 2 * $margin)
+
+    $newWidth  = $width
+    $newHeight = $height
+    if ($newWidth -gt $maxWidth -or $newHeight -gt $maxHeight) {
+        $scale = [Math]::Min($maxWidth / $width, $maxHeight / $height)
+        $newWidth  = [int][Math]::Floor($width  * $scale)
+        $newHeight = [int][Math]::Floor($height * $scale)
+    }
+
+    # Top-left rather than centred: the batch console is what opens centred,
+    # and the phone is the thing the eyes should land on.
+    $x = $areaBox.Left + $margin
+    $y = $areaBox.Top  + $margin
+    if ($y + $newHeight -gt $areaBox.Bottom) {
+        $y = [Math]::Max($areaBox.Top, $areaBox.Bottom - $newHeight)
+    }
+
+    if ($x -ne $rect.Left -or $y -ne $rect.Top -or $newWidth -ne $width -or $newHeight -ne $height) {
+        $flags = [PreviewWin]::SWP_NOZORDER -bor [PreviewWin]::SWP_SHOWWINDOW
+        [void][PreviewWin]::SetWindowPos($handle, [IntPtr]::Zero, $x, $y, $newWidth, $newHeight, $flags)
+    }
+
+    # Windows refuses SetForegroundWindow to a process that does not own the
+    # foreground window. Attaching to that window's input queue first is the
+    # standard way around it; the attachment is dropped again immediately.
+    $foreground = [PreviewWin]::GetForegroundWindow()
+    $foregroundThread = 0
+    $selfThread = [int][PreviewWin]::GetCurrentThreadId()
+    if ($foreground -ne [IntPtr]::Zero) {
+        $foregroundOwner = 0
+        $foregroundThread = [int][PreviewWin]::GetWindowThreadProcessId($foreground, [ref]$foregroundOwner)
+    }
+    $attached = $false
+    if ($foregroundThread -gt 0 -and $foregroundThread -ne $selfThread) {
+        $attached = [PreviewWin]::AttachThreadInput([uint32]$selfThread, [uint32]$foregroundThread, $true)
+    }
+    try {
+        [void][PreviewWin]::BringWindowToTop($handle)
+        [void][PreviewWin]::SetForegroundWindow($handle)
+    } finally {
+        if ($attached) { [void][PreviewWin]::AttachThreadInput([uint32]$selfThread, [uint32]$foregroundThread, $false) }
+    }
+
+    return [pscustomobject]@{
+        Ok = $true; X = $x; Y = $y; Width = $newWidth; Height = $newHeight
+        Resized = ($newWidth -ne $width -or $newHeight -ne $height)
+    }
+}
+
 function Stop-Emulator {
     param([int] $TimeoutSec = 45)
     $clock = [System.Diagnostics.Stopwatch]::StartNew()
@@ -534,8 +741,24 @@ function Start-Avd {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $emuOut = Join-Path $ScriptRoot ("emulator-$stamp.out.log")
     $emuErr = Join-Path $ScriptRoot ("emulator-$stamp.err.log")
-    Start-Process -FilePath $Emulator -ArgumentList $emuArgs `
-        -RedirectStandardOutput $emuOut -RedirectStandardError $emuErr | Out-Null
+    try {
+        Start-Process -FilePath $Emulator -ArgumentList $emuArgs `
+            -RedirectStandardOutput $emuOut -RedirectStandardError $emuErr | Out-Null
+    } catch {
+        # Windows PowerShell copies the environment into a case-insensitive
+        # dictionary when it has to redirect output. An environment that
+        # carries the same name twice with different case - `http_proxy` next
+        # to `HTTP_PROXY`, which is what a shell running behind an agent
+        # proxy looks like - makes that copy throw "Item has already been
+        # added", and the AVD never starts. The emulator itself does not care,
+        # so in that case the launch is handed to cmd, which has no such
+        # dictionary and does its own redirection.
+        if ($_.Exception.Message -notmatch 'already been added') { throw }
+        Write-Warn 'the environment has duplicate case-only variables; launching the AVD through cmd'
+        $emuArgLine = ConvertTo-NativeArgString $emuArgs
+        $cmdLine = '/d /c ""' + $Emulator + '" ' + $emuArgLine + ' > "' + $emuOut + '" 2> "' + $emuErr + '""'
+        Start-Process -FilePath $env:ComSpec -ArgumentList $cmdLine -WindowStyle Hidden | Out-Null
+    }
 
     return @{ OutLog = $emuOut; ErrLog = $emuErr }
 }
@@ -885,6 +1108,69 @@ function Set-DisplayProfile {
     return [pscustomobject]@{
         Applied = $stuck; Label = $p.Label; Size = $size; Density = $density
         Font = $font; Dp = $dp
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 动效速度
+#
+# 和显示档位是同一类东西：**抓慢动作会改这份全局设置，且改完很容易忘了改回来。**
+# 为了看清「勾 → 划线 → 洗白 → 让位」，截图时会把 animator_duration_scale 调到 10；
+# 下一次双击预览，看到的就会是一部「所有动画都卡成幻灯片」的 App ——
+# 而这看起来像动效写崩了，不像一条设置没还原。
+#
+# 所以每次预览都把这三档拨回 1x。只对模拟器做：真机上那是用户自己的设置。
+# ---------------------------------------------------------------------------
+function Set-AnimationSpeed {
+    param(
+        [string] $Adb,
+        [string] $Serial
+    )
+
+    if ($Serial -notlike 'emulator-*') {
+        return [pscustomobject]@{
+            Applied = $false; Changed = @(); Label = 'a real device keeps its own animation settings'
+        }
+    }
+
+    # 三档都要看：窗口/转场动画不归 Compose 管，但它们同样会让整机看着"变慢"。
+    $keys = @('animator_duration_scale', 'window_animation_scale', 'transition_animation_scale')
+    $changed = @()
+    foreach ($key in $keys) {
+        $value = (Invoke-NativeTimed -Exe $Adb -TimeoutSec 20 -NativeArgs @(
+            '-s', $Serial, 'shell', 'settings', 'get', 'global', $key)).Trim()
+
+        # 读回来可能是 1 / 1.0 / null（没写过）。按数字比，别按字符串比。
+        $num = 0.0
+        if ([double]::TryParse($value, [ref]$num) -and [math]::Abs($num - 1.0) -lt 0.001) {
+            continue
+        }
+
+        Invoke-NativeTimed -Exe $Adb -TimeoutSec 20 -NativeArgs @(
+            '-s', $Serial, 'shell', 'settings', 'put', 'global', $key, '1') | Out-Null
+        $changed += ('{0} {1}->1' -f $key, $value)
+    }
+
+    # 写进去再读一遍：这个设置偶尔会被系统侧的一次写入盖回去。
+    $stuck = $true
+    foreach ($key in $keys) {
+        $value = (Invoke-NativeTimed -Exe $Adb -TimeoutSec 20 -NativeArgs @(
+            '-s', $Serial, 'shell', 'settings', 'get', 'global', $key)).Trim()
+        $num = 0.0
+        if (-not ([double]::TryParse($value, [ref]$num) -and [math]::Abs($num - 1.0) -lt 0.001)) {
+            $stuck = $false
+        }
+    }
+
+    if (-not $stuck) {
+        Write-Warn ('the animation speed did not stick at 1x; the device still reports ' +
+                    ($keys -join ', '))
+    }
+
+    return [pscustomobject]@{
+        Applied = $stuck
+        Changed = $changed
+        Label = if ($changed.Count -gt 0) { 'restored to 1x' } else { 'already 1x' }
     }
 }
 
@@ -1282,6 +1568,7 @@ try {
             'base'  { '设计基准 1080x2400 @420dpi, font 1.0 (411dp)' }
             default { 'left as it is' }
         }))
+        Write-Info ("motion   : " + 'animation speed reset to 1x on an emulator before the app starts')
         Write-Info ("install  : " + $(if ($Reinstall) { 'the old app is removed first (-Reinstall - the data on the device goes with it)' } else { 'over the existing app, keeping its data' }))
         Write-Info ("recovery : " + $(if ($NoAutoRecover) { 'off (-NoAutoRecover - only the facts are printed)' } else { 'on - a differently signed app on the device is kept, with its data' }))
         Write-Info ("launch   : " + $(if ($NoLaunch) { 'no (-NoLaunch)' } else { 'yes' }))
@@ -1328,15 +1615,32 @@ try {
         }
     }
 
-    # A headless emulator runs the app perfectly well and shows you nothing.
-    # Unless headless was explicitly asked for, replace it with a windowed one.
+    # A headless emulator runs the app perfectly well and shows you nothing -
+    # and so does one whose window was closed while the device kept running
+    # (an emulator started by a script, whose UI process was reaped later,
+    # still answers adb and still reports itself as "attached"). Both look the
+    # same to the person at the screen: the app is up, the phone is not.
+    # Unless headless was explicitly asked for, such an emulator is replaced.
     # Also restart if explicitly requested via -RestartEmulator.
-    $needRestart = $RestartEmulator -or ($serial -and $serial -like 'emulator-*' -and -not $Headless -and (Test-HeadlessEmulatorRunning))
+    $restartReason = ''
+    if ($serial -and $serial -like 'emulator-*' -and -not $Headless) {
+        if (Test-HeadlessEmulatorRunning) {
+            $restartReason = "emulator $serial is running headless (-no-window), so there would be nothing to look at."
+        } elseif (-not (Test-EmulatorWindowVisible -Avd $Avd)) {
+            # Only once the guest has booted: a window that is still being
+            # created is not a missing window, and killing a half-booted AVD
+            # would cost a full cold boot for nothing.
+            if ((Get-DeviceProperty -Adb $tool.Adb -Serial $serial -Name 'sys.boot_completed') -eq '1') {
+                $restartReason = "emulator $serial is up but has no window, so there would be nothing to look at."
+            }
+        }
+    }
+    $needRestart = [bool]$RestartEmulator -or ($restartReason -ne '')
     if ($needRestart) {
         if ($RestartEmulator) {
             Write-Info "restarting emulator as requested (-RestartEmulator) ..."
         } else {
-            Write-Warn "emulator $serial is running headless (-no-window), so there would be nothing to look at."
+            Write-Warn $restartReason
             Write-Info 'restarting it with a real window ...'
         }
         if ($serial) {
@@ -1370,6 +1674,19 @@ try {
             Write-Info 'the AVD boots while Gradle builds - no waiting for it'
         }
         $serial = 'pending'
+    }
+
+    # A reused emulator can be sitting outside the visible desktop: its window
+    # is created from a geometry saved by an earlier run, on whatever monitor
+    # layout existed then. Put it back in view before the build starts, so the
+    # phone is visible for the whole wait instead of only at the end.
+    if ($serial -and $serial -ne 'pending' -and $serial -like 'emulator-*' -and -not $Headless) {
+        $placed = Show-PreviewWindow -Avd $Avd -Wait -WaitSeconds 8
+        if ($placed -and $placed.Ok) {
+            Write-Good ("emulator window at {0},{1} {2}x{3}{4}" -f
+                        $placed.X, $placed.Y, $placed.Width, $placed.Height,
+                        $(if ($placed.Resized) { ' (shrunk to fit)' } else { '' }))
+        }
     }
     Write-Take $stepStart
 
@@ -1435,6 +1752,18 @@ try {
         throw ("The device {0} did not finish booting: {1}" -f $serial, $boot.Reason)
     }
     Write-Good "device $serial is up (sys.boot_completed=1)"
+
+    # The window appears while the guest is still booting, at the geometry the
+    # emulator saved last time. Booting is the longest wait in this script, so
+    # the phone is put in view as soon as there is one to put there.
+    if ($serial -like 'emulator-*' -and -not $Headless) {
+        $placed = Show-PreviewWindow -Avd $Avd -Wait -WaitSeconds 20
+        if ($placed -and $placed.Ok) {
+            Write-Good ("emulator window at {0},{1} {2}x{3}{4}" -f
+                        $placed.X, $placed.Y, $placed.Width, $placed.Height,
+                        $(if ($placed.Resized) { ' (shrunk to fit)' } else { '' }))
+        }
+    }
     Write-Take $stepStart
 
     # --- [5/5] install + launch -------------------------------------------
@@ -1519,6 +1848,19 @@ try {
         Write-Info ("display left alone: {0}" -f $displayProfile.Label)
     }
 
+    # Same family of problem as the display profile: a slow-motion capture run
+    # turns animator_duration_scale up to 10 and does not turn it back, and the
+    # next preview then plays every animation as a slideshow - which reads as
+    # "the motion is broken", not as "a setting was left behind".
+    # Restored here, right before the app is (re)started, so the app process
+    # picks up 1x from its very first frame.
+    $motion = Set-AnimationSpeed -Adb $tool.Adb -Serial $serial
+    switch ($motion.Label) {
+        'restored to 1x' { Write-Good ("motion: animation speed restored to 1x ({0})" -f ($motion.Changed -join ', ')) }
+        'already 1x'     { Write-Info 'motion: animation speed already 1x' }
+        default          { Write-Info ("motion left alone: {0}" -f $motion.Label) }
+    }
+
     if ($install.BackupPath) {
         Write-Info ''
         Write-Info "the data of the removed app was copied to: $($install.BackupPath)"
@@ -1578,6 +1920,13 @@ try {
         }
     }
     Write-Take $stepStart
+
+    # Bring the phone to the front once the app is actually up: the console has
+    # been taking the focus while the install ran, and a preview behind another
+    # window is a preview nobody sees.
+    if ($serial -like 'emulator-*' -and -not $Headless) {
+        Show-PreviewWindow -Avd $Avd | Out-Null
+    }
 
     Write-Host ''
     Write-Host '============================================================' -ForegroundColor Green
