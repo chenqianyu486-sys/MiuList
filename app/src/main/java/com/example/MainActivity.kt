@@ -91,6 +91,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.di.AppContainer
+import com.example.data.source.zju.matchCourse
 import com.example.ui.theme.LocalGlassHazeState
 import com.example.ui.theme.measureTextHeight
 import com.example.ui.theme.rememberContentMaxWidth
@@ -103,6 +104,7 @@ import com.example.ui.components.CloudAccountDialog
 import com.example.ui.components.CourseCategoryDialog
 import com.example.ui.components.CourseEditDialog
 import com.example.ui.components.CourseLinkageSheet
+import com.example.ui.components.CoursesTodoDetailDialog
 import com.example.ui.components.DeleteCourseConfirmDialog
 import com.example.ui.components.FloatingIslandNav
 import com.example.ui.components.islandBottomInset
@@ -797,12 +799,14 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                                 DashboardScreen(
                                     state = state,
                                     onToggleTaskComplete = { viewModel.toggleTaskComplete(it) },
+                                    onConsumeCompletions = { viewModel.consumeCompletions(it) },
                                     onToggleTaskStar = { viewModel.toggleTaskStar(it) },
                                     onInspectTask = { viewModel.inspectTask(it) },
                                     onInspectCourse = { viewModel.inspectCourse(it) },
                                     onOpenWeekPicker = { viewModel.openWeekPicker() },
                                     onRefreshCoursesTodo = { viewModel.refreshCoursesTodos(silent = false) },
                                     onOpenQuickLoginDialog = { viewModel.setQuickZjuLoginDialogOpen(true) },
+                                    onOpenCoursesTodoDetail = { viewModel.inspectCoursesTodo(it) },
                                     onEditExam = { viewModel.openExamEditor(it) },
                                     // 从「上课提醒」通知进来时滚到今日课程那一段。
                                     focusTodayCoursesRequest = state.dashboardFocusRequest
@@ -831,6 +835,7 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                                     onToggleTaskComplete = { viewModel.toggleTaskComplete(it) },
                                     onToggleTaskStar = { viewModel.toggleTaskStar(it) },
                                     onInspectTask = { viewModel.inspectTask(it) },
+                                    onConsumeCompletions = { viewModel.consumeCompletions(it) },
                                     // 从「待办截止」通知进来时定位并高亮那一条。
                                     highlightedTaskId = state.highlightedTaskId,
                                     highlightRequest = state.taskHighlightRequest
@@ -1221,6 +1226,29 @@ fun MainApp(viewModel: MainViewModel, webSyncViewModel: WebSyncViewModel? = null
                     viewModel.saveZjuCredentialsAndSyncTodos(id, pass)
                 },
                 onDismiss = { viewModel.setQuickZjuLoginDialogOpen(false) }
+            )
+        }
+
+        // 学在浙大待办详情弹窗（点总览页主卡背面的作业小卡进来）
+        //
+        // 位置在「快速绑定浙大账号」之后、「本学期校历」之前：
+        // 它是从那张小卡直接点出来的，层级上属于同一条链路。
+        state.inspectingCoursesTodo?.let { todo ->
+            CoursesTodoDetailDialog(
+                item = todo,
+                detail = state.coursesTodoDetail,
+                isLoading = state.isCoursesTodoDetailLoading,
+                error = state.coursesTodoDetailError,
+                isAdded = todo.id in state.coursesTodoAddedIds,
+                // 弹层里要显示「这条作业会挂到哪门课上」，所以这里先算一次匹配。
+                //
+                // 用 remember 记着：弹层的进出场动画每帧都会重组一次标题与正文，
+                // 现算就是每帧都把整张课表拿去比一遍。
+                matchedCourse = remember(todo.id, state.courses) {
+                    matchCourse(todo.courseName, state.courses)?.course
+                },
+                onAddToMiuList = { viewModel.addCoursesTodoToMiuList(todo) },
+                onDismiss = { viewModel.closeCoursesTodoDetail() }
             )
         }
 
