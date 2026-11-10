@@ -22,6 +22,7 @@ import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -65,13 +66,14 @@ import com.example.ui.theme.withNoteLineHeight
  * │ 第3章习题              ← 固定：这是什么        │
  * │ ● 高等数学                                    │
  * │ 截止 10月25日 23:59              [2天后]      │ ← 固定：什么时候
+ * │ ─────────────────────────── ← 主题色浅线：固定/滚动分界
  * │ (作业说明)          ← 淡彩胶囊：分隔内容        │
  * │ 做完第 1-6 题，拍照上传。                        │
  * │ (完成条件)                                    │
  * │ 拍照上传到课程网站                               │
  * │ (附件（2）)                                    │
  * │ 习题.pdf                                        │
- * │                                               │
+ * │ ─────────────────────────── ← 主题色浅线：固定/滚动分界
  * │                       关闭  [添加到待办]          │
  * └───────────────────────────────────────────────┘
  * ```
@@ -81,6 +83,12 @@ import com.example.ui.theme.withNoteLineHeight
  * 正文直接坐在玻璃上。给一整段文字套一块半透明板子，板子自己就成了
  * 这层里最大的一块「非文字」，眼睛会先看见板子、再去找板子里的字 ——
  * 而这层里真正要读的就是那些字。框留給**小胶囊**去当分隔符。
+ *
+ * ### 滚动区有两条边界
+ *
+ * 标题/截止与按钮行固定，正文会滚：两条**主题色浅发丝线**把「会滚的那块」
+ * 上下框出来，正文滚多远边界都不动。线取主题色但压到低不透明度 ——
+ * 它是结构边界，和课程色胶囊（哪门课）、实心绿按钮（动作）各说各的事。
  *
  * ### 分隔靠胶囊，不靠空白
  *
@@ -148,7 +156,11 @@ fun CoursesTodoDetailDialog(
         panelModifier = Modifier.testTag("courses_todo_detail_dialog"),
         title = {
             // 固定区：这是什么（标题 + 课程名）、什么时候（截止）。
-            CoursesTodoHeader(item = item, courseColor = courseColor)
+            Column(modifier = Modifier.fillMaxWidth()) {
+                CoursesTodoHeader(item = item, courseColor = courseColor)
+                Spacer(modifier = Modifier.height(12.dp))
+                ScrollBoundaryDivider()
+            }
         },
         text = {
             Column(
@@ -242,6 +254,7 @@ fun CoursesTodoDetailDialog(
                 }
             }
         },
+        belowContent = { ScrollBoundaryDivider() },
         confirmButton = {
             if (isAdded) {
                 // 已经加过了：按钮变成状态，不再是动作。
@@ -466,3 +479,12 @@ private val SectionGap = 24.dp
 
 /** 附件两行之间的距离。 */
 private val AttachmentGap = 6.dp
+
+/** 固定区与滚动区的分界：主题色浅发丝线，标示「这块会滚」，不抢胶囊（课程身份）与按钮（动作）的语义。 */
+@Composable
+private fun ScrollBoundaryDivider() {
+    HorizontalDivider(
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+        thickness = 0.5.dp
+    )
+}
