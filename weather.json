@@ -1,5 +1,5 @@
 {
-  "lastUpdated": 1795244233258,
+  "lastUpdated": 1795260314331,
   "cityName": "杭州",
   "date": "2026-11-21",
   "textDay": "晴",
@@ -9,10 +9,10 @@
   "aqi": 137,
   "aqiQuality": "轻度污染",
   "aqiPrimary": "PM2.5",
-  "usAqi": 185,
+  "usAqi": 186,
   "usAqiQuality": "中度污染",
   "usAqiPrimary": "PM2.5",
-  "aqiTime": "2026-11-21T14:00",
+  "aqiTime": "2026-11-21T19:00",
   "aqiStandard": "CN",
   "aqiError": null,
   "usAqiError": null
